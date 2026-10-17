@@ -1,9 +1,12 @@
 pub mod block;
 pub mod chunks;
 pub mod clouds;
+pub mod collision;
+pub mod commands;
 pub mod curvature;
 pub mod debug;
 pub mod horizon;
+pub mod menu;
 pub mod player;
 pub mod settings;
 pub mod sky;
