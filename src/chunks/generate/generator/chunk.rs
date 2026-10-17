@@ -23,12 +23,13 @@ use std::sync::Arc;
 
 pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
     let mut heights = regions.sampler();
-    let biomes = regions.noise().biomes();
+    let (biomes, caves) = (regions.noise().biomes(), regions.noise().caves());
     // the same for every chunk stacked over these columns, so worked out once for them all
     let columns = regions.chunk_columns(&mut heights, chunk_pos.0.x, chunk_pos.0.z);
     let (lowest, highest) = (columns.lowest, columns.highest);
     let size = CHUNK_SIZE as i64;
-    let world_y = chunk_pos.0.y * size;
+    let origin = chunk_pos.0 * size;
+    let world_y = origin.y;
     // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
     let mut cells = Vec::with_capacity((size * size * size) as usize);
 
@@ -55,9 +56,20 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             }));
         }
     }
+    if let Some(carved) = caves.chunk(origin, |x, z| columns.cave_top(x, z), columns.cave_highest) {
+        carved.carve(&mut cells);
+    }
     let mut chunk_data = ChunkData::from_cells(cells);
 
-    let origin = chunk_pos.0 * size;
+    // the sky's light is kept out of the chunks below wherever it can't reach down past this one
+    for x in 0..size {
+        for z in 0..size {
+            if world_y + size < columns.sky_reach(x, z) {
+                chunk_data.roofed.insert(x as u16, z as u16);
+            }
+        }
+    }
+
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);
         let trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
@@ -152,8 +164,8 @@ pub fn chunks_meshed_with(block: I64Vec3) -> impl Iterator<Item = ChunkCoordinat
 }
 
 // Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
-// high as the top of the chunk above, with open sky above that.
-fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> SkyLight {
+// high as the top of the chunk above, with open sky above that unless the ground roofs it over.
+pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> SkyLight {
     let size = CHUNK_SIZE as i32;
     let (min, span) = light_box();
     let mut opacity = Vec::with_capacity((span.x * span.y * span.z) as usize);
@@ -166,5 +178,13 @@ fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> S
         }
     }
     let top = coord.0.y * size as i64 + (min.y + span.y) as i64 - 1;
-    SkyLight::new(min, span, sky_above(top, 1), opacity)
+    let sky = sky_above(top, 1);
+    let sky = |x, z| {
+        if source.roofed_above(min.x + x, min.z + z) {
+            0
+        } else {
+            sky
+        }
+    };
+    SkyLight::with_sky(min, span, sky, opacity)
 }

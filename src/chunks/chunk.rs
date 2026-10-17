@@ -81,6 +81,36 @@ pub struct ChunkData {
     runs: Vec<Run>,
     /// The trees reaching into the chunk, to tint their leaves, see `TreeTints`.
     pub trees: TreeTints,
+    /// Its columns with ground over them above the chunk, which keeps the sky's light out, see
+    /// `Caves::sky_reach`.
+    pub roofed: ColumnSet,
+}
+
+/// A set of a chunk's columns, a bit each.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ColumnSet([u64; 4]);
+
+impl ColumnSet {
+    pub const ALL: Self = Self([u64::MAX; 4]);
+
+    fn bit(x: u16, z: u16) -> (usize, u64) {
+        let index = x as usize * CHUNK_SIZE as usize + z as usize;
+        (index / 64, 1 << (index % 64))
+    }
+
+    pub fn contains(&self, x: u16, z: u16) -> bool {
+        let (word, bit) = Self::bit(x, z);
+        self.0[word] & bit != 0
+    }
+
+    pub fn insert(&mut self, x: u16, z: u16) {
+        let (word, bit) = Self::bit(x, z);
+        self.0[word] |= bit;
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        Self(std::array::from_fn(|i| self.0[i] | other.0[i]))
+    }
 }
 
 pub const CHUNK_SIZE: u16 = 16;
@@ -118,6 +148,7 @@ impl Default for ChunkData {
                 length: CELLS as u16,
             }],
             trees: TreeTints::default(),
+            roofed: ColumnSet::default(),
         }
     }
 }
@@ -136,6 +167,7 @@ impl ChunkData {
         Self {
             runs,
             trees: TreeTints::default(),
+            roofed: ColumnSet::default(),
         }
     }
 
@@ -160,6 +192,24 @@ impl ChunkData {
     /// Whether every block hides what's behind it, so the chunk shows nothing past its own faces.
     pub fn opaque(&self) -> bool {
         self.runs.iter().all(|r| r.block.is_opaque())
+    }
+
+    /// The columns with an opaque block in them.
+    pub fn opaque_columns(&self) -> ColumnSet {
+        let mut columns = ColumnSet::default();
+        let mut start = 0;
+        for run in &self.runs {
+            let end = start + run.length as usize;
+            if run.block.is_opaque() {
+                // a column's cells are contiguous, see `linear_index`
+                for column in start / CHUNK_SIZE as usize..=(end - 1) / CHUNK_SIZE as usize {
+                    let size = CHUNK_SIZE as usize;
+                    columns.insert((column / size) as u16, (column % size) as u16);
+                }
+            }
+            start = end;
+        }
+        columns
     }
 
     /// Bytes held on the heap for the chunk's blocks and trees.

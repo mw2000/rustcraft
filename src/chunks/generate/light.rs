@@ -19,17 +19,28 @@ impl SkyLight {
     /// Lights the box of `size` cells from `min`, whose `light_opacity`s are in `opacity`
     /// in `SkyLight::index` order, with `sky` falling into the top of every column.
     pub fn new(min: IVec3, size: IVec3, sky: u8, opacity: Vec<u8>) -> Self {
+        Self::with_sky(min, size, |_, _| sky, opacity)
+    }
+
+    /// As `new`, with `sky(x, z)` falling into the top of each column, from `min` as 0, 0.
+    pub fn with_sky(
+        min: IVec3,
+        size: IVec3,
+        sky: impl Fn(i32, i32) -> u8,
+        opacity: Vec<u8>,
+    ) -> Self {
         assert_eq!((size.x * size.y * size.z) as usize, opacity.len());
         let mut levels = vec![0; opacity.len()];
         // whether anything light can pass through is shaded, so light has somewhere to spread
         let mut shade = false;
         // each column is a contiguous run of cells, lowest first
-        for (column, opacity) in levels
+        for (i, (column, opacity)) in levels
             .chunks_mut(size.y as usize)
             .zip(opacity.chunks(size.y as usize))
+            .enumerate()
         {
             // straight down, it keeps its full strength through open air
-            let mut level = sky;
+            let mut level = sky(i as i32 / size.z, i as i32 % size.z);
             for (cell, &opacity) in column.iter_mut().zip(opacity).rev() {
                 level = level.saturating_sub(opacity);
                 *cell = level;

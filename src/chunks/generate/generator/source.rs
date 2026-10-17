@@ -1,5 +1,5 @@
 use crate::block::BlockType;
-use crate::chunks::chunk::{neighbor_26_index, ChunkData, CELLS, CHUNK_SIZE};
+use crate::chunks::chunk::{neighbor_26_index, ChunkData, ColumnSet, CELLS, CHUNK_SIZE};
 use bevy::math::IVec3;
 use bevy::math::Vec3;
 use std::sync::Arc;
@@ -87,6 +87,8 @@ const SPAN: i32 = 3 * CHUNK_SIZE as i32;
 pub(super) struct ChunkNeighbourhood<'a> {
     pub(super) chunk: &'a ChunkData,
     blocks: Vec<BlockType>,
+    // the roofed columns of the 3x3 chunks above, x outermost
+    roofed_above: [ColumnSet; 9],
 }
 
 impl<'a> ChunkNeighbourhood<'a> {
@@ -95,9 +97,13 @@ impl<'a> ChunkNeighbourhood<'a> {
         let size = CHUNK_SIZE as i32;
         let mut blocks = vec![BlockType::Air; (SPAN * SPAN * SPAN) as usize];
         let mut cells = [BlockType::Air; CELLS];
+        let mut roofed_above = [ColumnSet::default(); 9];
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
+                    if let (1, Some(data)) = (dy, &neighbours[neighbor_26_index(dx, dy, dz)]) {
+                        roofed_above[((dx + 1) * 3 + dz + 1) as usize] = data.roofed;
+                    }
                     let data = match (dx, dy, dz) {
                         (0, 0, 0) => chunk,
                         _ => match &neighbours[neighbor_26_index(dx, dy, dz)] {
@@ -119,7 +125,20 @@ impl<'a> ChunkNeighbourhood<'a> {
                 }
             }
         }
-        Self { chunk, blocks }
+        Self {
+            chunk,
+            blocks,
+            roofed_above,
+        }
+    }
+
+    /// Whether ground roofs over column `x`, `z` above the chunks over this one, with `x` and
+    /// `z` from the chunk's lowest block, -CHUNK_SIZE..2 * CHUNK_SIZE.
+    pub(super) fn roofed_above(&self, x: i32, z: i32) -> bool {
+        let size = CHUNK_SIZE as i32;
+        let (cx, cz) = (x.div_euclid(size), z.div_euclid(size));
+        self.roofed_above[((cx + 1) * 3 + cz + 1) as usize]
+            .contains(x.rem_euclid(size) as u16, z.rem_euclid(size) as u16)
     }
 
     // `coord` from the chunk's lowest block, -CHUNK_SIZE..2 * CHUNK_SIZE each way.

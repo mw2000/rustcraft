@@ -181,6 +181,25 @@ impl HeightSampler<'_> {
             .trees_at(world_x - origin.x, world_z - origin.y)
     }
 
+    /// The lowest ground in the block range `min..=max` (x, z), rounded out to whole tiles.
+    pub fn lowest(&mut self, min: I64Vec2, max: I64Vec2) -> f32 {
+        let (first, last) = (
+            RegionCoord::from_world(min.x, min.y),
+            RegionCoord::from_world(max.x, max.y),
+        );
+        let mut lowest = f32::MAX;
+        for rz in first.0.y..=last.0.y {
+            for rx in first.0.x..=last.0.x {
+                let coord = RegionCoord(I64Vec2::new(rx, rz));
+                let origin = coord.origin();
+                let local_min = (min - origin).max(I64Vec2::ZERO);
+                let local_max = (max - origin).min(I64Vec2::splat(REGION_SIZE - 1));
+                lowest = lowest.min(self.region(coord).height_range(local_min, local_max).0);
+            }
+        }
+        lowest
+    }
+
     // Central-difference gradient over the heightmap, as the height change across two
     // blocks. Measured over SLOPE_SPAN blocks either side, so block-sized bumps don't
     // flip the surface between snow, stone and grass column by column.

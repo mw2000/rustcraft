@@ -14,7 +14,7 @@ use bevy::{
     prelude::Mesh3d,
     render::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues},
     tasks::futures,
-    tasks::{AsyncComputeTaskPool, ComputeTaskPool, Task},
+    tasks::{AsyncComputeTaskPool, ComputeTaskPool, Task, TaskPool},
     transform::components::Transform,
 };
 
@@ -117,10 +117,12 @@ fn new_group(key: LodKey, build: BuildChunkGroup, visibility: Visibility) -> imp
 }
 
 /// Remeshes the groups edits have changed, once their chunks have settled, from the world's
-/// blocks as they are now. Their chunks are meshed again from scratch, since a group keeps only
-/// its merged mesh. It's done on the compute pool, which is kept for work the next frames need,
-/// so it isn't queued behind loading on the async compute pool, and a group keeps drawing its
-/// old mesh until `load_groups` swaps in the new one.
+/// blocks as they are now, and those holding sealed chunks the camera has come near. Their
+/// chunks are meshed again from scratch, since a group keeps only its merged mesh. An edit's are
+/// done on the compute pool, which is kept for work the next frames need, so they aren't queued
+/// behind loading on the async compute pool. Sealed chunks come in by the hundred as the camera
+/// moves, some way off, so theirs load like any other chunk's. A group keeps drawing its old
+/// mesh until `load_groups` swaps in the new one.
 pub fn rebuild_groups(
     mut commands: Commands,
     mut loader: ResMut<ChunkLoader>,
@@ -128,14 +130,13 @@ pub fn rebuild_groups(
     unsettled: Query<(), Unsettled>,
     building: Query<(), With<BuildChunkGroup>>,
 ) {
-    if loader.rebuilding.is_empty() {
+    if loader.rebuilding.is_empty() && loader.revealing.is_empty() {
         return;
     }
-    let task_pool = ComputeTaskPool::get();
     // a group already being merged is rebuilt once that's done, or it could land over this
     let ready: Vec<LodKey> = loader
         .rebuilding
-        .iter()
+        .union(&loader.revealing)
         .copied()
         .filter(|&key| {
             key.chunks().all(|chunk| {
@@ -149,7 +150,12 @@ pub fn rebuild_groups(
         .collect();
 
     for key in ready {
-        loader.rebuilding.remove(&key);
+        let task_pool: &TaskPool = if loader.rebuilding.remove(&key) {
+            ComputeTaskPool::get()
+        } else {
+            AsyncComputeTaskPool::get()
+        };
+        loader.revealing.remove(&key);
         // anything held for the group to merge is out of date now
         loader.waiting.remove(&key);
         let origin = key.min_chunk();
@@ -159,9 +165,15 @@ pub fn rebuild_groups(
             let Some(data) = world.get_chunk_data(coord) else {
                 continue;
             };
-            if !data.empty() && !world.is_chunk_buried(coord) {
+            if data.empty() {
+                continue;
+            }
+            if loader.wants_mesh(&world, coord) {
+                loader.sealed.remove(&coord);
                 let offset = (coord.0 - origin).as_vec3() * CHUNK_SIZE as f32;
                 parts.push((offset, coord, data, world.adjacent_chunk_data(coord)));
+            } else if !world.is_chunk_buried(coord) {
+                loader.sealed.insert(coord);
             }
         }
         let (regions, solid_leaves) = (world.region_store.clone(), loader.solid_leaves);

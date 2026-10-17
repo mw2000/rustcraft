@@ -60,7 +60,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Area | What's there | Where |
 |---|---|---|
 | World | 1024 blocks tall, sea level 448, 16³ chunks stored run-length encoded, seeded with `RC_SEED` | `src/world.rs`, `src/chunks/chunk.rs`, `src/chunks/generate/mod.rs` |
-| Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs. No caves or overhangs. | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`) |
+| Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`) |
 | Biomes | Climate-driven desert, forest, foothills, glacier; tinted grass and leaves | `src/chunks/generate/biome/` |
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
@@ -78,7 +78,7 @@ cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, fu
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
 `src/interaction.rs`). Worlds are saved as their edits and the player (`src/save/`).
 
-Not there yet: inventory, crafting, health, caves, ores, block
+Not there yet: inventory, crafting, health, ores in the world, block
 light, structures, mobs, networking.
 
 ---
@@ -345,13 +345,31 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 
 ### 5.4 Underground: caves and ores
 
-- Caves are carved from 3D noise below the surface: tunnels and caverns, denser with depth. The
-  world has 448 blocks below sea level for depth tiers and deep caverns.
-- Cave mouths break the surface sometimes, so caves can be found from above.
-- LOD impact is small: caves are hidden from far away, so distant LODs keep drawing the surface.
-  Cave mouths should show up at mid-range LODs where they're big enough (INV-5). Buried-chunk
-  skipping (`is_chunk_buried`, `lod/spawn.rs`) must account for caves, so a chunk is only
-  skipped when it really is solid.
+- Caves (`src/chunks/generate/caves.rs`) are carved from three 3D noise fields. Tunnels run
+  where two fields' zero surfaces meet, so tunnels sharing a surface cross and join into
+  networks; one field is stretched vertically, so most tunnels climb gently enough to walk. They're
+  mostly 2–6 blocks wide. Caverns open where all three meet, growing with depth from a widening at
+  a junction to halls twenty or thirty blocks across near the bottom of the world.
+- The noise is sampled every 4 blocks and blended, and cells that can't hold a cave are ruled out
+  from their corners, so a chunk underground costs about 15 µs more to generate.
+- Caves stay 5 blocks under the ground and taper shut towards it. Nothing simulates water, so they
+  stay 12 blocks under any sea floor within 16 blocks, rising 2 for each block away from it, and
+  no water is ever over or beside a cave.
+- Cave mouths break the surface on dry land where a 2D noise is high, a few dozen to a square
+  kilometre, so caves can be found from above.
+- LODs leave caves out, mouths included: caves are hidden from far away, so distant LODs keep
+  drawing the surface, and LOD meshing pays nothing. Full-detail chunks with caves in them aren't
+  opaque, so `is_chunk_buried` meshes them; buried LOD nodes (`lod/spawn.rs`) stay empty, since
+  LOD meshes never draw caves. Showing big mouths at mid-range LODs is left for later (INV-5).
+- Sky light falls straight down columns, so each chunk records which of its columns have ground
+  over them (`ChunkData::roofed`), and light reaches into the chunks below only down open shafts
+  (`Caves::sky_reach`). Edits keep it up to date down the loaded chunks under them
+  (`World::edit`), so a shaft dug into a cave lights it. Cave interiors are dark until block
+  light (M1.7).
+- A chunk sealed off from the sky, with every column of it and the chunks beside it roofed, is
+  only seen from in the caves, so it's meshed only near the camera: within 9 chunks from under
+  ground, further than sight reaches along a cave, and 3 from the open. On the surface the caves
+  under the rest of the full-detail area cost nothing to draw.
 - Ores are placed by depth band and region, in veins, deterministically (INV-2, INV-3).
 - Underground structures (mineshafts, dungeons) come with §5.6.
 
@@ -473,7 +491,7 @@ Done when: **you can start with nothing and make iron tools.**
 
 - ☐ **M1.1 Hotbar, inventory and items.** Data-driven items, stacks, dropped items (§5.2).
 - ☐ **M1.2 Survival breaking.** Break time from hardness and tool, drops (§5.1).
-- ☐ **M1.3 Caves.** 3D carving underground, cave mouths, buried-chunk skipping updated (§5.4).
+- ☑ **M1.3 Caves.** 3D carving underground, cave mouths, buried-chunk skipping updated (§5.4).
 - ☐ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).
 - ☐ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,
   copper and iron tools (§5.3).

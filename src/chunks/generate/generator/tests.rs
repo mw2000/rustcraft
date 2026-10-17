@@ -14,7 +14,7 @@ use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
 use super::terrain::{freeze_cell, terrain_block, under_surface, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
-use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::{SkyLight, MAX_LIGHT};
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::WATER_LEVEL;
@@ -338,12 +338,20 @@ fn test_lod_level_zero_matches_full_detail_chunk() {
     ] {
         let chunk = generate_chunk(regions.clone(), ChunkCoordinate(coord));
         let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+        let columns = regions.chunk_columns(&mut regions.sampler(), coord.x, coord.z);
         for x in 0..16 {
             for y in 0..16 {
                 for z in 0..16 {
+                    // LODs leave out caves, which are hidden from afar
+                    let block = coord * 16 + I64Vec3::new(x as i64, y as i64, z as i64);
+                    let carved = regions
+                        .noise()
+                        .caves()
+                        .carves(block, columns.cave_top(x as i64, z as i64));
+                    let expected = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
                     assert_eq!(
+                        if carved { BlockType::Air } else { expected },
                         chunk.get_block_at(U16Vec3::new(x, y, z)),
-                        lod.raw(IVec3::new(x as i32, y as i32, z as i32)),
                         "chunk {coord} block ({x},{y},{z})"
                     );
                 }
@@ -2035,4 +2043,243 @@ fn test_digging_a_shaft_through_the_chunk_above_lights_a_cave_below() {
     );
     // the chunk below is one an edit in the shaft remeshes
     assert!(chunks_meshed_with(I64Vec3::new(8, 41 * 16 + 3, 8)).any(|c| c == coord));
+}
+
+// Full-detail blocks anywhere, generating chunks as they're needed.
+struct Generated {
+    regions: Arc<RegionStore>,
+    chunks: HashMap<I64Vec3, ChunkData>,
+}
+
+impl Generated {
+    fn new(seed: u32) -> Self {
+        Self {
+            regions: Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(seed)))),
+            chunks: HashMap::new(),
+        }
+    }
+
+    fn chunk(&mut self, coord: I64Vec3) -> &ChunkData {
+        let regions = &self.regions;
+        self.chunks
+            .entry(coord)
+            .or_insert_with(|| generate_chunk(regions.clone(), ChunkCoordinate(coord)))
+    }
+
+    fn block(&mut self, block: I64Vec3) -> BlockType {
+        let coord = block.div_euclid(I64Vec3::splat(16));
+        self.chunk(coord)
+            .get_block_at((block - coord * 16).as_u16vec3())
+    }
+
+    // The rounded height of the ground's top in each column of the chunks at chunk `x`, `z`.
+    fn ground(&self, x: i64, z: i64) -> impl Fn(i64, i64) -> i64 {
+        let columns = self
+            .regions
+            .chunk_columns(&mut self.regions.sampler(), x, z);
+        move |cx, cz| super::ground_top(columns.height(cx, cz))
+    }
+}
+
+#[test]
+fn test_caves_are_the_same_whichever_order_chunks_come_in() {
+    let coords: Vec<I64Vec3> = (0..60)
+        .map(|i| I64Vec3::new(i % 4 - 2, 10 + i / 4 % 18, i / 12 - 3))
+        .collect();
+    let (mut forwards, mut backwards) = (Generated::new(7), Generated::new(7));
+    for &coord in &coords {
+        forwards.chunk(coord);
+    }
+    let mut carved = 0;
+    for &coord in coords.iter().rev() {
+        let (a, b) = (forwards.chunk(coord), backwards.chunk(coord));
+        assert_eq!(a.roofed, b.roofed);
+        let blocks = |chunk: &ChunkData| chunk.iter_non_air().collect::<Vec<_>>();
+        assert_eq!(blocks(a), blocks(b), "chunk {coord}");
+        carved += (a.iter_non_air().count() < 4096 && !a.empty()) as usize;
+    }
+    assert!(carved > 0);
+}
+
+#[test]
+fn test_caves_open_up_underground() {
+    let mut generated = Generated::new(1);
+    let (x, z, _) = generated.regions.noise().find_spawn();
+    let size = 16;
+    let (mut air, mut blocks) = (0, 0);
+    for cx in x / size - 4..x / size + 4 {
+        for cz in z / size - 4..z / size + 4 {
+            // from the ground's lowest point down, a few hundred blocks
+            let ground = generated.ground(cx, cz);
+            let lowest = (0..size).map(|c| ground(c, c)).min().unwrap() / size;
+            for cy in lowest - 24..lowest - 1 {
+                let chunk = generated.chunk(I64Vec3::new(cx, cy, cz));
+                air += 4096 - chunk.iter_non_air().count();
+                blocks += 4096;
+            }
+        }
+    }
+    let share = air as f64 / blocks as f64;
+    assert!(
+        (0.01..0.1).contains(&share),
+        "{share} of the ground is caves"
+    );
+}
+
+#[test]
+fn test_no_cave_opens_under_or_beside_the_sea() {
+    let mut generated = Generated::new(1);
+    let (x, z, _) = generated.regions.noise().find_spawn();
+    let size = 16;
+    let sea_roof = 12;
+    let (mut wet, mut carved) = (0, 0);
+    for cx in x / size - 8..x / size + 8 {
+        for cz in z / size - 8..z / size + 8 {
+            let ground = generated.ground(cx, cz);
+            for (lx, lz) in (0..size).flat_map(|lx| (0..size).map(move |lz| (lx, lz))) {
+                let column_ground = ground(lx, lz);
+                for y in WATER_LEVEL - 64..WATER_LEVEL {
+                    let block = I64Vec3::new(cx * size + lx, y, cz * size + lz);
+                    if generated.block(block) != BlockType::Air {
+                        continue;
+                    }
+                    carved += 1;
+                    if column_ground < WATER_LEVEL {
+                        wet += 1;
+                        assert!(
+                            y < column_ground - sea_roof,
+                            "{block} is near the sea floor"
+                        );
+                    }
+                    for side in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z, IVec3::Y] {
+                        let beside = generated.block(block + side.as_i64vec3());
+                        assert!(
+                            !matches!(beside, BlockType::Water | BlockType::Ice),
+                            "{block} is beside {beside:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // the test is only worth anything with caves under the sea, and others beside it
+    assert!(wet > 0 && carved > wet, "{wet} under the sea of {carved}");
+}
+
+#[test]
+fn test_sky_light_stays_out_of_ground_with_caves_in_it() {
+    // a chunk and the one over it, both hollow, under ground that roofs them or not, above the sea
+    let light_inside = |roofed: bool| {
+        let mut over = ChunkData::default();
+        if roofed {
+            for (x, z) in (0..16).flat_map(|x| (0..16).map(move |z| (x, z))) {
+                over.roofed.insert(x, z);
+            }
+        }
+        let over = Arc::new(over);
+        let chunk = ChunkData::default();
+        let mut neighbours = no_neighbors();
+        for (dx, dz) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (dx, dz))) {
+            neighbours[neighbor_26_index(dx, 1, dz)] = Some(over.clone());
+        }
+        let source = ChunkNeighbourhood::new(&chunk, &neighbours);
+        let light =
+            super::chunk::neighbourhood_light(&source, ChunkCoordinate(I64Vec3::new(0, 40, 0)));
+        light.level(IVec3::splat(8))
+    };
+    assert_eq!(MAX_LIGHT, light_inside(false));
+    assert_eq!(0, light_inside(true));
+}
+
+#[test]
+fn test_columns_are_roofed_only_under_ground_and_open_down_cave_mouths() {
+    let mut generated = Generated::new(1);
+    let (x, z, _) = generated.regions.noise().find_spawn();
+    let size = 16;
+    let mut mouths = 0;
+    for cx in x / size - 20..x / size + 20 {
+        for cz in z / size - 20..z / size + 20 {
+            let columns = generated
+                .regions
+                .chunk_columns(&mut generated.regions.sampler(), cx, cz);
+            for (lx, lz) in (0..size).flat_map(|lx| (0..size).map(move |lz| (lx, lz))) {
+                let ground = super::ground_top(columns.height(lx, lz));
+                if columns.sky_reach(lx, lz) == ground {
+                    continue;
+                }
+                mouths += 1;
+                // down from the surface, chunks are roofed once there's ground over them
+                let (wx, wz) = (cx * size + lx, cz * size + lz);
+                let mut covered = false;
+                for y in (ground - 100..ground).rev() {
+                    let block = generated.block(I64Vec3::new(wx, y, wz));
+                    // trees can grow into a mouth, but aren't ground
+                    covered |=
+                        !matches!(block, BlockType::Air | BlockType::Leaves | BlockType::Log);
+                    if y.rem_euclid(size) == 0 {
+                        let below = I64Vec3::new(cx, y / size - 1, cz);
+                        assert_eq!(
+                            covered,
+                            generated.chunk(below).roofed.contains(lx as u16, lz as u16),
+                            "column ({wx}, {wz}) over chunk layer {}",
+                            below.y
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(mouths > 0);
+}
+
+#[test]
+fn test_a_shaft_dug_down_into_a_cave_lights_it_until_its_roofed_over() {
+    use crate::chunks::chunk::ColumnSet;
+    use crate::world::World;
+    // a cave in the top of a chunk 30 layers up, under two more layers of stone, all roofed as
+    // generated ground would be, with stone all round
+    let mut world = World::new(16);
+    for (x, y, z) in
+        (-1..=1).flat_map(|x| (29..=32).flat_map(move |y| (-1..=1).map(move |z| (x, y, z))))
+    {
+        let mut data = ChunkData::from_cells(std::iter::repeat_n(BlockType::Stone, CELLS));
+        if y < 32 {
+            data.roofed = ColumnSet::ALL;
+        }
+        if (x, y, z) == (0, 30, 0) {
+            data.set_block_at(U16Vec3::new(8, 15, 8), BlockType::Air);
+        }
+        world.insert_chunk(ChunkCoordinate(I64Vec3::new(x, y, z)), data);
+    }
+    let cave = ChunkCoordinate(I64Vec3::new(0, 30, 0));
+    let floor_light = |world: &World| {
+        let mesh = generate_chunk_mesh(
+            world.get_chunk_data(cave).unwrap(),
+            world.adjacent_chunk_data(cave),
+            cave,
+            &NoiseGenerator::new(3),
+            false,
+        );
+        top_lights(&mesh.opaque)
+            .iter()
+            .map(|(_, light)| *light)
+            .fold(0.0, f32::max)
+    };
+    assert!(floor_light(&world) < 0.1);
+    let in_the_cave = I64Vec3::new(8, 30 * 16 + 15, 8);
+    assert!(world.is_under_ground(in_the_cave));
+
+    let shaft = (31 * 16..33 * 16).map(|y| I64Vec3::new(8, y, 8));
+    for block in shaft.clone().rev() {
+        world.edit(block, BlockType::Air);
+    }
+    assert!(!world.get_chunk_data(cave).unwrap().roofed.contains(8, 8));
+    // the chunks lit through the opened columns are the ones to mesh again
+    assert!(world.take_reroofed().iter().any(|r| r.chunk == cave));
+    assert!(floor_light(&world) > 0.9);
+    assert!(!world.is_under_ground(in_the_cave));
+
+    world.edit(I64Vec3::new(8, 33 * 16 - 1, 8), BlockType::Stone);
+    assert!(world.get_chunk_data(cave).unwrap().roofed.contains(8, 8));
+    assert!(floor_light(&world) < 0.1);
 }

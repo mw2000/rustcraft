@@ -27,7 +27,7 @@ use super::{
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::edits::EditBlock;
-use crate::world::World;
+use crate::world::{Reroofed, World};
 
 #[derive(Component)]
 pub struct Chunk {
@@ -75,6 +75,16 @@ pub struct ChunkLoader {
     pub(super) waiting: HashSet<LodKey>,
     // groups with an edit in them since they were meshed, see `group::rebuild_groups`
     pub(super) rebuilding: HashSet<LodKey>,
+    // groups to rebuild for the sealed chunks the camera has come near, see
+    // `mesh_nearing_sealed_chunks`
+    pub(super) revealing: HashSet<LodKey>,
+    // sealed chunks left unmeshed for being far from the camera, see `wants_mesh`
+    pub(super) sealed: HashSet<ChunkCoordinate>,
+    // whether the camera has ground over it, see `World::is_under_ground`
+    camera_under_ground: bool,
+    // the camera's chunk, and whether it was under ground, when `mesh_nearing_sealed_chunks`
+    // last looked
+    sealed_anchor: Option<(ChunkCoordinate, bool)>,
 }
 
 // Loading spends up to a time budget a frame rather than a fixed count of chunks, so it keeps up
@@ -87,6 +97,14 @@ const SCAN_BATCH_SIZE: usize = 50_000;
 // Meshing reads every chunk in the 3x3x3 around a chunk, up to sqrt(3) away, so chunk data is
 // generated this much past the meshed chunks.
 const NEIGHBOR_DATA_PADDING: u32 = 2;
+// Sealed chunks are seen only from in the caves, so they're meshed only this near the camera,
+// in chunks. From under ground, a cave can be seen along: rays cast every way from cave air ran
+// at most about 110 blocks before meeting rock (99.9% under 75), and a chunk this far off is at
+// least (9 - sqrt(3)) * 16, about 116 blocks, away.
+const SEALED_MESH_RADIUS_UNDER_GROUND: f32 = 9.0;
+// From the open, caves show only through their mouths and where they come out of hillsides,
+// whose chunks and those beside them aren't sealed, so this is only for climbing down into one.
+const SEALED_MESH_RADIUS_IN_THE_OPEN: f32 = 3.0;
 
 // A cap on concurrent generation tasks, should generation fall behind: 512 at a render distance of
 // 32, scaled with the area of the shell of chunks loading in as the camera moves.
@@ -119,6 +137,10 @@ impl ChunkLoader {
             held: HashMap::new(),
             waiting: HashSet::new(),
             rebuilding: HashSet::new(),
+            revealing: HashSet::new(),
+            sealed: HashSet::new(),
+            camera_under_ground: false,
+            sealed_anchor: None,
         }
     }
 
@@ -150,12 +172,76 @@ pub fn apply_edits(
         if !world.edit(edit.block, edit.to) {
             continue;
         }
-        for chunk in chunks_meshed_with(edit.block) {
-            // one not loaded yet has the edit put in as it's generated
-            if chunk_loader.chunk_to_entity.contains_key(&chunk) {
-                chunk_loader.rebuilding.insert(LodKey::containing(chunk, 1));
+        chunk_loader.rebuild(chunks_meshed_with(edit.block));
+    }
+    chunk_loader.rebuild_reroofed(&mut world);
+}
+
+impl ChunkLoader {
+    // Has the loaded groups holding `chunks` rebuilt; one not loaded yet has the edits put in as
+    // it's generated.
+    fn rebuild(&mut self, chunks: impl IntoIterator<Item = ChunkCoordinate>) {
+        for chunk in chunks {
+            if self.chunk_to_entity.contains_key(&chunk) {
+                self.rebuilding.insert(LodKey::containing(chunk, 1));
             }
         }
+    }
+
+    // Has the groups rebuilt that a change to a chunk's roof reaches: the chunks under it, lit
+    // through it, and if it's become sealed or stopped being, it and those against it.
+    fn rebuild_reroofed(&mut self, world: &mut World) {
+        for Reroofed {
+            chunk,
+            sealed_changed,
+        } in world.take_reroofed()
+        {
+            let under = (-1..=1).flat_map(|x| {
+                (-1..=1).map(move |z| ChunkCoordinate(chunk.0 + I64Vec3::new(x, -1, z)))
+            });
+            self.rebuild(under);
+            if sealed_changed {
+                self.rebuild(std::iter::once(chunk).chain(chunk.adjacent()));
+            }
+        }
+    }
+
+    /// Whether the chunk at `coord`, with its neighbours loaded, is to be meshed: not if it's
+    /// buried, with no faces to draw, nor if it's sealed and far from the camera.
+    pub(super) fn wants_mesh(&self, world: &World, coord: ChunkCoordinate) -> bool {
+        !world.is_chunk_buried(coord)
+            && !(chunk_distance(coord, self.spawn_queue.anchor) > self.sealed_mesh_radius()
+                && world.is_chunk_sealed(coord))
+    }
+
+    fn sealed_mesh_radius(&self) -> f32 {
+        if self.camera_under_ground {
+            SEALED_MESH_RADIUS_UNDER_GROUND
+        } else {
+            SEALED_MESH_RADIUS_IN_THE_OPEN
+        }
+    }
+}
+
+/// Has the sealed chunks the camera has come near meshed, rebuilding their groups. Those it
+/// leaves keep their meshes until they unload, since dropping them would only be churn for
+/// nothing seen.
+pub fn mesh_nearing_sealed_chunks(mut chunk_loader: ResMut<ChunkLoader>) {
+    let loader = &mut *chunk_loader;
+    let (anchor, radius) = (loader.spawn_queue.anchor, loader.sealed_mesh_radius());
+    if loader.sealed_anchor == Some((anchor, loader.camera_under_ground)) {
+        return;
+    }
+    loader.sealed_anchor = Some((anchor, loader.camera_under_ground));
+    let near: Vec<ChunkCoordinate> = loader
+        .sealed
+        .iter()
+        .copied()
+        .filter(|&chunk| chunk_distance(chunk, anchor) <= radius)
+        .collect();
+    for chunk in near {
+        loader.sealed.remove(&chunk);
+        loader.revealing.insert(LodKey::containing(chunk, 1));
     }
 }
 
@@ -170,7 +256,9 @@ pub fn gather_chunks(
     let loader = &mut *chunk_loader;
     let mut in_flight = generating_chunks_query.iter().count();
     let camera = camera_query.single().expect("could not find camera");
-    let camera_chunk = ChunkCoordinate::containing(camera.translation().floor().as_i64vec3());
+    let camera_block = camera.translation().floor().as_i64vec3();
+    let camera_chunk = ChunkCoordinate::containing(camera_block);
+    loader.camera_under_ground = world.is_under_ground(camera_block);
     let task_pool = AsyncComputeTaskPool::get();
     let start = Instant::now();
 
@@ -200,6 +288,7 @@ pub fn gather_chunks(
 pub fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
+    mut chunk_loader: ResMut<ChunkLoader>,
     mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkData)>,
 ) {
     for (entity, chunk, mut generating) in &mut chunks_query {
@@ -211,13 +300,14 @@ pub fn generate_chunks(
             }
         }
     }
+    chunk_loader.rebuild_reroofed(&mut world);
 }
 
 #[allow(clippy::type_complexity)]
 pub fn mark_chunks(
     mut commands: Commands,
     world: Res<World>,
-    chunk_loader: Res<ChunkLoader>,
+    mut chunk_loader: ResMut<ChunkLoader>,
     chunks_query: Query<(Entity, &Chunk), (With<DirtyChunk>, Without<GenerateChunkMesh>)>,
 ) {
     for (entity, chunk) in &chunks_query {
@@ -235,10 +325,12 @@ pub fn mark_chunks(
         }
         commands.entity(entity).remove::<DirtyChunk>();
         // most chunks underground: meshing them would only find every face covered
-        if !world.is_chunk_buried(chunk.coord) {
+        if chunk_loader.wants_mesh(&world, chunk.coord) {
             commands
                 .entity(entity)
                 .insert(GenerateChunkMesh { task: None });
+        } else if !world.is_chunk_buried(chunk.coord) {
+            chunk_loader.sealed.insert(chunk.coord);
         }
     }
 }
@@ -324,6 +416,7 @@ pub fn unload_chunks(
             commands.entity(entity).despawn();
             loader.chunk_to_entity.remove(&chunk.coord);
             loader.held.remove(&chunk.coord);
+            loader.sealed.remove(&chunk.coord);
             world.clear_chunk(chunk.coord);
             unloaded.insert(LodKey::containing(chunk.coord, 1));
         }
@@ -337,6 +430,7 @@ pub fn unload_chunks(
         {
             loader.waiting.remove(&key);
             loader.rebuilding.remove(&key);
+            loader.revealing.remove(&key);
             if let Some(group) = loader.groups.remove(&key) {
                 commands.entity(group).despawn();
             }
@@ -463,9 +557,71 @@ mod tests {
     };
 
     use super::{
-        build_offsets, chunk_distance, max_in_flight, offset_distance, sort_by_viewport_bias,
-        ChunkCoordinate, ChunkSpawnQueue, HashMap, LodLayout,
+        build_offsets, chunk_distance, max_in_flight, mesh_nearing_sealed_chunks, offset_distance,
+        sort_by_viewport_bias, ChunkCoordinate, ChunkLoader, ChunkSpawnQueue, HashMap, LodKey,
+        LodLayout,
     };
+    use crate::block::BlockType;
+    use crate::chunks::chunk::{ChunkData, ColumnSet, CELLS};
+    use crate::world::World;
+
+    #[test]
+    fn test_sealed_chunks_are_meshed_only_near_the_camera() {
+        // stone with a cave in it at each of these, under ground, in stone under ground
+        let (near, far) = (I64Vec3::new(2, 20, 0), I64Vec3::new(12, 20, 0));
+        let mut world = World::new(16);
+        for centre in [near, far] {
+            let around = ChunkCoordinate(centre).adjacent();
+            for coord in around.into_iter().chain([ChunkCoordinate(centre)]) {
+                let mut data = ChunkData::from_cells(std::iter::repeat_n(BlockType::Stone, CELLS));
+                data.roofed = ColumnSet::ALL;
+                if coord.0 == centre {
+                    data.set_block_at(bevy::math::U16Vec3::splat(8), BlockType::Air);
+                }
+                world.insert_chunk(coord, data);
+            }
+        }
+        let mut loader = ChunkLoader::new(
+            LodLayout::new(16, 128, 2),
+            world.height,
+            false,
+            Default::default(),
+            Default::default(),
+        );
+        loader.spawn_queue.anchor = ChunkCoordinate(I64Vec3::new(0, 20, 0));
+        assert!(world.is_chunk_sealed(ChunkCoordinate(far)));
+        assert!(
+            chunk_distance(ChunkCoordinate(far), loader.anchor()) > loader.sealed_mesh_radius()
+        );
+        assert!(loader.wants_mesh(&world, ChunkCoordinate(near)));
+        assert!(!loader.wants_mesh(&world, ChunkCoordinate(far)));
+        // from under ground, sight carries further along the caves
+        loader.spawn_queue.anchor = ChunkCoordinate(far - I64Vec3::X * 6);
+        assert!(!loader.wants_mesh(&world, ChunkCoordinate(far)));
+        loader.camera_under_ground = true;
+        assert!(loader.wants_mesh(&world, ChunkCoordinate(far)));
+        loader.camera_under_ground = false;
+        loader.spawn_queue.anchor = ChunkCoordinate(I64Vec3::new(0, 20, 0));
+
+        // one with a column open to the sky isn't sealed, however far
+        let mut open = (*world.get_chunk_data(ChunkCoordinate(far)).unwrap()).clone();
+        open.roofed = ColumnSet::default();
+        world.insert_chunk(ChunkCoordinate(far), open);
+        assert!(loader.wants_mesh(&world, ChunkCoordinate(far)));
+
+        // and the camera coming near a sealed chunk left unmeshed has its group rebuilt
+        loader.sealed.insert(ChunkCoordinate(far));
+        loader.spawn_queue.anchor = ChunkCoordinate(far - I64Vec3::X * 3);
+        let mut ecs = bevy::ecs::world::World::new();
+        ecs.insert_resource(loader);
+        bevy::ecs::system::RunSystemOnce::run_system_once(&mut ecs, mesh_nearing_sealed_chunks)
+            .unwrap();
+        let loader = ecs.resource::<ChunkLoader>();
+        assert!(loader.sealed.is_empty());
+        assert!(loader
+            .revealing
+            .contains(&LodKey::containing(ChunkCoordinate(far), 1)));
+    }
 
     #[test]
     fn test_full_detail_chunks_are_within_full_detail_reach() {

@@ -16,8 +16,8 @@ use bevy::{
 use crate::edits::EditBlock;
 use crate::settings::{DebugSettings, RendererSettings};
 use chunk_loader::{
-    apply_edits, gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks,
-    ChunkLoader,
+    apply_edits, gather_chunks, generate_chunks, load_chunks, mark_chunks,
+    mesh_nearing_sealed_chunks, unload_chunks, ChunkLoader,
 };
 use fade::{apply_fades, FadeMaterials};
 use group::{build_groups, load_groups, rebuild_groups};
@@ -37,7 +37,9 @@ impl Plugin for TerrainPlugin {
             (
                 // ahead of merging groups as they load, which would only merge what an edit
                 // has made out of date
-                (apply_edits, rebuild_groups).chain().before(build_groups),
+                (apply_edits, mesh_nearing_sealed_chunks, rebuild_groups)
+                    .chain()
+                    .before(build_groups),
                 (
                     gather_chunks,
                     generate_chunks,

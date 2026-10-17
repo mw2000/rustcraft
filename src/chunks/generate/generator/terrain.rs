@@ -86,7 +86,7 @@ pub(super) fn snow_holding_slope(above_sea: i64, snow_line: i64) -> f64 {
 }
 
 // The height, in blocks, the ground of a column `column_height` high is solid up to.
-pub(super) fn ground_top(column_height: i64) -> i64 {
+pub(in crate::chunks::generate) fn ground_top(column_height: i64) -> i64 {
     column_height.max(SOLID_FLOOR)
 }
 

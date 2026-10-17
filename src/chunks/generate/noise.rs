@@ -4,6 +4,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use super::fractal::{resolved, Fractal};
 
 use super::biome::{smoothstep, BaseColumn, BiomeId, Biomes, Climate};
+use super::caves::Caves;
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -124,6 +125,7 @@ pub struct NoiseGenerator {
     temperature: Fbm<Perlin>,
     humidity: Fbm<Perlin>,
     biomes: Biomes,
+    caves: Caves,
 }
 
 impl NoiseGenerator {
@@ -155,6 +157,7 @@ impl NoiseGenerator {
             temperature: fbm(9, CLIMATE_WAVELENGTH, 4),
             humidity: fbm(10, CLIMATE_WAVELENGTH, 4),
             biomes: Biomes::new(seed),
+            caves: Caves::new(seed),
         }
     }
 
@@ -169,6 +172,10 @@ impl NoiseGenerator {
 
     pub fn biomes(&self) -> &Biomes {
         &self.biomes
+    }
+
+    pub fn caves(&self) -> &Caves {
+        &self.caves
     }
 
     // The base terrain, then whichever biomes the climate here calls for.

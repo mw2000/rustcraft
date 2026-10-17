@@ -3,6 +3,7 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
+use super::generator::ground_top;
 use super::noise::NoiseGenerator;
 use super::region_store::HeightSampler;
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -123,20 +124,28 @@ pub struct ChunkColumns {
     gradients: Vec<f64>,
     biomes: Vec<BiomeId>,
     temperatures: Vec<f32>,
+    cave_tops: Vec<i64>,
+    sky_reaches: Vec<i64>,
     /// The lowest and highest ground under the chunks.
     pub lowest: i64,
     pub highest: i64,
+    /// The highest any cave under the chunks reaches, see `cave_top`.
+    pub cave_highest: i64,
 }
 
 impl ChunkColumns {
     fn sample(noise: &NoiseGenerator, heights: &mut HeightSampler, x: i64, z: i64) -> Self {
         let size = CHUNK_SIZE as i64;
         let cells = (size * size) as usize;
+        let cave_tops = noise.caves().column_tops(heights, x, z);
         let mut columns = Self {
             heights: Vec::with_capacity(cells),
             gradients: Vec::with_capacity(cells),
             biomes: Vec::with_capacity(cells),
             temperatures: Vec::with_capacity(cells),
+            cave_highest: *cave_tops.iter().max().unwrap(),
+            cave_tops,
+            sky_reaches: Vec::with_capacity(cells),
             lowest: i64::MAX,
             highest: i64::MIN,
         };
@@ -146,6 +155,12 @@ impl ChunkColumns {
                 let height = heights.height(world_x, world_z).round() as i64;
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 columns.heights.push(height);
+                columns.sky_reaches.push(noise.caves().sky_reach(
+                    world_x,
+                    world_z,
+                    ground_top(height),
+                    columns.cave_top(cx, cz),
+                ));
                 columns.gradients.push(gradient_x.abs() + gradient_z.abs());
                 columns.biomes.push(heights.biome(world_x, world_z));
                 columns
@@ -178,6 +193,16 @@ impl ChunkColumns {
 
     pub fn temperature(&self, cx: i64, cz: i64) -> f32 {
         self.temperatures[Self::index(cx, cz)]
+    }
+
+    /// The height caves in the column reach up to, see `Caves::column_tops`.
+    pub fn cave_top(&self, cx: i64, cz: i64) -> i64 {
+        self.cave_tops[Self::index(cx, cz)]
+    }
+
+    /// How far down the sky reaches in the column, see `Caves::sky_reach`.
+    pub fn sky_reach(&self, cx: i64, cz: i64) -> i64 {
+        self.sky_reaches[Self::index(cx, cz)]
     }
 }
 

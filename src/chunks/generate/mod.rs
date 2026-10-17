@@ -1,4 +1,5 @@
 pub mod biome;
+pub mod caves;
 pub mod columns;
 pub mod fractal;
 pub mod generator;
