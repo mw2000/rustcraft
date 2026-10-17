@@ -1,6 +1,6 @@
 ---
 name: block-textures
-description: Generate or regenerate rustcraft's 16px seamless block textures (stone, grass, logs, side variants) with ComfyUI, and pack them into assets/textures/blocks.png. Use when adding, restyling or fixing a block texture.
+description: Generate or regenerate rustcraft's 16px seamless block textures (stone, grass, logs, side variants) with ComfyUI, or draw them by script (bricks, ores, crafted blocks), and pack them into assets/textures/blocks.png. Use when adding, restyling or fixing a block texture.
 ---
 
 # Block textures
@@ -31,6 +31,19 @@ Per-tile `avoid` in `TILES` adds negative prompt terms (the bark one bans horizo
 
 Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-roll bad tiles with another `--seed`. `out/` is scratch, not committed.
 
+## Hand-drawn tiles
+
+`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table and the furnace. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
+
+```
+cd .claude/skills/block-textures
+python draw.py                     # all drawn tiles, seed 1
+python draw.py CoalOre --seed 3
+python pack.py
+```
+
+Each tile is a function that paints a few shades by index, like the 4-colour quantise leaves the generated tiles. Shades are taken from tiles already in the atlas (`shades("Stone", contrast)`, `source("Stone")` for the whole tile), so a restyled stone or log carries over when you rerun it: the ores are the Stone tile with mineral deposits grown on it from the seed, planks use the log end's colours with seams from the bark. Small pictures (the crafting table's saw and hammer) are strings in the script. Keep patterns periodic in 16 so they tile, and check `out/contact.png` as for generated tiles.
+
 ## How it works
 
 - `block_texture.json` is the txt2img graph. SD1.5 renders 512px with circular padding in both axes so the result tiles. `generate.py` saves the render as `out/raw_<Tile>.png` and `finish()` turns it into 16x16: Lanczos down, wrap-around blur (`smooth`, keeps seams), normalise mean colour and luminance contrast, then a 4-colour quantise (`COLORS`). Plain `area` averaging gives flat grey, so don't use it.
@@ -45,6 +58,6 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 ## Add a block texture
 
 1. Add the variant to `enum Tile` and bump `TILE_COUNT` in `src/block.rs`, and use it in the block's row of the `blocks!` table.
-2. Append a row to `TILES` in `generate.py` at the same index.
+2. Append a row to `TILES` in `generate.py` at the same index. For a drawn tile, the row is `dict(name=..., drawn=True)` plus a function in `draw.py`'s `DRAW`.
 3. In `block_texture.wesl`, bump `ATLAS_CELLS` and add a `vec3` row to `block_mean` (`pack.py` asserts one row per tile and fills the numbers in).
-4. Widen the atlas first (`pack.py` asserts 16px per row entry), e.g. paste a blank 16px onto the right edge, then generate and pack.
+4. Widen the atlas first (`pack.py` asserts 16px per row entry), e.g. paste a blank 16px onto the right edge, then generate or draw, and pack.

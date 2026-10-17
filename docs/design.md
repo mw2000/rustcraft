@@ -124,8 +124,9 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
 - Each block has a stable snake_case name such as `"sandstone"` (`BlockType::name` and
   `from_name`). Saves and the network protocol store names, or a palette mapped to names, never
   discriminants, so reordering the table can't corrupt a world.
-- Textures go into the atlas with the `block-textures` skill, or are drawn by script where
-  ComfyUI isn't set up, derived from the existing tiles so they match.
+- Textures go into the atlas with the `block-textures` skill: generated with ComfyUI, or drawn by
+  its `draw.py` from the existing tiles' shades where they need hard edges (bricks, ores, crafted
+  blocks) or ComfyUI isn't set up.
 
 New blocks are added as features need them, and that's expected (§5).
 

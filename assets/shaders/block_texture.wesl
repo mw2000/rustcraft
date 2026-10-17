@@ -7,7 +7,7 @@
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, see `Tile` in block.rs
-const ATLAS_CELLS: f32 = 15.0;
+const ATLAS_CELLS: f32 = 25.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
@@ -54,7 +54,7 @@ fn block_sample(uv: vec2<f32>, vertex_alpha: f32, footprint: BlockFootprint) -> 
 // order. `gen_atlas` prints these and the block-textures skill's `pack.py`
 // rewrites them, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 15>(
+    var means = array<vec3<f32>, 25>(
         vec3<f32>(0.1182, 0.1186, 0.1186), // stone
         vec3<f32>(0.5003, 0.5003, 0.5003), // grass top
         vec3<f32>(0.4776, 0.3611, 0.1822), // sand
@@ -70,6 +70,16 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.6178, 0.4855, 0.2738), // sandstone side
         vec3<f32>(0.6696, 0.5261, 0.2962), // sandstone top
         vec3<f32>(0.4256, 0.3341, 0.2906), // snow side
+        vec3<f32>(0.3118, 0.1779, 0.0644), // planks
+        vec3<f32>(0.0935, 0.0932, 0.0932), // cobblestone
+        vec3<f32>(0.1054, 0.1064, 0.1064), // stone bricks
+        vec3<f32>(0.2736, 0.1348, 0.1069), // bricks
+        vec3<f32>(0.1115, 0.1119, 0.1121), // coal ore
+        vec3<f32>(0.1429, 0.1223, 0.1154), // copper ore
+        vec3<f32>(0.1485, 0.1359, 0.1296), // iron ore
+        vec3<f32>(0.2778, 0.1663, 0.0667), // crafting table top
+        vec3<f32>(0.2776, 0.1755, 0.0874), // crafting table side
+        vec3<f32>(0.0981, 0.0981, 0.0981), // furnace side
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

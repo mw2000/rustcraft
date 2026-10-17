@@ -19,6 +19,7 @@ STYLE = "seamless tileable texture, extreme close-up of a flat surface filling t
 # Order matches `Tile` in src/block.rs. Generated tiles take a prompt, `avoid` (negative prompt), and optionally
 # `mean` (target sRGB colour, when reference.png has no tile), `std`, `smooth` and `colors` to tune their look.
 # grey: target mean sRGB value, the shader tints the tile. derive: built from picked tiles by `derive()`, not generated.
+# drawn: hand-drawn by `draw.py`, which this script leaves alone.
 TILES = [
     dict(name="Stone", prompt="rough grey stone, dark specks and cracks, high contrast"),
     dict(name="GrassTop", prompt="grass, short blades, no soil", grey=187),
@@ -35,6 +36,16 @@ TILES = [
     dict(name="SandstoneSide", derive="strata", body="SandstoneTop"),
     dict(name="SandstoneTop", prompt="pale tan sandstone, smooth fine grain", avoid="orange, red, brown, bricks, terracotta", mean=(214, 192, 148)),
     dict(name="SnowSide", derive="fringe", body="Dirt", top="Snow", depth=(3, 5)),
+    dict(name="Planks", drawn=True),
+    dict(name="Cobblestone", drawn=True),
+    dict(name="StoneBricks", drawn=True),
+    dict(name="Bricks", drawn=True),
+    dict(name="CoalOre", drawn=True),
+    dict(name="CopperOre", drawn=True),
+    dict(name="IronOre", drawn=True),
+    dict(name="CraftingTableTop", drawn=True),
+    dict(name="CraftingTableSide", drawn=True),
+    dict(name="FurnaceSide", drawn=True),
 ]
 
 
@@ -161,7 +172,7 @@ if __name__ == "__main__":
     if a.pick:
         raise SystemExit
     want = a.tiles or [t["name"] for t in TILES]
-    todo = sorted((t for t in TILES if t["name"] in want), key=lambda t: "derive" in t)  # derived tiles need their sources first
+    todo = sorted((t for t in TILES if t["name"] in want and not t.get("drawn")), key=lambda t: "derive" in t)  # derived tiles need their sources first
     for t in todo:
         if "derive" in t:
             derive(t, a.seed)

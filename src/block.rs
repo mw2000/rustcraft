@@ -90,6 +90,45 @@ blocks! {
         name: "sandstone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
         top: Tile::SandstoneTop, side: Tile::SandstoneSide, bottom: Tile::SandstoneTop,
         lod: Tile::SandstoneSide,
+    },    Planks {
+        name: "planks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::Planks, side: Tile::Planks, bottom: Tile::Planks, lod: Tile::Planks,
+    },
+    Cobblestone {
+        name: "cobblestone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::Cobblestone, side: Tile::Cobblestone, bottom: Tile::Cobblestone,
+        lod: Tile::Cobblestone,
+    },
+    StoneBricks {
+        name: "stone_bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::StoneBricks, side: Tile::StoneBricks, bottom: Tile::StoneBricks,
+        lod: Tile::StoneBricks,
+    },
+    Bricks {
+        name: "bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::Bricks, side: Tile::Bricks, bottom: Tile::Bricks, lod: Tile::Bricks,
+    },
+    CoalOre {
+        name: "coal_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::CoalOre, side: Tile::CoalOre, bottom: Tile::CoalOre, lod: Tile::CoalOre,
+    },
+    CopperOre {
+        name: "copper_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::CopperOre, side: Tile::CopperOre, bottom: Tile::CopperOre, lod: Tile::CopperOre,
+    },
+    IronOre {
+        name: "iron_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::IronOre, side: Tile::IronOre, bottom: Tile::IronOre, lod: Tile::IronOre,
+    },
+    CraftingTable {
+        name: "crafting_table", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        top: Tile::CraftingTableTop, side: Tile::CraftingTableSide, bottom: Tile::Planks,
+        lod: Tile::CraftingTableSide,
+    },
+    Furnace {
+        name: "furnace", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        // Blocks have no facing yet, so every side has the furnace's mouth.
+        top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
     },
 }
 
@@ -177,9 +216,19 @@ pub enum Tile {
     SandstoneSide,
     SandstoneTop,
     SnowSide,
+    Planks,
+    Cobblestone,
+    StoneBricks,
+    Bricks,
+    CoalOre,
+    CopperOre,
+    IronOre,
+    CraftingTableTop,
+    CraftingTableSide,
+    FurnaceSide,
 }
 
-pub const TILE_COUNT: usize = 15;
+pub const TILE_COUNT: usize = 25;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -213,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::SnowSide as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::FurnaceSide as usize + 1);
     }
 
     #[test]
