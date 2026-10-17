@@ -9,10 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-# A newer push to the same ref makes the older run pointless.
+# A newer push to a PR makes its older run pointless. Pushed branches finish every run, so they
+# get a result and save the dependency cache, which a cancelled run never does.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
