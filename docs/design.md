@@ -196,7 +196,7 @@ The world's state beyond the seed (INV-1).
   - At startup every region file is loaded into `Edits` before chunks generate, which is fine
     while worlds are small. A big world would load regions lazily, as chunks near them load.
 
-### 4.4 Multiplayer (decided: client/server with an integrated server; library open, D-1)
+### 4.4 Multiplayer (decided: client/server with an integrated server, on `bevy_replicon`, D-1)
 
 - **Integrated server.** Singleplayer runs a server in the same process; multiplayer runs the same
   server either hosted by a player or as a dedicated, headless binary. One code path.
@@ -214,6 +214,51 @@ The world's state beyond the seed (INV-1).
 - **Code layout.** Split into what runs on the server (simulation, edits, saving), what runs on the
   client (rendering, LODs, input, UI), and what's shared (blocks, generation, protocol). Gameplay
   systems are written to run on the server and must not depend on rendering.
+
+#### The plan for M0.5 and M0.6
+
+- **One App, replicon-style.** Three plugin sets: `SharedPlugin`, `ServerPlugin`, `ClientPlugin`.
+  Systems that need authority run under an `is_authority()` condition (replicon's
+  `ClientState::Disconnected`), which holds in singleplayer, for a listen server and for a
+  dedicated server. In singleplayer no transport runs and replicon hands client messages straight
+  to the server systems (`ClientId::Server`). A dedicated server is `SharedPlugin` + `ServerPlugin`
+  on `MinimalPlugins`. Not a second App or SubApp: that would double `World`, need edit prediction
+  from day one and complicate quitting and saving. The split is kept honest by tests instead: a
+  headless `ServerPlugin` App in M0.5, and two Apps over renet2's memory transport in M0.6.
+- **Server:** `World` authority (validates and applies edits; keeps chunks near each player
+  generated for collision and validation, never meshed), `Edits` and saving, the clock, players
+  (spawned from saves, game modes), commands, and later movement plausibility and inventories.
+  Until M1.1 the hotbar is client-driven but saved by the server; that's harmless in creative and
+  not an INV-4 breach.
+- **Client:** meshing, LODs, fade, sky, clouds and every other renderer, the camera, input and UI,
+  moving its own player (decided client-side, §4.4), interpolating other players (M0.6), and its
+  own copy of `World` (the seed plus edits it's sent) for collision, raycasts and meshing.
+- **Shared:** blocks, generation, `World`, `Edits`, collision, the movement step as a pure
+  function, `GameMode`, `raycast` and `overlaps`, and the protocol in `src/protocol.rs`.
+- **Protocol.** Blocks travel by name, or by a palette sent on joining (§4.1). Client to server:
+  `RequestEdit { block, to, seq }`, `RunCommand`, `Chat`, and from M0.6 `PlayerState` (unreliable,
+  ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
+  time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
+  `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
+  `CommandOutput`, `ChatLine`. Players are replicated entities; poses go out as unreliable messages
+  to everyone but their owner, so the server never overwrites a player's own movement.
+- **Edits** become request, validate, broadcast: `use_target` sends `RequestEdit`; the server
+  checks the block's in the world and loaded, within reach of the requester's eye, not placed into
+  any player or into a solid block, allowed by their game mode, and not too fast; then applies it
+  and broadcasts `BlockChanged`, or answers `EditRejected`. The client applies `BlockChanged` and
+  **always** remeshes: in one App the client shares the server's `World`, so `World::edit` reports
+  no change there. Client-side prediction with rollback comes in M0.6.
+- **Chunk residency** is shared: `World` tracks who holds each chunk (client or server) and a chunk
+  is only cleared once nobody does, so the client unloading behind the camera can't drop a chunk
+  the server keeps for another player.
+- **Determinism handshake** (D-3): a stable hash (not `DefaultHasher`) of `generate_chunk`'s output
+  for a few fixed sample chunks near and far from spawn, sent in `Welcome` and checked by the
+  client, which refuses to join on a mismatch.
+- **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
+  `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
+  `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
+  Shared modules stay where they are. Later a default-on `client` cargo feature keeps wgpu and
+  winit out of the dedicated server binary.
 
 ### 4.5 Game modes (proposed)
 
@@ -380,9 +425,28 @@ and loads.**
   (§4.3). Edits survive a restart.
 - ☑ **M0.4 Game modes.** Survival and creative, `/gamemode`, creative block picker (§4.5).
 - ☐ **M0.5 Client/server split.** Integrated server in-process; game state flows through it
-  (§4.4). Singleplayer plays the same as before.
+  (§4.4). Singleplayer plays the same as before. In steps, each playable with tests green:
+  - ☐ **M0.5a Game state off the camera.** A `PlayerLook { yaw, pitch }` on the player that the
+    camera follows; movement and saving read it; the movement step as a pure function; the clock
+    split from the sun and moon. A headless App runs saving, game modes and the clock.
+  - ☐ **M0.5b Replicon and edits through it.** `bevy_replicon` with no transport, `protocol.rs`,
+    `RequestEdit` / `BlockChanged` / `EditRejected`, the server validating edits.
+  - ☐ **M0.5c Players owned by the server.** Spawned from saves by the server; the client puts
+    the camera on its `LocalPlayer`.
+  - ☐ **M0.5d Commands and game modes on the server.**
+  - ☐ **M0.5e Time on the server**, with `TimeSync`.
+  - ☐ **M0.5f Server chunk residency**, headless, with shared holders in `World`.
 - ☐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
-  replicated, simple player models, chat (§4.4).
+  replicated, simple player models, chat (§4.4). In steps:
+  - ☐ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
+    two-App tests over the memory transport.
+  - ☐ **M0.6b Determinism handshake**, with golden checksums and a CI matrix of Windows, macOS
+    and Linux (D-3).
+  - ☐ **M0.6c Edit sync**: `ChunkEdits` on joining and moving, `BlockChanged` by area, client
+    prediction with rollback.
+  - ☐ **M0.6d Other players**: names, interpolated poses, simple models, plausibility checks with
+    `Teleport` corrections, a save per player.
+  - ☐ **M0.6e Chat and operators**, an `ops` list in `world.toml` with the host as operator.
 - ☑ **M0.7 CI.** Build, test, clippy and fmt on every PR.
 
 ### Phase 1: the survival core
@@ -434,10 +498,6 @@ Done when: **the world feels inhabited, and night is dangerous.**
 
 ### Open
 
-- **D-1 Networking library.** Candidates: `lightyear`, `bevy_replicon` (with `renet` or
-  `quinn`), or a small protocol of our own over QUIC. Must support Bevy 0.20, or we pin and
-  follow it. Decide before M0.5; recommend whichever has Bevy 0.20 support and prediction for
-  player movement.
 - **D-3 Cross-platform determinism.** Is same-version determinism enough, or does generation need
   to avoid platform-dependent float functions (`sin`, `exp` and the like differ across libm
   implementations) so Windows, macOS and Linux agree? Test early, in M0.6, by comparing chunk
@@ -447,6 +507,14 @@ Done when: **the world feels inhabited, and night is dangerous.**
 - **D-5 Hunger.** Include it, simplify it, or leave it out. Decide before M1.8.
 
 ### Decided
+
+- **D-1 Networking: `bevy_replicon` (=0.45.2), with `bevy_replicon_renet2` (=1.0.0) as the
+  transport from M0.6, and `bevy_replicon_quinnet` as the fallback.** On 2026-10-17 replicon was
+  the only replication crate with a release for Bevy 0.20; its listen-server mode is the integrated
+  server; it encodes with postcard, like saves (D-6); and its transports swap cheaply. `lightyear`
+  had no Bevy 0.20 release, and its rollback prediction isn't needed while movement is decided by
+  clients (§4.4); revisit it if mobs need predicted entities. Versions are pinned exactly and
+  updated deliberately with each Bevy release. Decided 2026-10-17.
 
 - **D-2 Multiplayer architecture:** client/server with an integrated server, terrain generated by
   clients from the seed, server-authoritative state (§4.4). Decided 2026-10-17.
