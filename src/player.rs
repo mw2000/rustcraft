@@ -49,7 +49,8 @@ pub struct Player {
     against_wall: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Movement {
     /// Flying anywhere, through anything, the way the camera is facing.
     #[default]

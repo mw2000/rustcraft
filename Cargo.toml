@@ -12,6 +12,9 @@ noise = "0.9.0"
 rand = "0.10"
 toml = "1"
 serde = { version = "1.0", features = ["serde_derive"] }
+# saved edits' encoding (D-6), and the platform's data directory to save worlds in
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+dirs = "6"
 # the default features minus wayland, which needs system libs we don't have
 bevy = { version = "0.20", default-features = false, features = [
     "trace", "async_executor", "bevy_asset", "bevy_log", "bevy_state", "reflect_auto_register",

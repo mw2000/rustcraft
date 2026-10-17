@@ -21,12 +21,14 @@ use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::player::{
     murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player, EYE_HEIGHT,
 };
+use rustcraft::save::{world_name, worlds_dir, PlayerState, SavePlugin, WorldSave};
 use rustcraft::sky::{
     atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, TimeOfDay,
-    FOG_MAX_OPACITY, START_TIME,
+    FOG_MAX_OPACITY,
 };
 use rustcraft::sky_dome::{NightSkyPlugin, SunGlarePlugin};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
+use rustcraft::world::World;
 
 #[allow(clippy::too_many_arguments)]
 fn setup_scene(
@@ -48,25 +50,34 @@ fn setup_scene(
         layout.max_level
     );
 
-    let game_world = rustcraft::world::World::new(layout.region_reach() as u32);
+    let dir = worlds_dir().join(world_name());
+    let (save, saved, edits) = WorldSave::open(dir.clone(), World::requested_seed())
+        .unwrap_or_else(|error| panic!("couldn't open the world in {}: {error}", dir.display()));
+    let game_world = World::from_save(saved.seed, edits, layout.region_reach() as u32);
     let world_height = game_world.height;
-    info!("world seed is {}", game_world.seed());
-    let spawn = game_world.spawn();
+    info!(
+        "playing the world in {}, with seed {}",
+        dir.display(),
+        saved.seed
+    );
+    let arrival = saved
+        .player
+        .unwrap_or_else(|| PlayerState::arriving_at(game_world.spawn()));
     commands.insert_resource(game_world);
+    commands.insert_resource(save);
+    commands.insert_resource(TimeOfDay(start_time().unwrap_or(saved.time_of_day)));
 
-    info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
+    let [x, y, z] = arrival.position;
+    info!("spawned at {x:?}, {y:?}, {z:?}");
 
-    let player = commands
-        .spawn((
-            Player::default(),
-            Transform::from_translation(spawn).looking_to(Vec3::Z, Vec3::Y),
-        ))
-        .id();
+    let mut body = Player::default();
+    body.movement = arrival.movement;
+    let player = commands.spawn((body, arrival.body())).id();
 
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
-            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).with_rotation(arrival.head()),
             Camera3d { ..default() },
             atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
@@ -170,11 +181,10 @@ fn winit_settings() -> bevy::winit::WinitSettings {
 }
 
 // RC_TIME starts the clock at that time of day, in days, for looking at the sky at any hour
-fn start_time() -> f32 {
+fn start_time() -> Option<f32> {
     std::env::var("RC_TIME")
         .ok()
         .and_then(|time| time.parse().ok())
-        .unwrap_or(START_TIME)
 }
 
 fn main() {
@@ -202,6 +212,7 @@ fn main() {
             MenuPlugin,
             CommandPlugin,
             InteractionPlugin,
+            SavePlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
@@ -222,7 +233,6 @@ fn main() {
             )
                 .chain(),
         )
-        .insert_resource(TimeOfDay(start_time()))
         .add_systems(Update, move_sky)
         .run();
 }

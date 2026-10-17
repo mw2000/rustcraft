@@ -22,12 +22,12 @@ Press T, or / to start with the slash typed, to open the command bar. Enter runs
 
 - `/tp <x> <y> <z>` teleports there. `~` means where you are, and `~10` means ten blocks on from it.
 - `/tp <x> <z>` teleports to just above the ground there.
-- `/seed` prints the world's seed. Run with `RC_SEED=<seed>` to get the same world again.
+- `/seed` prints the world's seed. Run with `RC_SEED=<seed>` and a new world's name to get the same world again.
 - `/help` lists the commands.
 
-## Planned work
+## Worlds
 
-- Saving the world.
+Worlds are saved every 30 seconds and when you quit, in a directory each under your data directory: `~/.local/share/rustcraft/worlds` on Linux, `~/Library/Application Support/rustcraft/worlds` on macOS and `%APPDATA%\rustcraft\worlds` on Windows. Run with `RC_WORLD=<name>` to play another world, which is made if it doesn't exist yet; the one played otherwise is called `world`.
 
 ## License
 

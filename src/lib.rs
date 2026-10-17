@@ -10,6 +10,7 @@ pub mod horizon;
 pub mod interaction;
 pub mod menu;
 pub mod player;
+pub mod save;
 pub mod settings;
 pub mod sky;
 pub mod sky_dome;

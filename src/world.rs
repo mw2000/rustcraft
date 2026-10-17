@@ -31,11 +31,12 @@ impl World {
     /// `region_distance` is how far, in chunks, terrain is built from full-detail regions,
     /// see `LodLayout::region_reach`.
     pub fn new(region_distance: u32) -> Self {
-        // RC_SEED repeats a world, for chasing bugs that depend on its terrain
-        let seed = std::env::var("RC_SEED")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(rand::random);
+        let seed = Self::requested_seed().unwrap_or_else(rand::random);
+        Self::from_save(seed, Edits::default(), region_distance)
+    }
+
+    /// The world with the given seed and edits, as saved.
+    pub fn from_save(seed: u32, edits: Edits, region_distance: u32) -> Self {
         let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
@@ -44,7 +45,7 @@ impl World {
             seed,
             height,
             chunks: HashMap::new(),
-            edits: Edits::default(),
+            edits,
             below: Arc::new(ChunkData::from_cells(std::iter::repeat_n(
                 BlockType::Stone,
                 (CHUNK_SIZE as usize).pow(3),
@@ -58,8 +59,18 @@ impl World {
         }
     }
 
+    /// The seed `RC_SEED` asks a new world to have, to repeat a world for chasing bugs that
+    /// depend on its terrain.
+    pub fn requested_seed() -> Option<u32> {
+        std::env::var("RC_SEED").ok().and_then(|s| s.parse().ok())
+    }
+
     pub fn seed(&self) -> u32 {
         self.seed
+    }
+
+    pub fn edits_mut(&mut self) -> &mut Edits {
+        &mut self.edits
     }
 
     pub fn spawn(&self) -> Vec3 {

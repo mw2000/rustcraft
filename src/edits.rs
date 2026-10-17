@@ -1,7 +1,7 @@
 use bevy::{
     ecs::message::Message,
     math::{I64Vec3, U16Vec3},
-    platform::collections::HashMap,
+    platform::collections::{HashMap, HashSet},
 };
 
 use crate::block::BlockType;
@@ -23,19 +23,47 @@ pub struct EditBlock {
 #[derive(Default)]
 pub struct Edits {
     chunks: HashMap<ChunkCoordinate, HashMap<U16Vec3, BlockType>>,
+    // the chunks edited since `take_changed` last asked, so saving only rewrites what changed
+    changed: HashSet<ChunkCoordinate>,
 }
 
 impl Edits {
     pub fn set(&mut self, block: I64Vec3, to: BlockType) {
+        let coord = ChunkCoordinate::containing(block);
+        self.put(coord, ChunkCoordinate::local_block(block), to);
+        self.changed.insert(coord);
+    }
+
+    /// Puts back an edit loaded from a save, which as it's already saved isn't a change.
+    pub fn put(&mut self, coord: ChunkCoordinate, local: U16Vec3, to: BlockType) {
+        self.chunks.entry(coord).or_default().insert(local, to);
+    }
+
+    /// The chunks edited since this was last called.
+    pub fn take_changed(&mut self) -> HashSet<ChunkCoordinate> {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// The chunks with edits in them, in no particular order.
+    pub fn chunks(&self) -> impl Iterator<Item = ChunkCoordinate> + '_ {
+        self.chunks.keys().copied()
+    }
+
+    /// The edits made in the chunk at `coord`, in no particular order.
+    pub fn in_chunk(
+        &self,
+        coord: ChunkCoordinate,
+    ) -> impl Iterator<Item = (U16Vec3, BlockType)> + '_ {
         self.chunks
-            .entry(ChunkCoordinate::containing(block))
-            .or_default()
-            .insert(ChunkCoordinate::local_block(block), to);
+            .get(&coord)
+            .into_iter()
+            .flatten()
+            .map(|(&local, &block)| (local, block))
     }
 
     /// Puts the edits made in the chunk at `coord` onto its generated `data`.
     pub fn apply(&self, coord: ChunkCoordinate, data: &mut ChunkData) {
-        for (&local, &block) in self.chunks.get(&coord).into_iter().flatten() {
+        for (local, block) in self.in_chunk(coord) {
             data.set_block_at(local, block);
         }
     }
