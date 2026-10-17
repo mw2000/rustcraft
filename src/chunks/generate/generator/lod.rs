@@ -558,7 +558,7 @@ impl BlockSource for LodBlocks {
 
 pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
     let cell_size = key.cell_size();
-    // matches `lod_transform`
+    // matches `lod_transform`, less `MESH_OFFSET`
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
     let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
     let blocks = LodBlocks::sample(&regions, key);

@@ -12,6 +12,13 @@ impl ChunkCoordinate {
         Self(block.div_euclid(I64Vec3::splat(CHUNK_SIZE as i64)))
     }
 
+    /// Where `block` is within the chunk holding it.
+    pub fn local_block(block: I64Vec3) -> U16Vec3 {
+        block
+            .rem_euclid(I64Vec3::splat(CHUNK_SIZE as i64))
+            .as_u16vec3()
+    }
+
     /// The centre of the chunk, in blocks.
     pub fn centre(self) -> Vec3 {
         (self.0.as_vec3() + Vec3::splat(0.5)) * CHUNK_SIZE as f32
@@ -67,6 +74,7 @@ struct Run {
     length: u16,
 }
 
+#[derive(Clone)]
 pub struct ChunkData {
     // Run-length encoded in `linear_index` order: most chunks are uniform or banded, so this is
     // far smaller than one entry per block, at the cost of `get`/`set` scanning the runs.
@@ -77,6 +85,11 @@ pub struct ChunkData {
 
 pub const CHUNK_SIZE: u16 = 16;
 pub const CELLS: usize = (CHUNK_SIZE as usize).pow(3);
+
+/// Meshes are built with each block centred on its coordinates, and drawn this far on from
+/// there, so that block `b` fills `b` to `b + 1` in the world, as collision and
+/// `World::get_block_at` have it.
+pub const MESH_OFFSET: Vec3 = Vec3::splat(0.5);
 
 // x outer, z middle, y inner - matches generate_chunk's loop order, so terrain bands form long runs.
 fn linear_index(coord: U16Vec3) -> usize {

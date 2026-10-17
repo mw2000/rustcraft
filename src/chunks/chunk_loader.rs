@@ -8,6 +8,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
+        message::MessageReader,
         query::{Or, With, Without},
         system::{Commands, Query, Res, ResMut},
     },
@@ -20,11 +21,12 @@ use bevy::{
 
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
-    generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
+    generate::generator::{chunks_meshed_with, generate_chunk, generate_chunk_mesh, ChunkMeshes},
     group::{GroupedChunk, MeshedChunk},
     lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
     material::{ChunkMaterial, WaterMaterial},
 };
+use crate::edits::EditBlock;
 use crate::world::World;
 
 #[derive(Component)]
@@ -64,13 +66,15 @@ pub struct ChunkLoader {
     pub(super) water_material: Handle<WaterMaterial>,
     max_in_flight_generating: usize,
     // see `DebugSettings::solid_leaves`
-    solid_leaves: bool,
+    pub(super) solid_leaves: bool,
     // the entity drawing each group of chunks, see `group::ChunkGroup`
     pub(super) groups: HashMap<LodKey, Entity>,
     // meshed chunks' meshes, until the rest of their group is ready to merge with them
     pub(super) held: HashMap<ChunkCoordinate, ChunkMeshes>,
     // groups with a held mesh, not yet being merged
     pub(super) waiting: HashSet<LodKey>,
+    // groups with an edit in them since they were meshed, see `group::rebuild_groups`
+    pub(super) rebuilding: HashSet<LodKey>,
 }
 
 // Loading spends up to a time budget a frame rather than a fixed count of chunks, so it keeps up
@@ -114,6 +118,7 @@ impl ChunkLoader {
             groups: HashMap::new(),
             held: HashMap::new(),
             waiting: HashSet::new(),
+            rebuilding: HashSet::new(),
         }
     }
 
@@ -127,6 +132,30 @@ impl ChunkLoader {
 
     pub fn chunk_entity(&self, coord: ChunkCoordinate) -> Option<Entity> {
         self.chunk_to_entity.get(&coord).copied()
+    }
+
+    #[cfg(test)]
+    pub(super) fn track(&mut self, coord: ChunkCoordinate, entity: Entity) {
+        self.chunk_to_entity.insert(coord, entity);
+    }
+}
+
+/// Makes the edits asked for, and has every loaded group whose mesh they change rebuilt.
+pub fn apply_edits(
+    mut edits: MessageReader<EditBlock>,
+    mut world: ResMut<World>,
+    mut chunk_loader: ResMut<ChunkLoader>,
+) {
+    for edit in edits.read() {
+        if !world.edit(edit.block, edit.to) {
+            continue;
+        }
+        for chunk in chunks_meshed_with(edit.block) {
+            // one not loaded yet has the edit put in as it's generated
+            if chunk_loader.chunk_to_entity.contains_key(&chunk) {
+                chunk_loader.rebuilding.insert(LodKey::containing(chunk, 1));
+            }
+        }
     }
 }
 
@@ -307,6 +336,7 @@ pub fn unload_chunks(
             .all(|chunk| !loader.chunk_to_entity.contains_key(&chunk))
         {
             loader.waiting.remove(&key);
+            loader.rebuilding.remove(&key);
             if let Some(group) = loader.groups.remove(&key) {
                 commands.entity(group).despawn();
             }

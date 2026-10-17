@@ -13,6 +13,7 @@ cargo run --release
 - WASD to move, Shift to sprint, mouse to look.
 - Space to jump, or to swim up in water.
 - You start flying: Space and Ctrl move up and down, and you pass through blocks. F switches to walking and back.
+- Left click breaks the block you're looking at, and right click places a block against it. Middle click picks the block you're looking at to place, which starts as stone.
 - `[` and `]` move the sun, and F1 shows the debug overlay.
 
 ## Commands
@@ -26,7 +27,6 @@ Press T, or / to start with the slash typed, to open the command bar. Enter runs
 
 ## Planned work
 
-- Breaking and placing blocks.
 - Saving the world.
 
 ## License

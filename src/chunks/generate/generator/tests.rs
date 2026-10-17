@@ -8,12 +8,12 @@ use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
 use crate::block::{BlockType, Tile};
 
 use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
-use super::chunk::{generate_chunk, generate_chunk_mesh};
+use super::chunk::{chunks_meshed_with, generate_chunk, generate_chunk_mesh};
 use super::lod::LodBlocks;
 use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
 use super::terrain::{freeze_cell, terrain_block, under_grass, FREEZE_TEMPERATURE};
-use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
+use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
@@ -1804,7 +1804,8 @@ fn test_every_level_grows_the_trees_full_detail_does() {
     }
 }
 
-// Triangles of a node's opaque mesh in world space, placed as `lod_transform` does.
+// Triangles of a node's opaque mesh in world space, placed as `lod_transform` does, less
+// `MESH_OFFSET`.
 fn world_triangles(regions: &Arc<RegionStore>, key: LodKey) -> Vec<[Vec3; 3]> {
     let Some(meshes) = super::lod::generate_lod_mesh(regions.clone(), key) else {
         return Vec::new();
@@ -1964,4 +1965,65 @@ fn test_lod_non_air_only_covers_interior() {
     assert!(cells
         .iter()
         .all(|(c, _)| c.min_element() >= 0 && c.max_element() < 16));
+}
+
+#[test]
+fn test_an_edit_remeshes_the_chunks_its_faces_and_light_reach() {
+    let remeshed = |x, y, z| -> Vec<I64Vec3> {
+        chunks_meshed_with(I64Vec3::new(x, y, z))
+            .map(|c| c.0)
+            .collect()
+    };
+    // inside a chunk: it, the chunk below, whose light falls through it, and those beside whose
+    // light spreads in from as far
+    let inside = remeshed(4, 4, 4);
+    assert_eq!(8, inside.len());
+    for chunk in [I64Vec3::ZERO, I64Vec3::NEG_Y, I64Vec3::new(-1, 0, -1)] {
+        assert!(inside.contains(&chunk), "{chunk} in {inside:?}");
+    }
+    assert!(!inside.contains(&I64Vec3::Y) && !inside.contains(&I64Vec3::X));
+    // in a top corner, the chunks it touches across that corner too
+    let corner = remeshed(15, 15, 15);
+    assert_eq!(12, corner.len());
+    assert!(corner.contains(&I64Vec3::ONE) && corner.contains(&I64Vec3::new(0, -1, 0)));
+    // and in a bottom corner, the chunks below and behind it
+    let corner = remeshed(-16, -16, -16);
+    assert_eq!(8, corner.len());
+    assert!(corner.contains(&I64Vec3::splat(-1)) && corner.contains(&I64Vec3::splat(-2)));
+}
+
+#[test]
+fn test_digging_a_shaft_through_the_chunk_above_lights_a_cave_below() {
+    let stone = || ChunkData::from_cells(std::iter::repeat_n(BlockType::Stone, CELLS));
+    // a pocket of air in the top of a chunk of stone, under another
+    let mut below = stone();
+    below.set_block_at(U16Vec3::new(8, 15, 8), BlockType::Air);
+    let below = Arc::new(below);
+    let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
+    let lit = |above: ChunkData| {
+        let mut neighbours = vec![None; 26];
+        neighbours[neighbor_26_index(0, 1, 0)] = Some(Arc::new(above));
+        let mesh = generate_chunk_mesh(
+            below.clone(),
+            neighbours,
+            coord,
+            &NoiseGenerator::new(3),
+            false,
+        );
+        let floor = top_lights(&mesh.opaque);
+        assert!(!floor.is_empty());
+        floor.iter().map(|(_, l)| *l).fold(0.0, f32::max)
+    };
+    let dark = lit(stone());
+    let mut shaft = stone();
+    for y in 0..16 {
+        shaft.set_block_at(U16Vec3::new(8, y, 8), BlockType::Air);
+    }
+    let open = lit(shaft);
+    assert!(
+        dark < 0.1 && open > 0.9,
+        "{dark} under stone, {open} under the shaft"
+    );
+    // the chunk below is one an edit in the shaft remeshes
+    assert!(chunks_meshed_with(I64Vec3::new(8, 41 * 16 + 3, 8)).any(|c| c == coord));
 }

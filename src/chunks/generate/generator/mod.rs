@@ -11,7 +11,7 @@ mod terrain;
 mod tests;
 
 pub use buffers::ChunkMeshes;
-pub use chunk::{generate_chunk, generate_chunk_mesh};
+pub use chunk::{chunks_meshed_with, generate_chunk, generate_chunk_mesh};
 pub use lod::generate_lod_mesh;
 pub(super) use shading::FACE_NORMAL_OFFSET;
 pub(super) use terrain::column_block;

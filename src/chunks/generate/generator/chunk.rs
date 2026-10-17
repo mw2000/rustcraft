@@ -16,6 +16,7 @@ use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::TREE_HEIGHT;
 use crate::chunks::generate::WATER_LEVEL;
 use bevy::math::I64Vec2;
+use bevy::math::I64Vec3;
 use bevy::math::IVec3;
 use std::cell::LazyCell;
 use std::sync::Arc;
@@ -122,12 +123,39 @@ pub(super) fn sky_above(top: i64, cell: i64) -> u8 {
 // only arrive from further out would already have faded to deep shade.
 pub(super) const LIGHT_MARGIN: i32 = 8;
 
+// The box of blocks a chunk's light is worked out over, as its minimum corner from the chunk's
+// and its size: the chunk and a block around it, `LIGHT_MARGIN` to each side, and up to the top
+// of the chunk above.
+fn light_box() -> (IVec3, IVec3) {
+    let size = CHUNK_SIZE as i32;
+    let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);
+    (
+        min,
+        IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN) - min,
+    )
+}
+
+/// The chunks whose meshes change when `block` does: those whose light takes it into account,
+/// which takes in those whose faces, ambient occlusion and shores reach it across a border.
+pub fn chunks_meshed_with(block: I64Vec3) -> impl Iterator<Item = ChunkCoordinate> {
+    let (min, span) = light_box();
+    let size = CHUNK_SIZE as i64;
+    // each chunk whose box, starting at `chunk * size + min`, holds the block
+    let from = block - min.as_i64vec3();
+    let first = (from - span.as_i64vec3() + size).div_euclid(I64Vec3::splat(size));
+    let last = from.div_euclid(I64Vec3::splat(size));
+    (first.x..=last.x).flat_map(move |x| {
+        (first.y..=last.y).flat_map(move |y| {
+            (first.z..=last.z).map(move |z| ChunkCoordinate(I64Vec3::new(x, y, z)))
+        })
+    })
+}
+
 // Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
 // high as the top of the chunk above, with open sky above that.
 fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> SkyLight {
     let size = CHUNK_SIZE as i32;
-    let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);
-    let span = IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN) - min;
+    let (min, span) = light_box();
     let mut opacity = Vec::with_capacity((span.x * span.y * span.z) as usize);
     // in `SkyLight::index` order
     for x in 0..span.x {

@@ -5,6 +5,7 @@ use super::selection::LodSelection;
 use super::state::node_ready;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::chunk::MESH_OFFSET;
 use crate::chunks::generate::generator::ChunkMeshes;
 use crate::chunks::material::ChunkMaterial;
 use crate::chunks::material::WaterMaterial;
@@ -221,8 +222,8 @@ impl LodLoader {
 
 pub(super) fn lod_transform(key: LodKey) -> Transform {
     let cell = key.cell_size() as f32;
-    Transform::from_translation(key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5))
-        .with_scale(Vec3::splat(cell))
+    let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5);
+    Transform::from_translation(origin + MESH_OFFSET).with_scale(Vec3::splat(cell))
 }
 
 pub(super) fn lod_aabb() -> Aabb {

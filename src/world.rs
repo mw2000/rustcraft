@@ -10,6 +10,7 @@ use crate::block::BlockType;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 use crate::chunks::generate::WORLD_HEIGHT;
+use crate::edits::Edits;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 
@@ -18,6 +19,7 @@ pub struct World {
     seed: u32,
     pub height: u64,
     chunks: HashMap<ChunkCoordinate, Arc<ChunkData>>,
+    edits: Edits,
     // what lies below and above the world, which isn't generated, see `beyond_world`
     below: Arc<ChunkData>,
     above: Arc<ChunkData>,
@@ -42,6 +44,7 @@ impl World {
             seed,
             height,
             chunks: HashMap::new(),
+            edits: Edits::default(),
             below: Arc::new(ChunkData::from_cells(std::iter::repeat_n(
                 BlockType::Stone,
                 (CHUNK_SIZE as usize).pow(3),
@@ -63,10 +66,32 @@ impl World {
         self.spawn
     }
 
-    pub fn insert_chunk(&mut self, coord: ChunkCoordinate, data: ChunkData) -> Arc<ChunkData> {
+    /// Loads a generated chunk, with the edits made in it put back.
+    pub fn insert_chunk(&mut self, coord: ChunkCoordinate, mut data: ChunkData) -> Arc<ChunkData> {
+        self.edits.apply(coord, &mut data);
         let data = Arc::new(data);
         self.chunks.insert(coord, data.clone());
         data
+    }
+
+    /// Changes the block at `block` to `to`, in the edit layer and at once in its chunk if
+    /// that's loaded, so collision sees it straight away. Returns whether anything changed:
+    /// nothing does beyond the top or bottom of the world, or if the block is already `to`.
+    pub fn edit(&mut self, block: I64Vec3, to: BlockType) -> bool {
+        let coord = ChunkCoordinate::containing(block);
+        if !Self::layers(self.height).contains(&coord.0.y) {
+            return false;
+        }
+        if let Some(data) = self.chunks.get_mut(&coord) {
+            let local = ChunkCoordinate::local_block(block);
+            if data.get_block_at(local) == to {
+                return false;
+            }
+            // copied only if a meshing task still holds the old blocks
+            Arc::make_mut(data).set_block_at(local, to);
+        }
+        self.edits.set(block, to);
+        true
     }
 
     /// The chunk layers the world is generated in, from the bottom up.
@@ -115,10 +140,9 @@ impl World {
 
     /// The block at `block`, or air in a chunk not generated yet.
     pub fn get_block_at(&self, block: I64Vec3) -> BlockType {
-        let size = CHUNK_SIZE as i64;
         self.chunk(ChunkCoordinate::containing(block))
             .map_or(BlockType::Air, |data| {
-                data.get_block_at(block.rem_euclid(I64Vec3::splat(size)).as_u16vec3())
+                data.get_block_at(ChunkCoordinate::local_block(block))
             })
     }
 }
@@ -136,6 +160,7 @@ mod tests {
     use super::World;
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
+    use crate::chunks::generate::generator::generate_chunk;
 
     #[test]
     fn test_chunk_is_buried_only_when_it_and_its_face_neighbours_are_opaque() {
@@ -167,6 +192,41 @@ mod tests {
         // nor is a chunk buried by one not generated yet
         world.clear_chunk(ChunkCoordinate(I64Vec3::Y));
         assert!(!world.is_chunk_buried(centre));
+    }
+
+    #[test]
+    fn test_edits_survive_their_chunk_being_unloaded_and_generated_again() {
+        let mut world = World::new(16);
+        let coord = ChunkCoordinate::containing(world.spawn().as_i64vec3());
+        let generate = |world: &World| generate_chunk(world.region_store.clone(), coord);
+        let generated = generate(&world);
+        world.insert_chunk(coord, generate(&world));
+        let origin = coord.0 * CHUNK_SIZE as i64;
+        let (broken, built, untouched) = (
+            origin + I64Vec3::new(3, 3, 3),
+            origin + I64Vec3::new(9, 12, 4),
+            origin + I64Vec3::new(12, 5, 14),
+        );
+        // whatever was generated there, something else
+        let other = |block: I64Vec3| match world.get_block_at(block) {
+            BlockType::Air => BlockType::Log,
+            _ => BlockType::Air,
+        };
+        let edits = [(broken, other(broken)), (built, other(built))];
+        for (block, to) in edits {
+            assert!(world.edit(block, to));
+            assert!(!world.edit(block, to), "already {to:?}");
+            assert_eq!(to, world.get_block_at(block));
+        }
+        assert!(!world.edit(I64Vec3::new(0, -1, 0), BlockType::Air));
+
+        world.clear_chunk(coord);
+        world.insert_chunk(coord, generate(&world));
+        for (block, to) in edits {
+            assert_eq!(to, world.get_block_at(block));
+        }
+        let local = ChunkCoordinate::local_block(untouched);
+        assert_eq!(generated.get_block_at(local), world.get_block_at(untouched));
     }
 
     #[test]

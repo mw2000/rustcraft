@@ -70,8 +70,8 @@ const MAX_PITCH: f32 = 89.0_f32.to_radians();
 /// How high the camera sits above the player's feet, far enough under the top of its head
 /// that the camera's near plane stays out of the ceiling.
 pub const EYE_HEIGHT: f32 = 1.85;
-// The player's size: two blocks tall, so it just fits through a two-block gap.
-const BODY: Aabb = Aabb {
+/// The player's size: two blocks tall, so it just fits through a two-block gap.
+pub const BODY: Aabb = Aabb {
     min: Vec3::new(-0.3, 0.0, -0.3),
     max: Vec3::new(0.3, 2.0, 0.3),
 };

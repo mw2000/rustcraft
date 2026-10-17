@@ -16,6 +16,7 @@ use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
+use rustcraft::interaction::InteractionPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::player::{
     murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player, EYE_HEIGHT,
@@ -200,6 +201,7 @@ fn main() {
             DebugOverlayPlugin,
             MenuPlugin,
             CommandPlugin,
+            InteractionPlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))

@@ -71,10 +71,14 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
 
-Blocks today: Air, Stone, Grass, Sand, Water, Snow, Log, Leaves, Dirt, Gravel, Ice, Sandstone, as a
-Rust enum (`src/block.rs`).
+Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
+water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
+cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace).
 
-Not there yet: breaking or placing blocks, saving, inventory, crafting, health, caves, ores, block
+Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
+`src/interaction.rs`).
+
+Not there yet: saving, inventory, crafting, health, caves, ores, block
 light, structures, mobs, networking.
 
 ---
@@ -137,6 +141,15 @@ The world's state beyond the seed (INV-1).
 - Edits are kept per chunk, as a sparse map from block position to `BlockType`: what a player put
   there, air included. A chunk's blocks are its generated blocks with its edits applied on top.
 - An edit marks its chunk, and any neighbour it borders, for remeshing and relighting.
+- **Built (M0.2):** `Edits` (`src/edits.rs`) is held by `World`, which puts a chunk's edits back
+  as it's loaded (`insert_chunk`). The world only changes through an `EditBlock` message, made by
+  `apply_edits`, so the server can take that over (INV-4). An edit changes its loaded chunk at
+  once, for collision, then rebuilds the group meshes of every chunk whose mesh reads the block
+  (`chunks_meshed_with`): those whose sky light takes it in, which reaches 8 blocks sideways and a
+  chunk down, and covers faces, ambient occlusion and shores across borders. Light is worked out
+  per mesh from the chunk and the one above, so a shaft or a roof changes light that far down.
+  Rebuilds mesh from the world's blocks on the compute pool, ahead of loading work, and swap the
+  new mesh onto the same entity with no fade (`group::rebuild_groups`, `load_groups`).
 - Edits are what's saved (§4.3) and what's sent over the network (§4.4). Generated blocks are
   neither.
 - Chunks with heavy edits (a big build) can switch to storing their whole contents rather than a
@@ -195,6 +208,12 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - Right mouse places the held block against the face looked at, unless it would overlap a player,
   or uses a block (opening a chest, a door, a crafting table).
 - Mouse wheel and 1–9 pick the hotbar slot.
+- **Built (M0.2):** `src/interaction.rs` steps a ray from the eye through the blocks it crosses
+  (a DDA), stopping at the first solid one within 5 blocks, so it passes through air and water,
+  and outlines it with a gizmo. Left click breaks it at once, right click places the `HeldBlock`
+  (stone to start with) against the face looked at, into air or water but not into the player's
+  body, and middle click picks the block looked at to hold, standing in for the hotbar. None of it
+  happens while paused or with the command bar open.
 
 ### 5.2 Inventory and items
 
@@ -307,7 +326,7 @@ and loads.**
 - ☑ **M0.1 Block registry.** Declare every block once, in one table with stable names (§4.1,
   D-9). No change in what's drawn. Tests cover lookup by name and generation output
   staying identical.
-- ☐ **M0.2 Breaking and placing.** Raycast, outline, break and place in creative style, with
+- ☑ **M0.2 Breaking and placing.** Raycast, outline, break and place in creative style, with
   remeshing and relighting of the edited chunk and its neighbours (§5.1). The edit layer holds the
   changes (§4.2).
 - ☐ **M0.3 Saving and loading.** World directory, edits and player position saved and loaded
