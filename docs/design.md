@@ -66,8 +66,8 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk; no block light | `src/chunks/generate/light.rs` |
 | Sky | 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
-| Player | Flying, or walking under gravity with block collision; swimming | `src/player.rs`, `src/collision.rs` |
-| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/help` (T or /), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/debug.rs` |
+| Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player.rs`, `src/collision.rs`, `src/game_mode.rs` |
+| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel), creative block picker (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/picker.rs`, `src/debug.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
 
@@ -175,7 +175,8 @@ The world's state beyond the seed (INV-1).
   ignored with a log line.
   - `world.toml` holds the format version (`FORMAT_VERSION`, now 1), the game version that wrote
     it, the seed, the time of day, and a `[player]` table with the one local player's position,
-    look (yaw and pitch) and movement mode. Players move out to `players/` when there's more than
+    look (yaw and pitch), movement, game mode and hotbar (its blocks by name, `""` for an empty
+    slot, and the selected slot; saves without them get a new player's). Players move out to `players/` when there's more than
     one (M0.6). A world from a newer format is refused with an error saying so; there's nothing
     older to migrate yet.
   - `edits/r.<x>.<z>.edits` holds a region's edits in postcard (D-6): a palette of block names,
@@ -222,6 +223,15 @@ The world's state beyond the seed (INV-1).
 
 Switched with `/gamemode`, which in multiplayer needs operator permission.
 
+- **Built (M0.4):** `GameMode` (`src/game_mode.rs`) is a component on the player, so each player
+  can have their own, saved with them (§4.3). It's **creative by default for now**, since
+  survival has no inventory, breaking times or health yet. Everything the modes change asks
+  `GameMode`'s methods (`can_fly`, `has_every_block`), so M1.1 and M1.2 add theirs there.
+  Creative flies (F toggles), breaks at once, has the block picker and never uses blocks up.
+  Survival can't fly, and switching to it drops a flying player into walking; it breaks and
+  places as creative does until M1.1 and M1.2, but middle click only selects a block already in
+  the hotbar. `/gamemode survival|creative` (or `s`/`c`) switches.
+
 ---
 
 ## 5. Game systems
@@ -236,10 +246,10 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - Mouse wheel and 1–9 pick the hotbar slot.
 - **Built (M0.2):** `src/interaction.rs` steps a ray from the eye through the blocks it crosses
   (a DDA), stopping at the first solid one within 5 blocks, so it passes through air and water,
-  and outlines it with a gizmo. Left click breaks it at once, right click places the `HeldBlock`
-  (stone to start with) against the face looked at, into air or water but not into the player's
-  body, and middle click picks the block looked at to hold, standing in for the hotbar. None of it
-  happens while paused or with the command bar open.
+  and outlines it with a gizmo. Left click breaks it at once, right click places the hotbar's
+  selected block against the face looked at, into air or water but not into the player's body,
+  and middle click picks the block looked at into the hotbar (§5.2). None of it happens while
+  paused, in the block picker or with the command bar open.
 
 ### 5.2 Inventory and items
 
@@ -249,6 +259,17 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - Dropped items exist as small entities that can be picked up.
 - Containers (chests, furnaces) hold their own inventories, stored as block entity state in the
   edit layer.
+- **Built (M0.4):** `Hotbar` (`src/hotbar.rs`) is a component on the player: 9 slots of
+  `Option<BlockType>` and the selected one, which M1.1 turns into item stacks with counts. It's
+  drawn at the bottom centre with each block's tile from the atlas, the selected slot framed in
+  white, and redrawn only when it changes. 1–9 and the wheel select, wrapping round; middle
+  click selects the slot already holding the block looked at, or in creative puts it in the
+  selected slot. Creative starts with nine building blocks. E in creative opens the block picker
+  (`src/picker.rs`), a grid of every solid block with its name under the pointer; clicking one
+  puts it in the selected slot. It's the `GameState::Inventory` state, which M1.1 makes the
+  inventory too: the game runs on behind it, but the player, looking and breaking only run in
+  `Playing`, the cursor's free, E or Escape closes it, and the command bar can't open over it
+  (nor over the pause menu). In survival E does nothing yet.
 
 ### 5.3 Crafting and progression
 
@@ -357,7 +378,7 @@ and loads.**
   changes (§4.2).
 - ☑ **M0.3 Saving and loading.** World directory, edits and player position saved and loaded
   (§4.3). Edits survive a restart.
-- ☐ **M0.4 Game modes.** Survival and creative, `/gamemode`, creative block picker (§4.5).
+- ☑ **M0.4 Game modes.** Survival and creative, `/gamemode`, creative block picker (§4.5).
 - ☐ **M0.5 Client/server split.** Integrated server in-process; game state flows through it
   (§4.4). Singleplayer plays the same as before.
 - ☐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits

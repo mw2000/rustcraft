@@ -15,9 +15,12 @@ use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
+use rustcraft::game_mode::GameModePlugin;
 use rustcraft::horizon::update_horizon;
+use rustcraft::hotbar::HotbarPlugin;
 use rustcraft::interaction::InteractionPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
+use rustcraft::picker::PickerPlugin;
 use rustcraft::player::{
     murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player, EYE_HEIGHT,
 };
@@ -72,7 +75,9 @@ fn setup_scene(
 
     let mut body = Player::default();
     body.movement = arrival.movement;
-    let player = commands.spawn((body, arrival.body())).id();
+    let player = commands
+        .spawn((body, arrival.game_mode, arrival.hotbar, arrival.body()))
+        .id();
 
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
@@ -214,6 +219,7 @@ fn main() {
             InteractionPlugin,
             SavePlugin,
         ))
+        .add_plugins((GameModePlugin, HotbarPlugin, PickerPlugin))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))

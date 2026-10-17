@@ -23,6 +23,8 @@ use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 
 use crate::edits::Edits;
+use crate::game_mode::GameMode;
+use crate::hotbar::Hotbar;
 use crate::player::Player;
 use crate::sky::{TimeOfDay, START_TIME};
 use crate::world::World;
@@ -208,7 +210,16 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 struct Savable<'w, 's> {
     world: ResMut<'w, World>,
     clock: Res<'w, TimeOfDay>,
-    players: Query<'w, 's, (&'static Transform, &'static Player)>,
+    players: Query<
+        'w,
+        's,
+        (
+            &'static Transform,
+            &'static Player,
+            &'static GameMode,
+            &'static Hotbar,
+        ),
+    >,
     cameras: Query<'w, 's, (&'static ChildOf, &'static Transform), With<Camera>>,
 }
 
@@ -216,8 +227,14 @@ impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
         file.player = self.cameras.iter().find_map(|(parent, camera)| {
-            let (body, player) = self.players.get(parent.parent()).ok()?;
-            Some(PlayerState::of(body, camera, player.movement))
+            let (body, player, mode, hotbar) = self.players.get(parent.parent()).ok()?;
+            Some(PlayerState::of(
+                body,
+                camera,
+                player.movement,
+                *mode,
+                *hotbar,
+            ))
         });
         save.snapshot(self.world.edits_mut(), file)
     }
@@ -282,6 +299,8 @@ mod tests {
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
     use crate::edits::Edits;
+    use crate::game_mode::GameMode;
+    use crate::hotbar::Hotbar;
     use crate::player::{Movement, Player};
     use crate::sky::TimeOfDay;
 
@@ -410,7 +429,7 @@ mod tests {
         let mut player = Player::default();
         player.movement = state.movement;
         app.world_mut()
-            .spawn((player, state.body()))
+            .spawn((player, state.game_mode, state.hotbar, state.body()))
             .with_child((Camera3d::default(), Transform::from_rotation(state.head())));
         app
     }
@@ -436,10 +455,15 @@ mod tests {
             let mut game_world = world.resource_mut::<crate::world::World>();
             assert!(game_world.edit(built, BlockType::Furnace));
             world.resource_mut::<TimeOfDay>().0 = 3.5;
-            let mut players = world.query::<(&mut Transform, &mut Player)>();
-            let (mut transform, mut player) = players.single_mut(world).unwrap();
+            let mut players =
+                world.query::<(&mut Transform, &mut Player, &mut GameMode, &mut Hotbar)>();
+            let (mut transform, mut player, mut mode, mut hotbar) =
+                players.single_mut(world).unwrap();
             transform.translation = at;
             player.movement = Movement::Walk;
+            *mode = GameMode::Survival;
+            hotbar.slots[2] = Some(BlockType::IronOre);
+            hotbar.selected = 2;
         }
         app.world_mut().write_message(AppExit::Success);
         app.update();
@@ -449,6 +473,13 @@ mod tests {
         let (transform, movement) = player(&mut app);
         assert_eq!((at, Movement::Walk), (transform.translation, movement));
         assert_eq!(3.5, app.world().resource::<TimeOfDay>().0);
+        let (mode, hotbar) = app
+            .world_mut()
+            .query::<(&GameMode, &Hotbar)>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(GameMode::Survival, *mode);
+        assert_eq!(Some(BlockType::IronOre), hotbar.held());
         let mut world = app.world_mut().resource_mut::<crate::world::World>();
         world.insert_chunk(ChunkCoordinate::containing(built), ChunkData::default());
         assert_eq!(BlockType::Furnace, world.get_block_at(built));

@@ -12,8 +12,9 @@ cargo run --release
 
 - WASD to move, Shift to sprint, mouse to look.
 - Space to jump, or to swim up in water.
-- You start flying: Space and Ctrl move up and down, and you pass through blocks. F switches to walking and back.
-- Left click breaks the block you're looking at, and right click places a block against it. Middle click picks the block you're looking at to place, which starts as stone.
+- You start in creative, flying: Space and Ctrl move up and down, and you pass through blocks. F switches to walking and back.
+- Left click breaks the block you're looking at, and right click places the hotbar's selected block against it. 1–9 or the mouse wheel select a slot, and middle click picks the block you're looking at into it.
+- E opens the block picker in creative: click a block to put it in the selected slot. E or Escape closes it.
 - `[` and `]` move the sun, and F1 shows the debug overlay.
 
 ## Commands
@@ -22,6 +23,7 @@ Press T, or / to start with the slash typed, to open the command bar. Enter runs
 
 - `/tp <x> <y> <z>` teleports there. `~` means where you are, and `~10` means ten blocks on from it.
 - `/tp <x> <z>` teleports to just above the ground there.
+- `/gamemode survival` or `/gamemode creative` (`s` or `c` for short) switches game mode. Survival can't fly, and has no block picker yet.
 - `/seed` prints the world's seed. Run with `RC_SEED=<seed>` and a new world's name to get the same world again.
 - `/help` lists the commands.
 

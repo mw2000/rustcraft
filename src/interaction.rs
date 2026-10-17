@@ -7,6 +7,8 @@ use crate::chunks::chunk_loader::apply_edits;
 use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
 use crate::edits::EditBlock;
+use crate::game_mode::GameMode;
+use crate::hotbar::Hotbar;
 use crate::menu::GameState;
 use crate::player::{player_look, player_move, Player, BODY};
 use crate::world::World;
@@ -19,34 +21,23 @@ const OUTLINE_SIZE: f32 = 1.004;
 const OUTLINE_COLOUR: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
 
 /// Looking at blocks, outlining the one looked at, and breaking, placing and picking blocks
-/// with the mouse (§5.1). None of it happens while the game's paused or the command bar's open.
+/// with the mouse (§5.1). None of it happens while the game's paused, the block picker's up or
+/// the command bar's open.
 pub struct InteractionPlugin;
 
 impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<HeldBlock>()
-            .init_resource::<Target>()
-            .add_systems(
-                Update,
-                (target_block, (outline_target, use_target))
-                    .chain()
-                    // from where the player is this frame, and edits are made the same frame
-                    .after(player_move)
-                    .after(player_look)
-                    .before(apply_edits)
-                    .run_if(in_state(GameState::Playing))
-                    .run_if(command_bar_closed),
-            );
-    }
-}
-
-/// The block right click places, which middle click picks from the world. There's no hotbar yet.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HeldBlock(pub BlockType);
-
-impl Default for HeldBlock {
-    fn default() -> Self {
-        Self(BlockType::Stone)
+        app.init_resource::<Target>().add_systems(
+            Update,
+            (target_block, (outline_target, use_target))
+                .chain()
+                // from where the player is this frame, and edits are made the same frame
+                .after(player_move)
+                .after(player_look)
+                .before(apply_edits)
+                .run_if(in_state(GameState::Playing))
+                .run_if(command_bar_closed),
+        );
     }
 }
 
@@ -145,19 +136,20 @@ fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {
     }
 }
 
-// Left click breaks the block looked at, right click places the held block against the face
-// looked at, and middle click picks the block looked at to hold.
+// Left click breaks the block looked at, right click places the selected block in the hotbar
+// against the face looked at, and middle click picks the block looked at into the hotbar.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut held: ResMut<HeldBlock>,
-    player: Query<&Transform, With<Player>>,
+    mut player: Query<(&Transform, &GameMode, &mut Hotbar), With<Player>>,
     mut edits: MessageWriter<EditBlock>,
 ) {
     let Some(hit) = target.0 else {
         return;
     };
+    let (feet, mode, mut hotbar) = player.single_mut().expect("player does not exist");
+    // at once in either mode, until M1.2 gives survival breaking times and drops
     if mouse.just_pressed(MouseButton::Left) {
         edits.write(EditBlock {
             block: hit.block,
@@ -166,14 +158,16 @@ fn use_target(
     }
     if mouse.just_pressed(MouseButton::Right) && hit.face != I64Vec3::ZERO {
         let block = hit.block + hit.face;
-        let feet = player.single().expect("player does not exist").translation;
         // into air or water, which it replaces, and never into the player
-        if !world.get_block_at(block).is_solid() && !overlaps(BODY, feet, block) {
-            edits.write(EditBlock { block, to: held.0 });
+        if !world.get_block_at(block).is_solid() && !overlaps(BODY, feet.translation, block) {
+            // never used up, until M1.1 has survival take it from the slot
+            if let Some(held) = hotbar.held() {
+                edits.write(EditBlock { block, to: held });
+            }
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
-        held.0 = world.get_block_at(hit.block);
+        hotbar.pick(world.get_block_at(hit.block), mode.has_every_block());
     }
 }
 
@@ -266,21 +260,22 @@ mod tests {
         use bevy::math::I64Vec3;
         use bevy::prelude::*;
 
-        use super::super::{use_target, HeldBlock, Hit, Target};
+        use super::super::{use_target, Hit, Target};
         use crate::block::BlockType;
         use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
         use crate::edits::EditBlock;
+        use crate::game_mode::GameMode;
+        use crate::hotbar::Hotbar;
         use crate::player::Player;
 
         // Looking down at the top of a block of sand at the origin, from `feet`.
-        fn app(feet: Vec3) -> App {
+        fn app(feet: Vec3, mode: GameMode) -> App {
             let mut world = crate::world::World::new(16);
             world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), ChunkData::default());
             world.edit(I64Vec3::ZERO, BlockType::Sand);
             let mut app = App::new();
             app.add_plugins(MinimalPlugins)
                 .add_message::<EditBlock>()
-                .init_resource::<HeldBlock>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .insert_resource(world)
                 .insert_resource(Target(Some(Hit {
@@ -289,9 +284,11 @@ mod tests {
                 })))
                 .add_systems(Update, use_target);
             app.world_mut()
-                .spawn((Player::default(), Transform::from_translation(feet)));
+                .spawn((Player::default(), mode, Transform::from_translation(feet)));
             app
         }
+
+        const AWAY: Vec3 = Vec3::new(3.5, 1.0, 0.5);
 
         fn click(app: &mut App, button: MouseButton) -> Vec<EditBlock> {
             let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
@@ -303,9 +300,16 @@ mod tests {
             messages.drain().collect()
         }
 
+        fn hotbar(app: &mut App) -> Mut<'_, Hotbar> {
+            app.world_mut()
+                .query::<&mut Hotbar>()
+                .single_mut(app.world_mut())
+                .unwrap()
+        }
+
         #[test]
         fn test_left_click_breaks_and_right_click_places_against_the_face() {
-            let mut app = app(Vec3::new(3.5, 1.0, 0.5));
+            let mut app = app(AWAY, GameMode::Creative);
             let at = |block, to| vec![EditBlock { block, to }];
             assert_eq!(
                 at(I64Vec3::ZERO, BlockType::Air),
@@ -318,19 +322,43 @@ mod tests {
         }
 
         #[test]
-        fn test_nothing_is_placed_where_the_player_stands() {
-            let mut app = app(Vec3::new(0.5, 1.0, 0.5));
+        fn test_placing_takes_the_selected_slots_block() {
+            let mut app = app(AWAY, GameMode::Creative);
+            hotbar(&mut app).selected = 3;
+            let to = |edits: Vec<EditBlock>| edits.iter().map(|edit| edit.to).collect::<Vec<_>>();
+            assert_eq!(
+                vec![BlockType::Bricks],
+                to(click(&mut app, MouseButton::Right))
+            );
+            // and an empty slot places nothing
+            hotbar(&mut app).slots[3] = None;
             assert!(click(&mut app, MouseButton::Right).is_empty());
         }
 
         #[test]
-        fn test_middle_click_picks_the_block_to_place() {
-            let mut app = app(Vec3::new(3.5, 1.0, 0.5));
+        fn test_nothing_is_placed_where_the_player_stands() {
+            let mut app = app(Vec3::new(0.5, 1.0, 0.5), GameMode::Creative);
+            assert!(click(&mut app, MouseButton::Right).is_empty());
+        }
+
+        #[test]
+        fn test_middle_click_picks_the_block_into_the_selected_slot_or_selects_it() {
+            let mut app = app(AWAY, GameMode::Creative);
+            hotbar(&mut app).selected = 2;
             assert!(click(&mut app, MouseButton::Middle).is_empty());
-            assert_eq!(
-                HeldBlock(BlockType::Sand),
-                *app.world().resource::<HeldBlock>()
-            );
+            assert_eq!(Some(BlockType::Sand), hotbar(&mut app).slots[2]);
+            // already in the hotbar, it's selected rather than put in a second slot
+            hotbar(&mut app).selected = 6;
+            click(&mut app, MouseButton::Middle);
+            assert_eq!(2, hotbar(&mut app).selected);
+            assert_eq!(Some(BlockType::Dirt), hotbar(&mut app).slots[6]);
+        }
+
+        #[test]
+        fn test_middle_click_in_survival_only_selects() {
+            let mut app = app(AWAY, GameMode::Survival);
+            click(&mut app, MouseButton::Middle);
+            assert_eq!(Hotbar::default(), *hotbar(&mut app));
         }
     }
 }

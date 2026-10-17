@@ -6,21 +6,23 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 const TOGGLE_KEY: KeyCode = KeyCode::Escape;
 
 // Minecraft's: grey stone buttons, lighter with a white edge under the pointer.
-const BUTTON_COLOR: Color = Color::srgb(0.42, 0.42, 0.42);
+pub(crate) const BUTTON_COLOR: Color = Color::srgb(0.42, 0.42, 0.42);
 const BUTTON_HOVER_COLOR: Color = Color::srgb(0.5, 0.55, 0.7);
-const BUTTON_BORDER_COLOR: Color = Color::BLACK;
+pub(crate) const BUTTON_BORDER_COLOR: Color = Color::BLACK;
 const BUTTON_HOVER_BORDER_COLOR: Color = Color::WHITE;
-const TEXT_SHADOW: TextShadow = TextShadow {
+pub(crate) const TEXT_SHADOW: TextShadow = TextShadow {
     offset: Vec2::splat(2.0),
     color: Color::srgb(0.24, 0.24, 0.24),
 };
 
-/// Whether the game's being played, or paused under the menu.
+/// Whether the game's being played, paused under the menu, or carrying on under the creative
+/// block picker, which M1.1 makes the inventory too.
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameState {
     #[default]
     Playing,
     Paused,
+    Inventory,
 }
 
 /// Escape opens a menu over the game, like Minecraft's, and pauses it: the clock stops, the
@@ -59,8 +61,8 @@ fn spawn_menu(mut commands: Commands) {
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-            // over the debug overlay
-            GlobalZIndex(1),
+            // over the debug overlay, the block picker and the hotbar
+            GlobalZIndex(3),
         ))
         .with_children(|menu| {
             menu.spawn((
@@ -86,7 +88,7 @@ fn spawn_menu(mut commands: Commands) {
         });
 }
 
-fn font(size: f32) -> TextFont {
+pub(crate) fn font(size: f32) -> TextFont {
     TextFont {
         font_size: bevy::text::FontSize::Px(size),
         ..default()
@@ -121,9 +123,10 @@ fn toggle_menu(
     mut next: ResMut<NextState<GameState>>,
 ) {
     if keys.just_pressed(TOGGLE_KEY) {
+        // which closes the block picker rather than pausing over it
         next.set(match state.get() {
             GameState::Playing => GameState::Paused,
-            GameState::Paused => GameState::Playing,
+            GameState::Paused | GameState::Inventory => GameState::Playing,
         });
     }
 }
@@ -155,7 +158,8 @@ fn pause(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     time.pause();
-    show(&mut menu, &mut cursor, true);
+    show(&mut menu, true);
+    free_cursor(&mut cursor, true);
 }
 
 fn resume(
@@ -164,21 +168,21 @@ fn resume(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     time.unpause();
-    show(&mut menu, &mut cursor, false);
+    show(&mut menu, false);
+    free_cursor(&mut cursor, false);
 }
 
-// Shows the menu with the cursor free, or hides it with the cursor held for looking about.
-fn show(
-    menu: &mut Query<&mut Node, With<Menu>>,
-    cursor: &mut Query<&mut CursorOptions, With<PrimaryWindow>>,
-    shown: bool,
-) {
+fn show(menu: &mut Query<&mut Node, With<Menu>>, shown: bool) {
     for mut node in menu.iter_mut() {
         node.display = if shown { Display::Flex } else { Display::None };
     }
+}
+
+/// Lets the cursor go, for clicking on things, or holds it for looking about.
+pub(crate) fn free_cursor(cursor: &mut Query<&mut CursorOptions, With<PrimaryWindow>>, free: bool) {
     for mut cursor in cursor.iter_mut() {
-        cursor.visible = shown;
-        cursor.grab_mode = if shown {
+        cursor.visible = free;
+        cursor.grab_mode = if free {
             CursorGrabMode::None
         } else {
             CursorGrabMode::Locked

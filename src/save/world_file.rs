@@ -5,6 +5,8 @@ use bevy::math::{EulerRot, Quat, Vec3};
 use bevy::transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
+use crate::game_mode::GameMode;
+use crate::hotbar::Hotbar;
 use crate::player::Movement;
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
@@ -24,7 +26,7 @@ pub struct WorldFile {
     pub player: Option<PlayerState>,
 }
 
-/// Where a player is and how they're moving.
+/// Where a player is, how they're moving and playing, and what they hold.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct PlayerState {
     /// Their feet, in blocks.
@@ -33,6 +35,11 @@ pub struct PlayerState {
     pub yaw: f32,
     pub pitch: f32,
     pub movement: Movement,
+    // saves from before game modes and the hotbar get the ones a new player has
+    #[serde(default)]
+    pub game_mode: GameMode,
+    #[serde(default)]
+    pub hotbar: Hotbar,
 }
 
 impl PlayerState {
@@ -43,16 +50,26 @@ impl PlayerState {
             yaw: PI,
             pitch: 0.0,
             movement: Movement::default(),
+            game_mode: GameMode::default(),
+            hotbar: Hotbar::default(),
         }
     }
 
     /// The state of a player with the body and camera transforms given.
-    pub fn of(body: &Transform, camera: &Transform, movement: Movement) -> Self {
+    pub fn of(
+        body: &Transform,
+        camera: &Transform,
+        movement: Movement,
+        game_mode: GameMode,
+        hotbar: Hotbar,
+    ) -> Self {
         Self {
             position: body.translation.into(),
             yaw: body.rotation.to_euler(EulerRot::YXZ).0,
             pitch: camera.rotation.to_euler(EulerRot::XYZ).0,
             movement,
+            game_mode,
+            hotbar,
         }
     }
 
@@ -108,6 +125,9 @@ mod tests {
     use bevy::transform::components::Transform;
 
     use super::{PlayerState, WorldFile, FORMAT_VERSION};
+    use crate::block::BlockType;
+    use crate::game_mode::GameMode;
+    use crate::hotbar::Hotbar;
     use crate::player::Movement;
 
     #[test]
@@ -119,17 +139,58 @@ mod tests {
             yaw: 1.5,
             pitch: -0.25,
             movement: Movement::Walk,
+            game_mode: GameMode::Survival,
+            hotbar: Hotbar::default(),
         });
         let text = file.to_toml();
         assert!(text.contains("movement = \"walk\""), "{text}");
+        assert!(text.contains("game_mode = \"survival\""), "{text}");
         assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+    }
+
+    #[test]
+    fn test_hotbars_round_trip_by_block_name() {
+        let mut file = WorldFile::new(1, 0.5);
+        let mut player = PlayerState::arriving_at(Vec3::ZERO);
+        player.hotbar.slots[1] = None;
+        player.hotbar.slots[4] = Some(BlockType::CraftingTable);
+        player.hotbar.selected = 4;
+        file.player = Some(player);
+        let text = file.to_toml();
+        assert!(text.contains(r#""stone", "", "stone_bricks""#), "{text}");
+        assert!(text.contains(r#""crafting_table""#), "{text}");
+        assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+
+        // a block or slot this game doesn't have is refused, as an edit's is
+        let unknown = text.replace("crafting_table", "loom");
+        assert!(WorldFile::from_toml(&unknown).is_err());
+        let off_the_end = text.replace("selected = 4", "selected = 9");
+        assert!(WorldFile::from_toml(&off_the_end).is_err());
+    }
+
+    #[test]
+    fn test_older_saves_get_a_new_players_mode_and_hotbar() {
+        let mut file = WorldFile::new(1, 0.5);
+        file.player = Some(PlayerState::arriving_at(Vec3::ONE));
+        let text = file.to_toml();
+        let older = &text[..text.find("game_mode").unwrap()];
+        assert!(!older.contains("hotbar"), "{older}");
+        let player = WorldFile::from_toml(older).unwrap().player.unwrap();
+        assert_eq!(GameMode::Creative, player.game_mode);
+        assert_eq!(Hotbar::default(), player.hotbar);
     }
 
     #[test]
     fn test_a_player_faces_the_way_they_did() {
         let body = Transform::from_xyz(1.0, 2.0, 3.0).looking_to(Vec3::new(1.0, 0.0, 2.0), Vec3::Y);
         let camera = Transform::from_rotation(Quat::from_rotation_x(-0.5));
-        let state = PlayerState::of(&body, &camera, Movement::Fly);
+        let state = PlayerState::of(
+            &body,
+            &camera,
+            Movement::Fly,
+            GameMode::Creative,
+            Hotbar::default(),
+        );
         assert_eq!(body.translation, state.body().translation);
         assert!(body.rotation.angle_between(state.body().rotation) < 1e-5);
         assert!(camera.rotation.angle_between(state.head()) < 1e-5);

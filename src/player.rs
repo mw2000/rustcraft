@@ -35,12 +35,15 @@ use crate::{
     block::BlockType,
     chunks::chunk::ChunkCoordinate,
     collision::{move_and_collide, Aabb},
+    game_mode::GameMode,
+    hotbar::Hotbar,
     tonemap::scene_colour,
     world::World,
 };
 
 /// The player's body, at its feet, with the camera at its eyes.
 #[derive(Component, Default)]
+#[require(GameMode, Hotbar)]
 pub struct Player {
     pub movement: Movement,
     velocity: Vec3,
@@ -98,15 +101,15 @@ type PlayerCamera<'a> = (&'a ChildOf, &'a mut Transform);
 pub fn player_move(
     time: Res<Time>,
     world: Res<World>,
-    mut player_query: Query<(&mut Transform, &mut Player)>,
+    mut player_query: Query<(&mut Transform, &mut Player, &GameMode)>,
     camera_query: Query<(&ChildOf, &Transform), (With<Camera>, Without<Player>)>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let (parent, camera) = camera_query.single().expect("camera does not exist");
-    let (mut transform, mut player) = player_query
+    let (mut transform, mut player, mode) = player_query
         .get_mut(parent.parent())
         .expect("player does not exist");
-    if keys.just_pressed(FLY_TOGGLE_KEY) {
+    if keys.just_pressed(FLY_TOGGLE_KEY) && mode.can_fly() {
         player.movement = match player.movement {
             Movement::Walk => Movement::Fly,
             Movement::Fly => Movement::Walk,

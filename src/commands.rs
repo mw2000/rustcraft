@@ -3,6 +3,9 @@ use bevy::input::{ButtonState, InputSystems};
 use bevy::prelude::*;
 
 use crate::chunks::generate::WATER_LEVEL;
+use crate::game_mode::GameMode;
+use crate::hotbar::HOTBAR_TOP;
+use crate::menu::GameState;
 use crate::player::Player;
 use crate::world::World;
 
@@ -53,6 +56,10 @@ struct Line {
 }
 
 impl CommandBar {
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     fn print(&mut self, text: impl Into<String>, error: bool, at: f32) {
         self.lines.push(Line {
             text: text.into(),
@@ -67,7 +74,7 @@ impl CommandBar {
 
 /// Whether the bar's closed, so the player can move and look about.
 pub fn command_bar_closed(bar: Res<CommandBar>) -> bool {
-    !bar.open
+    !bar.is_open()
 }
 
 #[derive(Message)]
@@ -89,7 +96,7 @@ fn spawn_bar(mut commands: Commands) {
             position_type: PositionType::Absolute,
             left: Val::Px(6.0),
             right: Val::Px(6.0),
-            bottom: Val::Px(6.0),
+            bottom: Val::Px(HOTBAR_TOP + 6.0),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(4.0),
             ..default()
@@ -127,8 +134,13 @@ fn type_into_bar(
     mut typed: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut run: MessageWriter<RunCommand>,
+    state: Res<State<GameState>>,
 ) {
     if !bar.open {
+        // not over the menu or the block picker
+        if *state.get() != GameState::Playing {
+            return;
+        }
         let slash = keys.just_pressed(OPEN_WITH_SLASH_KEY);
         if slash || keys.just_pressed(OPEN_KEY) {
             bar.open = true;
@@ -183,11 +195,11 @@ fn run_commands(
     mut bar: ResMut<CommandBar>,
     time: Res<Time<Real>>,
     world: Option<Res<World>>,
-    mut player: Query<&mut Transform, With<Player>>,
+    mut player: Query<(&mut Transform, &mut GameMode), With<Player>>,
 ) {
     let now = time.elapsed_secs();
     for RunCommand(line) in lines.read() {
-        let Ok(mut transform) = player.single_mut() else {
+        let Ok((mut transform, mut mode)) = player.single_mut() else {
             continue;
         };
         let result = parse(line, transform.translation).map(|command| match command {
@@ -209,6 +221,10 @@ fn run_commands(
                 Some(world) => format!("Seed: {}", world.seed()),
                 None => "The world isn't made yet".into(),
             },
+            Command::GameMode(to) => {
+                *mode = to;
+                format!("Game mode set to {}", to.name())
+            }
             Command::Help => HELP.into(),
         });
         match result {
@@ -276,12 +292,14 @@ const HELP: &str = "Commands:\n\
     /tp <x> <y> <z>  teleport there; ~ means where you are, ~10 ten blocks on from it\n\
     /tp <x> <z>  teleport above the ground there\n\
     /seed  print the world's seed\n\
+    /gamemode survival|creative  switch game mode, or /gamemode s|c\n\
     /help  print this";
 
 #[derive(Debug, PartialEq)]
 enum Command {
     Teleport(Destination),
     Seed,
+    GameMode(GameMode),
     Help,
 }
 
@@ -318,6 +336,11 @@ fn parse(line: &str, from: Vec3) -> Result<Command, String> {
             }
         }
         "seed" => Ok(Command::Seed),
+        "gamemode" => match args[..] {
+            ["survival" | "s"] => Ok(Command::GameMode(GameMode::Survival)),
+            ["creative" | "c"] => Ok(Command::GameMode(GameMode::Creative)),
+            _ => Err("Usage: /gamemode survival|creative".into()),
+        },
         "help" => Ok(Command::Help),
         "" => Err("Type a command after the /, try /help".into()),
         other => Err(format!("Unknown command /{other}, try /help")),
@@ -402,18 +425,40 @@ mod tests {
         assert!(parse("/", HERE).is_err());
     }
 
+    #[test]
+    fn test_gamemode_takes_a_mode_by_name_or_initial() {
+        for (word, mode) in [
+            ("survival", GameMode::Survival),
+            ("s", GameMode::Survival),
+            ("creative", GameMode::Creative),
+            ("c", GameMode::Creative),
+        ] {
+            assert_eq!(
+                Ok(Command::GameMode(mode)),
+                parse(&format!("/gamemode {word}"), HERE)
+            );
+        }
+        assert!(parse("/gamemode", HERE).is_err());
+        assert!(parse("/gamemode adventure", HERE).is_err());
+        assert!(parse("/gamemode s c", HERE).is_err());
+    }
+
     // The whole plugin, headless: key presses in, the player's position out.
     mod in_app {
         use bevy::input::keyboard::{Key, KeyboardInput};
         use bevy::input::{ButtonState, InputPlugin};
         use bevy::prelude::*;
+        use bevy::state::app::StatesPlugin;
 
         use super::super::{CommandBar, CommandPlugin};
+        use crate::game_mode::GameMode;
+        use crate::menu::GameState;
         use crate::player::Player;
 
         fn app() -> App {
             let mut app = App::new();
-            app.add_plugins((MinimalPlugins, InputPlugin, CommandPlugin));
+            app.add_plugins((MinimalPlugins, InputPlugin, StatesPlugin, CommandPlugin))
+                .init_state::<GameState>();
             app.world_mut()
                 .spawn((Player::default(), Transform::default()));
             app.update();
@@ -466,6 +511,20 @@ mod tests {
             press(&mut app, KeyCode::Enter, None);
             assert!(!app.world().resource::<CommandBar>().open);
             assert_eq!(Vec3::new(12.0, 34.0, -56.0), player(&mut app));
+        }
+
+        #[test]
+        fn test_gamemode_switches_the_players_mode() {
+            let mut app = app();
+            press(&mut app, KeyCode::Slash, Some("/"));
+            type_text(&mut app, "gamemode s");
+            press(&mut app, KeyCode::Enter, None);
+            let mode = *app
+                .world_mut()
+                .query_filtered::<&GameMode, With<Player>>()
+                .single(app.world())
+                .unwrap();
+            assert_eq!(GameMode::Survival, mode);
         }
 
         #[test]
