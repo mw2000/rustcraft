@@ -9,5 +9,6 @@ Update it in the same PR when your work finishes a milestone, settles a decision
 plan.
 
 - Build and run: `cargo run --release`. Test: `cargo test`. Keep `cargo fmt` and `cargo clippy` clean.
+- CI runs `cargo fmt --check`, clippy with `-D warnings` and the tests on every push and PR, so all three must pass.
 - Performance work: use the `profile` skill. Block textures: use the `block-textures` skill.
 - Match the surrounding code's style: plain-prose comments that explain why, British spelling.

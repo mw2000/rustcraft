@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, combined-prs]
+  pull_request:
+    branches: [main, combined-prs]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# A newer push to the same ref makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Bevy's gilrs feature needs libudev; its x11 windowing needs the X and xkbcommon headers.
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libx11-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      # Release throughout, so clippy and the tests share one build of the dependencies.
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
