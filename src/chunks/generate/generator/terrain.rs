@@ -127,19 +127,40 @@ pub(super) fn terrain_block(
     }
 }
 
-// Grass is only the top layer of the ground, over dirt, and glacier ice over snow. Wider LOD cells are sampled mid-cell, which would turn their tops dirt.
-pub(super) fn under_grass(
+// How deep each surface goes before the rock under it, counting the top layer: grass over dirt,
+// sand over sandstone, gravel, and snow, or the ice of a glacier over snow.
+const DIRT_DEPTH: i64 = 4;
+const SAND_DEPTH: i64 = 4;
+const SANDSTONE_DEPTH: i64 = 8;
+const GRAVEL_DEPTH: i64 = 4;
+const SNOW_DEPTH: i64 = 8;
+
+// The ground at `world_y`, which the terrain has as `block` all the way down: the top layer is
+// the surface itself, then soil a few blocks deep, then stone. Only for full detail, since wider
+// LOD cells are sampled mid-cell, which would turn their tops to soil or stone.
+pub(super) fn under_surface(
     block: BlockType,
     world_y: i64,
     column_height: i64,
     cell: i64,
 ) -> BlockType {
-    if cell != 1 || world_y >= column_height - 1 {
+    let depth = column_height - 1 - world_y;
+    if cell != 1 || depth <= 0 {
         return block;
     }
+    let soil = |soil, deepest| {
+        if depth < deepest {
+            soil
+        } else {
+            BlockType::Stone
+        }
+    };
     match block {
-        BlockType::Grass => BlockType::Dirt,
-        BlockType::Ice => BlockType::Snow,
+        BlockType::Grass => soil(BlockType::Dirt, DIRT_DEPTH),
+        BlockType::Sand if depth < SAND_DEPTH => BlockType::Sand,
+        BlockType::Sand => soil(BlockType::Sandstone, SANDSTONE_DEPTH),
+        BlockType::Gravel => soil(BlockType::Gravel, GRAVEL_DEPTH),
+        BlockType::Snow | BlockType::Ice => soil(BlockType::Snow, SNOW_DEPTH),
         other => other,
     }
 }

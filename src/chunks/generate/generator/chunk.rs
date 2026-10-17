@@ -1,7 +1,7 @@
 use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
-use super::terrain::{column_block, ground_top, under_grass};
+use super::terrain::{column_block, ground_top, under_surface};
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
@@ -46,7 +46,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                 columns.temperature(x, z),
             );
             cells.extend((world_y..world_y + size).map(|y| {
-                under_grass(
+                under_surface(
                     column_block(biomes, biome, y, column_height, gradient, temperature),
                     y,
                     column_height,

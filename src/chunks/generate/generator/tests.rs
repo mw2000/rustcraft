@@ -12,7 +12,7 @@ use super::chunk::{chunks_meshed_with, generate_chunk, generate_chunk_mesh};
 use super::lod::LodBlocks;
 use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
-use super::terrain::{freeze_cell, terrain_block, under_grass, FREEZE_TEMPERATURE};
+use super::terrain::{freeze_cell, terrain_block, under_surface, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::noise::NoiseGenerator;
@@ -267,11 +267,11 @@ fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
     );
     assert_eq!(
         BlockType::Snow,
-        under_grass(BlockType::Ice, ground - 5, ground, 1)
+        under_surface(BlockType::Ice, ground - 5, ground, 1)
     );
     assert_eq!(
         BlockType::Ice,
-        under_grass(BlockType::Ice, ground - 1, ground, 1)
+        under_surface(BlockType::Ice, ground - 1, ground, 1)
     );
 }
 
@@ -694,11 +694,20 @@ fn test_grass_sides_carry_their_untinted_shade() {
 }
 
 #[test]
-fn test_only_full_detail_grass_below_the_top_layer_is_dirt() {
-    assert_eq!(BlockType::Dirt, under_grass(BlockType::Grass, 10, 20, 1));
-    assert_eq!(BlockType::Grass, under_grass(BlockType::Grass, 19, 20, 1));
-    assert_eq!(BlockType::Grass, under_grass(BlockType::Grass, 10, 20, 4));
-    assert_eq!(BlockType::Stone, under_grass(BlockType::Stone, 10, 20, 1));
+fn test_full_detail_ground_is_soil_a_few_blocks_deep_over_stone() {
+    let under = |block, depth: i64| under_surface(block, 20 - 1 - depth, 20, 1);
+    assert_eq!(BlockType::Grass, under(BlockType::Grass, 0));
+    assert_eq!(BlockType::Dirt, under(BlockType::Grass, 3));
+    assert_eq!(BlockType::Stone, under(BlockType::Grass, 4));
+    assert_eq!(BlockType::Sand, under(BlockType::Sand, 3));
+    assert_eq!(BlockType::Sandstone, under(BlockType::Sand, 4));
+    assert_eq!(BlockType::Stone, under(BlockType::Sand, 8));
+    assert_eq!(BlockType::Stone, under(BlockType::Gravel, 4));
+    assert_eq!(BlockType::Snow, under(BlockType::Snow, 7));
+    assert_eq!(BlockType::Stone, under(BlockType::Snow, 8));
+    assert_eq!(BlockType::Stone, under(BlockType::Stone, 1));
+    // wider cells are sampled mid-cell, and keep their surface
+    assert_eq!(BlockType::Grass, under_surface(BlockType::Grass, 0, 20, 4));
 }
 
 #[test]

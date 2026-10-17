@@ -6,7 +6,7 @@ use super::canopy::{
 use super::chunk::{sky_above, trees_may_reach};
 use super::mesh::mesh_blocks;
 use super::source::{water_depth, BlockSource, BoxFaces, TreeBox};
-use super::terrain::{column_block, freeze_cell, ground_top, is_solid, under_grass, underwater};
+use super::terrain::{column_block, freeze_cell, ground_top, is_solid, under_surface, underwater};
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::{BiomeId, Biomes};
@@ -606,7 +606,7 @@ fn fill_column(
     for cy in -1..=size {
         let bottom = base.y + cy as i64 * cell;
         let middle = bottom + cell / 2;
-        let mut block = under_grass(block_at(middle), middle, height, cell);
+        let mut block = under_surface(block_at(middle), middle, height, cell);
         block = freeze_cell(block, temperature, middle + cell / 2, cell);
         if block == BlockType::Air && bottom < top {
             block = block_at(top - 1);
