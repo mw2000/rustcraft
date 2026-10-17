@@ -44,7 +44,7 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 
 ## Add a block texture
 
-1. Add the variant to `enum Tile` and bump `TILE_COUNT` in `src/block.rs`, and use it in `BlockType::tile`.
+1. Add the variant to `enum Tile` and bump `TILE_COUNT` in `src/block.rs`, and use it in the block's row of the `blocks!` table.
 2. Append a row to `TILES` in `generate.py` at the same index.
 3. In `block_texture.wesl`, bump `ATLAS_CELLS` and add a `vec3` row to `block_mean` (`pack.py` asserts one row per tile and fills the numbers in).
 4. Widen the atlas first (`pack.py` asserts 16px per row entry), e.g. paste a blank 16px onto the right edge, then generate and pack.

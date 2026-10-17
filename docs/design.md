@@ -100,9 +100,9 @@ Rules that hold across the codebase. A change that breaks one needs this section
 - **INV-5 What's seen far away matches what's there.** A feature that appears in LODs appears the
   same at full detail, and the other way round, within what the LOD's resolution can show. This is
   why trees grow the same at every level, and it's what structures and edits must keep to.
-- **INV-6 Content is data.** Blocks, items, recipes, loot tables and structures are defined as data
-  files the game loads, not as code scattered across systems. Adding a block shouldn't mean
-  touching ten `match` statements.
+- **INV-6 Content is data.** Blocks, items, recipes, loot tables and structures are each declared
+  in one place, as a table or as data files the game loads, not as code scattered across systems.
+  Adding a block shouldn't mean touching ten `match` statements.
 - **INV-7 The frame budget is protected.** Gameplay systems don't block the main thread on
   generation or I/O. Measure performance-sensitive changes with the `profile` skill and say in the
   PR what they cost.
@@ -111,19 +111,21 @@ Rules that hold across the codebase. A change that breaks one needs this section
 
 ## 4. Architecture
 
-### 4.1 Block registry (proposed)
+### 4.1 Block registry
 
-Replace the `BlockType` enum with a registry loaded from data (INV-6).
+Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D-9).
 
-- A block is a numeric `BlockId` (`u16`) stored in `ChunkData`'s runs. Its properties live in a
-  table: name, textures per face, solid, opacity and `light_opacity`, emitted light, hardness,
-  best tool, what it drops, whether it's replaceable (like tall grass), and render style (cube,
-  cross, transparent, liquid).
-- Definitions live in `assets/blocks/*.toml` (or one file), keyed by a stable string name such as
-  `rustcraft:oak_planks`. Saves and the network protocol use names or a palette mapped to names,
-  never raw ids, so reordering the table can't corrupt a world.
-- The generator keeps fast access to the blocks it places, resolved once at startup.
-- Textures go into the atlas with the `block-textures` skill.
+- A row declares a `BlockType` variant with its properties: its name, whether it's solid, its
+  `light_opacity` and occlusion weight, and its tiles per face and for LODs. Properties are
+  added to the row as the features that use them land (hardness, drops, emitted light, render
+  style).
+- `BlockType` stays a one-byte enum, stored in `ChunkData`'s runs, so generation and meshing can
+  match on it and its properties are plain array lookups.
+- Each block has a stable snake_case name such as `"sandstone"` (`BlockType::name` and
+  `from_name`). Saves and the network protocol store names, or a palette mapped to names, never
+  discriminants, so reordering the table can't corrupt a world.
+- Textures go into the atlas with the `block-textures` skill, or are drawn by script where
+  ComfyUI isn't set up, derived from the existing tiles so they match.
 
 New blocks are added as features need them, and that's expected (§5).
 
@@ -131,7 +133,7 @@ New blocks are added as features need them, and that's expected (§5).
 
 The world's state beyond the seed (INV-1).
 
-- Edits are kept per chunk, as a sparse map from block position to `BlockId`: what a player put
+- Edits are kept per chunk, as a sparse map from block position to `BlockType`: what a player put
   there, air included. A chunk's blocks are its generated blocks with its edits applied on top.
 - An edit marks its chunk, and any neighbour it borders, for remeshing and relighting.
 - Edits are what's saved (§4.3) and what's sent over the network (§4.4). Generated blocks are
@@ -301,8 +303,8 @@ Status: ☐ not started, ◐ in progress, ☑ done.
 Done when: **two players on one world see each other and each other's edits, and the world saves
 and loads.**
 
-- ☐ **M0.1 Block registry.** Replace `BlockType` with registry-backed `BlockId` and block data
-  files (§4.1). No change in what's drawn. Tests cover lookup by name and generation output
+- ☑ **M0.1 Block registry.** Declare every block once, in one table with stable names (§4.1,
+  D-9). No change in what's drawn. Tests cover lookup by name and generation output
   staying identical.
 - ☐ **M0.2 Breaking and placing.** Raycast, outline, break and place in creative style, with
   remeshing and relighting of the edited chunk and its neighbours (§5.1). The edit layer holds the
@@ -314,7 +316,7 @@ and loads.**
   (§4.4). Singleplayer plays the same as before.
 - ☐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
   replicated, simple player models, chat (§4.4).
-- ☐ **M0.7 CI.** Build, test, clippy and fmt on every PR.
+- ☑ **M0.7 CI.** Build, test, clippy and fmt on every PR.
 
 ### Phase 1: the survival core
 
@@ -387,7 +389,10 @@ Done when: **the world feels inhabited, and night is dangerous.**
   progression; multiplayer; structures to find; an open, easy-to-play hobby project (§1). Decided
   2026-10-17.
 - **D-8 Blocks are added as needed** by whatever feature needs them, as long as they go through
-  the registry (§4.1) and get textures through the `block-textures` skill. Decided 2026-10-17.
+  the registry (§4.1) and get textures that match the atlas (§4.1). Decided 2026-10-17.
+- **D-9 Blocks are a compile-time table**, not runtime ids loaded from data files: the enum is
+  matched on in the hottest generation and meshing loops, and a table in code keeps that zero-cost
+  and checked by the compiler (§4.1). Decided 2026-10-17.
 
 ---
 
