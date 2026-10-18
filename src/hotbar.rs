@@ -336,6 +336,7 @@ mod tests {
     use bevy::input::{ButtonState, InputPlugin};
     use bevy::prelude::*;
     use bevy::state::app::StatesPlugin;
+    use bevy_replicon::RepliconPlugins;
 
     use super::{Hotbar, HotbarPlugin, SLOTS};
     use crate::block::BlockType;
@@ -343,6 +344,7 @@ mod tests {
     use crate::commands::CommandPlugin;
     use crate::menu::GameState;
     use crate::player::Player;
+    use crate::protocol::ProtocolPlugin;
 
     #[test]
     fn test_scrolling_wraps_round() {
@@ -384,6 +386,8 @@ mod tests {
             InputPlugin,
             StatesPlugin,
             AssetPlugin::default(),
+            RepliconPlugins,
+            ProtocolPlugin,
             CommandPlugin,
             HotbarPlugin,
         ))
@@ -391,6 +395,7 @@ mod tests {
         .init_asset::<TextureAtlasLayout>()
         .init_state::<GameState>();
         app.world_mut().spawn((Player::default(), LocalPlayer));
+        app.finish();
         app.update();
         app
     }

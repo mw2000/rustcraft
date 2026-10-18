@@ -1,13 +1,12 @@
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::{ButtonState, InputSystems};
 use bevy::prelude::*;
+use bevy_replicon::prelude::ServerSystems;
 
-use crate::chunks::generate::WATER_LEVEL;
-use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
 use crate::hotbar::HOTBAR_TOP;
 use crate::menu::GameState;
-use crate::world::World;
+use crate::protocol::{CommandOutput, RunCommand};
 
 // Minecraft's: T opens the bar, and / opens it with the slash already typed.
 const OPEN_KEY: KeyCode = KeyCode::KeyT;
@@ -21,21 +20,21 @@ const TEXT_COLOR: Color = Color::WHITE;
 const ERROR_COLOR: Color = Color::srgb(1.0, 0.33, 0.33);
 const BAR_COLOR: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 
-// How far above the ground `/tp x z` puts the player.
-const SURFACE_CLEARANCE: f32 = 2.0;
-
-/// A command bar like Minecraft's chat: T or / opens it, Enter runs what's typed and Escape
-/// closes it. While it's open, keys type into it instead of moving the player.
+/// A command bar like Minecraft's chat: T or / opens it, Enter sends what's typed to the
+/// server to run and Escape closes it, and it prints what the server answers. While it's open,
+/// keys type into it instead of moving the player. Needs `ProtocolPlugin`.
 pub struct CommandPlugin;
 
 impl Plugin for CommandPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CommandBar>()
-            .add_message::<RunCommand>()
             .add_systems(Startup, spawn_bar)
             // straight after input's read, so the keys it takes never reach the game
             .add_systems(PreUpdate, type_into_bar.after(InputSystems))
-            .add_systems(Update, (run_commands, draw_bar).chain());
+            // as soon as replicon hands the answer over, which in singleplayer is in the frame
+            // the command was typed
+            .add_systems(PostUpdate, print_output.after(ServerSystems::Send))
+            .add_systems(Update, draw_bar);
     }
 }
 
@@ -76,9 +75,6 @@ impl CommandBar {
 pub fn command_bar_closed(bar: Res<CommandBar>) -> bool {
     !bar.is_open()
 }
-
-#[derive(Message)]
-struct RunCommand(String);
 
 #[derive(Component)]
 struct Output;
@@ -190,47 +186,14 @@ fn type_into_bar(
     keys.reset_all();
 }
 
-fn run_commands(
-    mut lines: MessageReader<RunCommand>,
+fn print_output(
+    mut output: MessageReader<CommandOutput>,
     mut bar: ResMut<CommandBar>,
     time: Res<Time<Real>>,
-    world: Option<Res<World>>,
-    mut player: Query<(&mut Transform, &mut GameMode), With<LocalPlayer>>,
 ) {
     let now = time.elapsed_secs();
-    for RunCommand(line) in lines.read() {
-        let Ok((mut transform, mut mode)) = player.single_mut() else {
-            continue;
-        };
-        let result = parse(line, transform.translation).map(|command| match command {
-            Command::Teleport(destination) => {
-                let to = match destination {
-                    Destination::Exact(to) => to,
-                    Destination::Surface { x, z } => {
-                        let ground = world.as_ref().map_or(WATER_LEVEL as f64, |world| {
-                            world.region_store.noise().sample(x as f64, z as f64).height
-                        });
-                        let top = ground.max(WATER_LEVEL as f64) as f32;
-                        Vec3::new(x, top + SURFACE_CLEARANCE, z)
-                    }
-                };
-                transform.translation = to;
-                format!("Teleported to {:.1}, {:.1}, {:.1}", to.x, to.y, to.z)
-            }
-            Command::Seed => match &world {
-                Some(world) => format!("Seed: {}", world.seed()),
-                None => "The world isn't made yet".into(),
-            },
-            Command::GameMode(to) => {
-                *mode = to;
-                format!("Game mode set to {}", to.name())
-            }
-            Command::Help => HELP.into(),
-        });
-        match result {
-            Ok(text) => bar.print(text, false, now),
-            Err(text) => bar.print(text, true, now),
-        }
+    for CommandOutput { text, error } in output.read() {
+        bar.print(text.as_str(), *error, now);
     }
 }
 
@@ -288,30 +251,33 @@ fn draw_bar(
     });
 }
 
-const HELP: &str = "Commands:\n\
+/// What `/help` prints.
+pub(crate) const HELP: &str = "Commands:\n\
     /tp <x> <y> <z>  teleport there; ~ means where you are, ~10 ten blocks on from it\n\
     /tp <x> <z>  teleport above the ground there\n\
     /seed  print the world's seed\n\
     /gamemode survival|creative  switch game mode, or /gamemode s|c\n\
     /help  print this";
 
+/// A command, as `parse` reads it.
 #[derive(Debug, PartialEq)]
-enum Command {
+pub(crate) enum Command {
     Teleport(Destination),
     Seed,
     GameMode(GameMode),
     Help,
 }
 
+/// Where `/tp` goes.
 #[derive(Debug, PartialEq)]
-enum Destination {
+pub(crate) enum Destination {
     Exact(Vec3),
     // above the ground at x, z
     Surface { x: f32, z: f32 },
 }
 
-// Reads a line typed into the bar, by a player standing at `from`.
-fn parse(line: &str, from: Vec3) -> Result<Command, String> {
+/// Reads a line typed into the bar, by a player standing at `from`.
+pub(crate) fn parse(line: &str, from: Vec3) -> Result<Command, String> {
     let line = line.trim();
     let Some(line) = line.strip_prefix('/') else {
         return Err("Commands start with /, try /help".into());
@@ -443,25 +409,45 @@ mod tests {
         assert!(parse("/gamemode s c", HERE).is_err());
     }
 
-    // The whole plugin, headless: key presses in, the player's position out.
+    // The whole plugin, headless and played in singleplayer: key presses in, run by the
+    // server, the player's position and the bar's output out.
     mod in_app {
         use bevy::input::keyboard::{Key, KeyboardInput};
         use bevy::input::{ButtonState, InputPlugin};
         use bevy::prelude::*;
         use bevy::state::app::StatesPlugin;
+        use bevy_replicon::prelude::*;
 
         use super::super::{CommandBar, CommandPlugin};
         use crate::client::player::LocalPlayer;
-        use crate::game_mode::GameMode;
+        use crate::game_mode::{GameMode, GameModePlugin};
         use crate::menu::GameState;
-        use crate::player::Player;
+        use crate::player::{Movement, Player, PlayerOwner};
+        use crate::protocol::{ProtocolPlugin, RunCommand};
+        use crate::server::ServerPlugin;
+        use crate::world::World;
 
         fn app() -> App {
             let mut app = App::new();
-            app.add_plugins((MinimalPlugins, InputPlugin, StatesPlugin, CommandPlugin))
-                .init_state::<GameState>();
-            app.world_mut()
-                .spawn((Player::default(), LocalPlayer, Transform::default()));
+            app.add_plugins((
+                MinimalPlugins,
+                InputPlugin,
+                StatesPlugin,
+                RepliconPlugins,
+                ProtocolPlugin,
+                ServerPlugin,
+                CommandPlugin,
+                GameModePlugin,
+            ))
+            .init_state::<GameState>()
+            .insert_resource(World::new(16));
+            app.world_mut().spawn((
+                Player::default(),
+                PlayerOwner(ClientId::Server),
+                LocalPlayer,
+                Transform::default(),
+            ));
+            app.finish();
             app.update();
             app
         }
@@ -493,12 +479,27 @@ mod tests {
             }
         }
 
+        fn run(app: &mut App, command: &str) {
+            press(app, KeyCode::Slash, Some("/"));
+            type_text(app, command);
+            press(app, KeyCode::Enter, None);
+        }
+
         fn player(app: &mut App) -> Vec3 {
             app.world_mut()
-                .query_filtered::<&Transform, With<Player>>()
+                .query_filtered::<&Transform, With<LocalPlayer>>()
                 .single(app.world())
                 .unwrap()
                 .translation
+        }
+
+        fn mode(app: &App, player: Entity) -> GameMode {
+            *app.world().get::<GameMode>(player).unwrap()
+        }
+
+        fn printed(app: &App) -> Vec<&str> {
+            let bar = app.world().resource::<CommandBar>();
+            bar.lines.iter().map(|line| line.text.as_str()).collect()
         }
 
         #[test]
@@ -512,20 +513,58 @@ mod tests {
             press(&mut app, KeyCode::Enter, None);
             assert!(!app.world().resource::<CommandBar>().open);
             assert_eq!(Vec3::new(12.0, 34.0, -56.0), player(&mut app));
+            assert_eq!(vec!["Teleported to 12.0, 34.0, -56.0"], printed(&app));
         }
 
         #[test]
-        fn test_gamemode_switches_the_players_mode() {
+        fn test_gamemode_switches_the_players_mode_and_lands_them() {
             let mut app = app();
-            press(&mut app, KeyCode::Slash, Some("/"));
-            type_text(&mut app, "gamemode s");
-            press(&mut app, KeyCode::Enter, None);
-            let mode = *app
+            let host = app
                 .world_mut()
-                .query_filtered::<&GameMode, With<Player>>()
+                .query_filtered::<Entity, With<LocalPlayer>>()
                 .single(app.world())
                 .unwrap();
-            assert_eq!(GameMode::Survival, mode);
+            run(&mut app, "gamemode s");
+            assert_eq!(GameMode::Survival, mode(&app, host));
+            let movement = app.world().get::<Player>(host).unwrap().movement;
+            assert_eq!(Movement::Walk, movement);
+        }
+
+        #[test]
+        fn test_a_command_runs_for_the_player_who_sent_it_and_answers_only_them() {
+            let mut app = app();
+            let client = ClientId::Client(app.world_mut().spawn_empty().id());
+            let guest = app
+                .world_mut()
+                .spawn((Player::default(), PlayerOwner(client), Transform::default()))
+                .id();
+            app.world_mut().write_message(FromClient {
+                client_id: client,
+                message: RunCommand("/gamemode s".into()),
+            });
+            app.update();
+            assert_eq!(GameMode::Survival, mode(&app, guest));
+            let host = app
+                .world_mut()
+                .query_filtered::<&GameMode, With<LocalPlayer>>()
+                .single(app.world())
+                .unwrap();
+            assert_eq!(GameMode::Creative, *host);
+            assert!(printed(&app).is_empty());
+
+            // and the host's own are answered in their bar, errors and all
+            run(&mut app, "seed");
+            run(&mut app, "fly");
+            let seed = app.world().resource::<World>().seed();
+            assert_eq!(
+                vec![
+                    format!("Seed: {seed}").as_str(),
+                    "Unknown command /fly, try /help"
+                ],
+                printed(&app)
+            );
+            let bar = app.world().resource::<CommandBar>();
+            assert!(!bar.lines[0].error && bar.lines[1].error);
         }
 
         #[test]

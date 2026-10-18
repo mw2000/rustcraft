@@ -13,10 +13,13 @@ pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
-        // ordered, as edits to one block only make sense in the order they're made
+        // ordered, as edits to one block only make sense in the order they're made, and
+        // commands and what they print in the order they're typed
         app.add_client_message::<RequestEdit>(Channel::Ordered)
             .add_server_message::<BlockChanged>(Channel::Ordered)
-            .add_server_message::<EditRejected>(Channel::Ordered);
+            .add_server_message::<EditRejected>(Channel::Ordered)
+            .add_client_message::<RunCommand>(Channel::Ordered)
+            .add_server_message::<CommandOutput>(Channel::Ordered);
     }
 }
 
@@ -45,6 +48,17 @@ pub struct EditRejected {
     pub seq: u32,
     pub block: I64Vec3,
     pub actual: BlockType,
+}
+
+/// A line a player typed into the command bar, for the server to run as theirs.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RunCommand(pub String);
+
+/// What a command printed, for the player who ran it, and whether it's an error.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub text: String,
+    pub error: bool,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself

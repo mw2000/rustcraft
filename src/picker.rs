@@ -196,6 +196,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::ui_widgets::Activate;
     use bevy::window::WindowFocused;
+    use bevy_replicon::RepliconPlugins;
 
     use super::{display_name, PickerPlugin, Tile};
     use crate::block::BlockType;
@@ -205,6 +206,7 @@ mod tests {
     use crate::hotbar::{Hotbar, HotbarPlugin};
     use crate::menu::{GameState, MenuPlugin};
     use crate::player::Player;
+    use crate::protocol::ProtocolPlugin;
 
     #[test]
     fn test_display_names() {
@@ -221,6 +223,8 @@ mod tests {
             StatesPlugin,
             AssetPlugin::default(),
             MenuPlugin,
+            RepliconPlugins,
+            ProtocolPlugin,
             CommandPlugin,
             HotbarPlugin,
             PickerPlugin,
@@ -230,6 +234,7 @@ mod tests {
         .add_message::<WindowFocused>();
         app.world_mut()
             .spawn((Player::default(), LocalPlayer, mode));
+        app.finish();
         app.update();
         app
     }

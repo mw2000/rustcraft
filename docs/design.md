@@ -311,6 +311,15 @@ The world's state beyond the seed (INV-1).
   `PlayerOwner`, and saving writes the host's. In M0.6 a joining client must be told which
   player is its own and attach the camera when it arrives, and a dedicated server spawns no
   host's player.
+- **Built (M0.5d):** Enter in the command bar sends `RunCommand(line)`; the server's
+  `server::commands::run_commands` (beside `receive_edits`, so in the frame it's typed) parses
+  it with the shared `commands::parse`, from the sender's player's position, runs it against
+  that player and answers `CommandOutput { text, error }` to the sender alone, which the bar
+  prints as replicon hands it over. `/tp` moves the sender's body on the server, which in one
+  App is the local player's own; a remote player decides their own movement, so from M0.6 they
+  need a `Teleport`. `/gamemode` sets the sender's `GameMode` (open to anyone until operators,
+  M0.6e) and `GameModePlugin` lands them as before; `/seed` reads the server's `World`.
+  `CommandPlugin` now needs `ProtocolPlugin`.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
   `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
@@ -552,7 +561,7 @@ and loads.**
     `RequestEdit` / `BlockChanged` / `EditRejected`, the server validating edits.
   - ☑ **M0.5c Players owned by the server.** Spawned from saves by the server; the client puts
     the camera on its `LocalPlayer`.
-  - ☐ **M0.5d Commands and game modes on the server.**
+  - ☑ **M0.5d Commands and game modes on the server.**
   - ☐ **M0.5e Time on the server**, with `TimeSync`.
   - ☐ **M0.5f Server chunk residency**, headless, with shared holders in `World`. A dedicated
     server must drain `World::reroofed` itself, since only the client takes it now, and

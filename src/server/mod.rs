@@ -1,6 +1,7 @@
 //! What the server decides (INV-4): in singleplayer it runs in the same App as the client, and
 //! a dedicated server runs it on its own (§4.4).
 
+mod commands;
 mod edits;
 
 use std::path::PathBuf;
@@ -24,8 +25,9 @@ impl Plugin for ServerPlugin {
                 PostUpdate,
                 // after replicon hands the server the requests made this frame, which with no
                 // transport it does in `ClientSystems::Send`, and before it sends the answers,
-                // so a singleplayer edit is made and answered in the frame it's asked for
-                edits::receive_edits
+                // so a singleplayer edit or command is made and answered in the frame it's
+                // asked for
+                (edits::receive_edits, commands::run_commands)
                     .after(ClientSystems::Send)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
