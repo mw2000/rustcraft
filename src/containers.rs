@@ -1,6 +1,7 @@
 //! Containers (§5.2): blocks that hold items of their own, which stay with the world rather than
-//! with a player. So far that's the furnace, which smelts what's put in it with the fuel it's
-//! given; chests (M2.3) are to be containers with more slots and no fire. The server keeps them
+//! with a player: the furnace, which smelts what's put in it with the fuel it's given, and the
+//! chest, which only holds things. A chest the world generated is filled from its loot table the
+//! first time it's opened (`loot`, §5.6), and is like any other from then on. The server keeps them
 //! (`Containers`, INV-4) beside the edit layer, as the state of the blocks they're in, and saves
 //! them in the region files with their chunks' edits (`save::region`). Players with one open are
 //! sent it as it changes (`server::containers`).
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::crafting::{burn_time, Recipe, SMELT_TIME};
-use crate::inventory::{click_stack, Click, Inventory};
+use crate::inventory::{add_to, click_stack, Click, Inventory};
 use crate::items::{take, Item, ItemStack};
 
 /// A furnace's slots: what's smelted, what's burnt, and what's made.
@@ -63,6 +64,7 @@ impl Container {
     pub fn new(block: BlockType) -> Option<Self> {
         let slots = match block {
             BlockType::Furnace => 3,
+            BlockType::Chest => 27,
             _ => return None,
         };
         Some(Self {
@@ -78,8 +80,11 @@ impl Container {
     }
 
     // Whether `item` can be put in `slot`: only fuel in a furnace's fuel slot, and nothing in its
-    // output, which is only taken from.
+    // output, which is only taken from. A chest takes anything anywhere.
     fn accepts(&self, slot: usize, item: Item) -> bool {
+        if self.block != BlockType::Furnace {
+            return true;
+        }
         match slot {
             FUEL => burn_time(item).is_some(),
             OUTPUT => false,
@@ -88,8 +93,9 @@ impl Container {
     }
 
     /// Does what clicking its slot `slot` does, with the stack on `inventory`'s cursor: as an
-    /// inventory's slot, but for what it won't accept. The output is only ever taken, all of it
-    /// at once if the cursor has room, and shift-click moves a stack into the inventory.
+    /// inventory's slot, but for what it won't accept. A furnace's output is only ever taken,
+    /// all of it at once if the cursor has room, and shift-click moves a stack into the
+    /// inventory.
     pub fn click(&mut self, slot: usize, click: Click, inventory: &mut Inventory) {
         let accepted = inventory
             .cursor
@@ -103,7 +109,7 @@ impl Container {
                     *held = inventory.add(stack);
                 }
             }
-            _ if slot == OUTPUT => {
+            _ if self.block == BlockType::Furnace && slot == OUTPUT => {
                 let Some(made) = *held else {
                     return;
                 };
@@ -122,8 +128,12 @@ impl Container {
     }
 
     /// Moves as much of `stack` in as fits where it goes, as shift-clicking it in the inventory
-    /// does: what smelts into the input, and fuel onto the fire. Returns what's left of it.
+    /// does: into a chest as into an inventory, and into a furnace what smelts into the input
+    /// and fuel onto the fire. Returns what's left of it.
     pub fn add(&mut self, stack: ItemStack) -> Option<ItemStack> {
+        if self.block != BlockType::Furnace {
+            return add_to(&mut self.slots, stack);
+        }
         let slot = if Recipe::smelting(stack.item).is_some() {
             INPUT
         } else if burn_time(stack.item).is_some() {
@@ -341,10 +351,11 @@ mod tests {
     }
 
     #[test]
-    fn test_only_furnaces_are_containers_so_far() {
+    fn test_furnaces_and_chests_are_containers() {
         let furnace = Container::new(BlockType::Furnace).unwrap();
         assert_eq!(3, furnace.slots.len());
         assert!(furnace.is_whole());
+        assert_eq!(27, Container::new(BlockType::Chest).unwrap().slots.len());
         assert_eq!(None, Container::new(BlockType::CraftingTable));
         let short = Container {
             slots: vec![None; 2],
@@ -463,6 +474,36 @@ mod tests {
         assert_eq!(stack(Item::Stick, 3), furnace.slots[FUEL]);
         let dirt = ItemStack::new(Item::Block(BlockType::Dirt), 1);
         assert_eq!(Some(dirt), furnace.add(dirt));
+    }
+
+    #[test]
+    fn test_a_chest_takes_anything_in_any_slot_and_shift_clicks_both_ways() {
+        let mut chest = Container::new(BlockType::Chest).unwrap();
+        let mut inventory = Inventory {
+            cursor: stack(IRON_ORE, 5),
+            ..Inventory::default()
+        };
+        // even in the slots a furnace keeps for fuel and what it's made
+        chest.click(OUTPUT, Click::Right, &mut inventory);
+        chest.click(FUEL, Click::Left, &mut inventory);
+        assert_eq!(
+            (stack(IRON_ORE, 4), stack(IRON_ORE, 1), None),
+            (chest.slots[FUEL], chest.slots[OUTPUT], inventory.cursor)
+        );
+        chest.click(OUTPUT, Click::Left, &mut inventory);
+        assert_eq!(stack(IRON_ORE, 1), inventory.cursor);
+        // shift-clicked in, it tops up the stacks there are and then fills the first empty slot
+        assert_eq!(None, chest.add(ItemStack::new(IRON_ORE, 62)));
+        assert_eq!(Some(ItemStack::full(IRON_ORE)), chest.slots[FUEL]);
+        assert_eq!(stack(IRON_ORE, 2), chest.slots[0]);
+        assert_eq!(None, chest.add(ItemStack::new(Item::Coal, 3)));
+        assert_eq!(stack(Item::Coal, 3), chest.slots[OUTPUT]);
+        // and shift-clicked out, into the inventory
+        chest.click(FUEL, Click::Shift, &mut inventory);
+        assert_eq!(None, chest.slots[FUEL]);
+        assert_eq!(Some(ItemStack::full(IRON_ORE)), inventory.slots[0]);
+        // and it never burns
+        assert!(!chest.run(SMELT_TIME));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use super::noise::NoiseGenerator;
 use super::trees::{hash, Tree, TREE_REACH};
 use super::WATER_LEVEL;
 use crate::block::BlockType;
-pub use template::{Placement, Structure, Template, STRUCTURE_DEPTH, STRUCTURE_HEIGHT};
+pub use template::{Placement, Structure, Template, LOOT, STRUCTURE_DEPTH, STRUCTURE_HEIGHT};
 
 // Each structure type's file, built into the game.
 const FILES: [&str; 1] = [include_str!(
@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn test_the_watchtower_loads_tall_with_its_loot_on_a_floor_inside() {
+    fn test_the_watchtower_loads_tall_with_its_chest_on_a_floor_inside() {
         let template = &watchtower().template;
         let size = template.size;
         assert!(size.y - template.floor >= 16 && size.y - template.floor <= STRUCTURE_HEIGHT);
@@ -414,7 +414,8 @@ mod tests {
         let at = loot[0].1;
         assert!(at.xz().cmpgt(I64Vec2::ZERO).all() && at.xz().cmplt(size.xz() - 1).all());
         let solid = |at: I64Vec3| template.cell(0, at).is_some_and(|b| b != BlockType::Air);
-        assert!(solid(at - I64Vec3::Y) && !solid(at) && !solid(at + I64Vec3::Y));
+        assert!(solid(at - I64Vec3::Y) && !solid(at + I64Vec3::Y));
+        assert_eq!(Some(BlockType::Chest), template.cell(0, at));
         // its walls stand on a footing all the way round
         for x in 0..size.x {
             for z in 0..size.z {

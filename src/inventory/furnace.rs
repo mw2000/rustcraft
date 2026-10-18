@@ -28,7 +28,7 @@ const ARROW_EMPTY: usize = 2;
 const ARROW_FULL: usize = 3;
 
 /// The container the inventory screen's open at, if it's one, and what's in it as the server
-/// last said, which is nothing until it's said. Both go once the screen closes.
+/// last said, which is an empty one of its kind until it's said. Both go once the screen closes.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
 pub struct ContainerView {
     pub at: Option<I64Vec3>,
@@ -38,10 +38,16 @@ pub struct ContainerView {
 impl ContainerView {
     /// Opening `block` at `at`, which is a container if it's a block that holds things.
     pub fn opening(block: BlockType, at: I64Vec3) -> Self {
+        let container = Container::new(block);
         Self {
-            at: Container::new(block).map(|_| at),
-            container: None,
+            at: container.as_ref().map(|_| at),
+            container,
         }
+    }
+
+    /// The block of the container open, if there's one.
+    pub fn block(&self) -> Option<BlockType> {
+        self.container.as_ref().map(|container| container.block)
     }
 }
 
@@ -182,9 +188,9 @@ pub(super) fn spawn_furnace(
     });
 }
 
-// The server makes the change, as it does all changes to containers (INV-4), naming the
-// container so a click meant for one that's since closed changes nothing.
-fn click_slot(
+/// The server makes the change, as it does all changes to containers (INV-4), naming the
+/// container so a click meant for one that's since closed changes nothing.
+pub(super) fn click_slot(
     press: On<PointerPress>,
     slots: Query<&ContainerSlot>,
     keys: Res<ButtonInput<KeyCode>>,

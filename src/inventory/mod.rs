@@ -2,6 +2,7 @@
 //! player's inventory (INV-4), as clients ask it to (`InventoryClick` and the rest in
 //! `protocol.rs`); the screen showing it is `screen`.
 
+mod chest;
 pub mod furnace;
 pub mod icons;
 pub mod recipes;
@@ -86,20 +87,7 @@ impl Inventory {
     /// Puts `stack` away, topping up the stacks of it there are first and then filling the
     /// first empty slot, the hotbar's before the rest. Returns what didn't fit.
     pub fn add(&mut self, stack: ItemStack) -> Option<ItemStack> {
-        self.add_within(stack, 0..SLOTS)
-    }
-
-    fn add_within(&mut self, stack: ItemStack, slots: Range<usize>) -> Option<ItemStack> {
-        let slots = &mut self.slots[slots];
-        let mut left = Some(stack);
-        for held in slots.iter_mut().flatten() {
-            // and once it's all in, there's nothing left to put away
-            left = held.merge(left?);
-        }
-        if let Some(empty) = slots.iter_mut().find(|slot| slot.is_none()) {
-            *empty = left.take();
-        }
-        left
+        add_to(&mut self.slots, stack)
     }
 
     /// Takes one of `item` from `slot`, as placing a block does, if it's there.
@@ -163,7 +151,7 @@ impl Inventory {
             return;
         };
         let to = if HOTBAR.contains(&slot) { MAIN } else { HOTBAR };
-        self.slots[slot] = self.add_within(stack, to);
+        self.slots[slot] = add_to(&mut self.slots[to], stack);
     }
 
     /// Puts the stack on the cursor back in the inventory, as closing the screen does, and
@@ -172,6 +160,21 @@ impl Inventory {
         let stack = self.cursor.take()?;
         self.add(stack)
     }
+}
+
+/// Puts `stack` in `slots`, topping up the stacks of it there are first and then filling the
+/// first empty slot, as picking up does in an inventory and shift-clicking in a chest. Returns
+/// what didn't fit.
+pub fn add_to(slots: &mut [Option<ItemStack>], stack: ItemStack) -> Option<ItemStack> {
+    let mut left = Some(stack);
+    for held in slots.iter_mut().flatten() {
+        // and once it's all in, there's nothing left to put away
+        left = held.merge(left?);
+    }
+    if let Some(empty) = slots.iter_mut().find(|slot| slot.is_none()) {
+        *empty = left.take();
+    }
+    left
 }
 
 /// Does what a left or right click does to the stack `held` in a slot, with the stack `cursor` on

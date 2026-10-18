@@ -344,6 +344,14 @@ blocks! {
     Wheat5 { ..crop("wheat_5", Tile::Wheat5, UNRIPE) },
     Wheat6 { ..crop("wheat_6", Tile::Wheat6, UNRIPE) },
     RipeWheat { ..crop("ripe_wheat", Tile::RipeWheat, RIPE) },
+    // A container of 27 slots (`containers`), which leaves what's in it as well when it's broken.
+    // Every side has the latch, as blocks have no facing yet.
+    Chest {
+        name: "chest", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 3.0, tool: Some(Axe), tier: 0,
+        top: Tile::ChestTop, side: Tile::ChestSide, bottom: Tile::Planks, lod: Tile::ChestSide,
+    },
 }
 
 impl BlockType {
@@ -535,9 +543,11 @@ pub enum Tile {
     Wheat5,
     Wheat6,
     RipeWheat,
+    ChestTop,
+    ChestSide,
 }
 
-pub const TILE_COUNT: usize = 41;
+pub const TILE_COUNT: usize = 43;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -583,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::RipeWheat as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::ChestSide as usize + 1);
     }
 
     #[test]

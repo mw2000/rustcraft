@@ -109,8 +109,9 @@ mod tests {
     // update it deliberately, knowing that worlds will generate differently from before, so a
     // game of the version before can't join one of this version, and saved edits sit on new
     // terrain. CI runs this on Linux, Windows and macOS to see whether they agree (D-3).
-    // Last changed by M2.1, which added the structure's chunks: the rest hash as before.
-    const GOLDEN: u64 = 0xbd97_20d0_0029_d88e;
+    // Last changed by M2.3, which put a chest at the watchtower's loot marker, in the structure's
+    // chunks: the rest hash as before.
+    const GOLDEN: u64 = 0xcb74_db1f_d1c2_c243;
 
     #[test]
     fn test_generation_matches_its_golden_checksum() {

@@ -44,7 +44,9 @@ ccccccc
 - Keep the height over the floor within `STRUCTURE_HEIGHT` (27) and the sunk layers within
   `STRUCTURE_DEPTH` (4); loading refuses a template that doesn't fit, or whose layers don't match
   its size.
-- Markers are kept for later milestones (`loot` for chests, M2.3).
+- A `loot` marker is a chest, which rolls the loot table named after the structure (in
+  `src/loot.rs`) the first time it's opened, so add a table for a new structure with chests.
+  Other marker kinds are kept for later milestones.
 
 ## Authoring
 

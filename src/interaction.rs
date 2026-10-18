@@ -8,6 +8,7 @@ use crate::chunks::chunk::ChunkCoordinate;
 use crate::client::player::LocalPlayer;
 use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
+use crate::containers::Container;
 use crate::crafting::Station;
 use crate::farming::tilled;
 use crate::game_mode::GameMode;
@@ -357,20 +358,23 @@ fn use_target(
 }
 
 /// Whether right-clicking `hit` uses it, rather than building against it or eating: a bed
-/// always, and a station in survival.
+/// always, and a station or a container in survival.
 pub fn is_used(world: &World, hit: Hit, mode: GameMode) -> bool {
-    world.get_block_at(hit.block) == BlockType::Bed || station_used(world, hit, mode).is_some()
+    world.get_block_at(hit.block) == BlockType::Bed || opens_screen(world, hit, mode)
 }
 
-// The station right-clicking `hit` opens, if it's one, in survival: in creative, where there's
-// no crafting or smelting, it's built against like any other block.
-fn station_used(world: &World, hit: Hit, mode: GameMode) -> Option<Station> {
-    Station::of_block(world.get_block_at(hit.block)).filter(|_| !mode.has_every_block())
+// Whether right-clicking `hit` opens the inventory screen at it, as a station or a container
+// does in survival: in creative, where there's no crafting, smelting or inventory screen, it's
+// built against like any other block.
+fn opens_screen(world: &World, hit: Hit, mode: GameMode) -> bool {
+    let block = world.get_block_at(hit.block);
+    let opened = Station::of_block(block).is_some() || Container::new(block).is_some();
+    opened && !mode.has_every_block()
 }
 
-// Right click on a crafting table or a furnace opens the inventory screen at it, as the
-// server's told, so what's made there is checked against it, and a furnace's sent, and on a bed
-// tells the server, which sleeps in it.
+// Right click on a crafting table, a furnace or a chest opens the inventory screen at it, as the
+// server's told, so what's made there is checked against it, and a container's sent, and on a
+// bed tells the server, which sleeps in it.
 #[allow(clippy::too_many_arguments)]
 fn use_station(
     world: Res<World>,
@@ -390,10 +394,11 @@ fn use_station(
     }
     if world.get_block_at(hit.block) == BlockType::Bed {
         uses.write(UseBlock { block: hit.block });
-    } else if let Some(at) = station_used(&world, hit, mode) {
+    } else if opens_screen(&world, hit, mode) {
+        let block = world.get_block_at(hit.block);
         uses.write(UseBlock { block: hit.block });
-        *station = CraftingStation(at);
-        *view = ContainerView::opening(world.get_block_at(hit.block), hit.block);
+        *station = CraftingStation(Station::of_block(block).unwrap_or_default());
+        *view = ContainerView::opening(block, hit.block);
         state.set(GameState::Inventory);
     }
 }

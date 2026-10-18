@@ -1,6 +1,7 @@
-//! Containers on the server (§5.2): opening them, running furnaces, and sending players the one
-//! they have open as it changes. Clicks on a container's slots are inventory requests
-//! (`server::inventory`), and breaking one drops what's in it (`server::edits`).
+//! Containers on the server (§5.2): opening them, filling chests the world generated from their
+//! loot tables (§5.6), running furnaces, and sending players the one they have open as it
+//! changes. Clicks on a container's slots are inventory requests (`server::inventory`), and
+//! breaking one drops what's in it (`server::edits`).
 
 use std::time::Duration;
 
@@ -9,7 +10,9 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::edits::in_reach;
+use crate::block::BlockType;
 use crate::containers::{Container, Containers};
+use crate::loot::generated_table;
 use crate::player::PlayerOwner;
 use crate::protocol::{CloseInventory, ContainerChanged, UseBlock};
 use crate::world::World;
@@ -47,7 +50,11 @@ pub(super) fn open_containers(
         let Some((player, _, body)) = player_of(client_id) else {
             continue;
         };
-        if in_reach(body.translation, at) && containers.open(at, world.get_block_at(at)).is_some() {
+        if !in_reach(body.translation, at) {
+            continue;
+        }
+        fill_loot(&world, &mut containers, at);
+        if containers.open(at, world.get_block_at(at)).is_some() {
             commands.entity(player).insert(OpenContainer {
                 at,
                 sent: None,
@@ -59,6 +66,26 @@ pub(super) fn open_containers(
         if let Some((player, ..)) = player_of(client_id) {
             commands.entity(player).remove::<OpenContainer>();
         }
+    }
+}
+
+/// Fills the chest at `at` from its structure's loot table if it's one the world generated and
+/// nobody's opened, as it's opened or broken: one with no container, which a player didn't
+/// place, as a player's chest is an edit. It's rolled the same whenever that is, from the seed
+/// and where it is, and from then on it's a container like any other, saved with its chunk, so
+/// what's taken from it stays taken. One no structure accounts for is left empty.
+pub(super) fn fill_loot(world: &World, containers: &mut Containers, at: I64Vec3) {
+    let unopened = world.get_block_at(at) == BlockType::Chest
+        && world.edits().get(at).is_none()
+        && containers
+            .get(at)
+            .is_none_or(|container| container.block != BlockType::Chest);
+    if !unopened {
+        return;
+    }
+    let table = generated_table(&world.region_store, at);
+    if let Some((chest, table)) = containers.open(at, BlockType::Chest).zip(table) {
+        chest.slots = table.roll(world.seed(), at, chest.slots.len());
     }
 }
 
@@ -120,28 +147,39 @@ mod tests {
     use super::OpenContainer;
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
+    use crate::chunks::generate::generator::generate_chunk;
     use crate::containers::{Container, Containers, FUEL, INPUT, OUTPUT};
     use crate::crafting::SMELT_TIME;
+    use crate::edits::Edits;
     use crate::game_mode::GameMode;
     use crate::inventory::{Click, Inventory};
     use crate::items::{Item, ItemStack};
+    use crate::loot::{watchtower_chest, LootTable};
     use crate::player::{Player, PlayerOwner};
     use crate::protocol::{
-        CloseInventory, ContainerChanged, InventoryClick, ProtocolPlugin, RequestEdit, UseBlock,
+        CloseInventory, ContainerChanged, InventoryClick, ProtocolPlugin, RequestEdit,
+        StartBreaking, UseBlock,
     };
     use crate::server::drops::DroppedItem;
     use crate::server::ServerPlugin;
     use crate::world::World;
 
     const IRON_ORE: Item = Item::Block(BlockType::IronOre);
-    // a furnace beside the player, standing at the origin
+    // a furnace and a chest beside the player, standing at the origin, and a chest the world
+    // generated there that no structure accounts for
     const FURNACE: I64Vec3 = I64Vec3::new(2, 1, 0);
+    const CHEST: I64Vec3 = I64Vec3::new(2, 1, 2);
+    const STRAY: I64Vec3 = I64Vec3::new(0, 1, 2);
 
-    // A server alone with its player in `mode`, carrying iron ore and coal, a second a frame.
+    // A server of seed 3 alone with its player in `mode`, carrying iron ore and coal, a second a
+    // frame.
     fn server(mode: GameMode) -> App {
-        let mut world = World::new(16);
-        world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), ChunkData::default());
+        let mut world = World::from_save(3, Edits::default(), 16);
+        let mut generated = ChunkData::default();
+        generated.set_block_at(STRAY.as_u16vec3(), BlockType::Chest);
+        world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), generated);
         world.edit(FURNACE, BlockType::Furnace);
+        world.edit(CHEST, BlockType::Chest);
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -183,7 +221,73 @@ mod tests {
     }
 
     fn furnace(app: &App) -> Option<Container> {
-        app.world().resource::<Containers>().get(FURNACE).cloned()
+        container(app, FURNACE)
+    }
+
+    fn container(app: &App, at: I64Vec3) -> Option<Container> {
+        app.world().resource::<Containers>().get(at).cloned()
+    }
+
+    // A second player joins, beside the first, carrying a coal.
+    fn join(app: &mut App) -> ClientId {
+        let guest = ClientId::Client(Entity::from_raw_u32(7).unwrap());
+        let mut inventory = Inventory::default();
+        inventory.slots[0] = Some(ItemStack::new(Item::Coal, 1));
+        app.world_mut().spawn((
+            Player::default(),
+            PlayerOwner(guest),
+            GameMode::Survival,
+            inventory,
+            Transform::from_xyz(0.5, 1.0, 1.5),
+        ));
+        guest
+    }
+
+    fn inventory(app: &mut App, owner: ClientId) -> Inventory {
+        let mut query = app.world_mut().query::<(&PlayerOwner, &Inventory)>();
+        let mut players = query.iter(app.world());
+        players.find(|(o, _)| o.0 == owner).unwrap().1.clone()
+    }
+
+    fn dropped(app: &mut App) -> Vec<ItemStack> {
+        let mut query = app.world_mut().query::<&DroppedItem>();
+        let mut stacks: Vec<_> = query.iter(app.world()).map(|item| item.stack).collect();
+        stacks.sort_unstable_by_key(|stack| (stack.item.name(), stack.count));
+        stacks
+    }
+
+    fn break_block(app: &mut App, block: I64Vec3) {
+        send(app, StartBreaking { block });
+        // long enough to break a chest by hand
+        for _ in 0..4 {
+            app.update();
+        }
+        let to = BlockType::Air;
+        send(
+            app,
+            RequestEdit {
+                block,
+                to,
+                slot: 8,
+                seq: 0,
+            },
+        );
+    }
+
+    // Generates seed 3's watchtower nearest its spawn and moves the player beside the chest at
+    // its top, returning where that is and what its loot table rolls there.
+    fn watchtower(app: &mut App) -> (I64Vec3, Vec<Option<ItemStack>>) {
+        let mut world = app.world_mut().resource_mut::<World>();
+        let at = watchtower_chest(&world.region_store);
+        let coord = ChunkCoordinate::containing(at);
+        let chunk = generate_chunk(world.region_store.clone(), coord);
+        world.insert_chunk(coord, chunk);
+        let loot = LootTable::named("watchtower").unwrap().roll(3, at, 27);
+        let mut query = app
+            .world_mut()
+            .query_filtered::<&mut Transform, With<Player>>();
+        query.single_mut(app.world_mut()).unwrap().translation = at.as_vec3() + Vec3::X;
+        (at, loot)
     }
 
     // What the host's been sent of its open container, oldest first.
@@ -298,5 +402,119 @@ mod tests {
         let containers = app.world().resource::<Containers>();
         let output = containers.get(far).unwrap().slots[OUTPUT];
         assert_eq!(Some(ItemStack::new(Item::IronIngot, 1)), output);
+    }
+
+    #[test]
+    fn test_a_chest_opened_takes_stacks_shift_clicked_either_way() {
+        let mut app = server(GameMode::Survival);
+        send(&mut app, UseBlock { block: CHEST });
+        // a chest a player placed starts empty
+        assert_eq!(Container::new(BlockType::Chest), container(&app, CHEST));
+        send(&mut app, click(None, 0, Click::Shift));
+        send(&mut app, click(None, 1, Click::Left));
+        send(&mut app, click(Some(CHEST), 20, Click::Right));
+        let chest = container(&app, CHEST).unwrap();
+        assert_eq!(Some(ItemStack::new(IRON_ORE, 3)), chest.slots[0]);
+        assert_eq!(Some(ItemStack::new(Item::Coal, 1)), chest.slots[20]);
+        assert_eq!(chest, sent(&mut app).pop().unwrap().container.unwrap());
+        send(&mut app, click(Some(CHEST), 0, Click::Shift));
+        assert_eq!(None, container(&app, CHEST).unwrap().slots[0]);
+        let inventory = inventory(&mut app, ClientId::Server);
+        assert_eq!(Some(ItemStack::new(IRON_ORE, 3)), inventory.slots[0]);
+    }
+
+    #[test]
+    fn test_two_players_with_a_chest_open_see_each_others_changes() {
+        let mut app = server(GameMode::Survival);
+        let guest = join(&mut app);
+        let open = |client_id| FromClient {
+            client_id,
+            message: UseBlock { block: CHEST },
+        };
+        app.world_mut().write_message(open(ClientId::Server));
+        app.world_mut().write_message(open(guest));
+        app.update();
+        sent(&mut app);
+        app.world_mut().write_message(FromClient {
+            client_id: guest,
+            message: click(None, 0, Click::Shift),
+        });
+        app.update();
+        let chest = container(&app, CHEST).unwrap();
+        assert_eq!(Some(ItemStack::new(Item::Coal, 1)), chest.slots[0]);
+        // the host's sent what the guest put in, and so's the guest
+        assert_eq!(Some(&chest), sent(&mut app)[0].container.as_ref());
+        let mut query = app.world_mut().query::<&OpenContainer>();
+        for open in query.iter(app.world()) {
+            assert_eq!((CHEST, Some(&chest)), (open.at, open.sent.as_ref()));
+        }
+        assert_eq!(None, inventory(&mut app, guest).slots[0]);
+    }
+
+    #[test]
+    fn test_a_chest_broken_leaves_itself_and_whats_in_it() {
+        let mut app = server(GameMode::Survival);
+        send(&mut app, UseBlock { block: CHEST });
+        send(&mut app, click(None, 0, Click::Shift));
+        send(&mut app, click(None, 1, Click::Shift));
+        break_block(&mut app, CHEST);
+        assert_eq!(
+            BlockType::Air,
+            app.world().resource::<World>().get_block_at(CHEST)
+        );
+        assert_eq!(None, container(&app, CHEST));
+        let chest = ItemStack::new(Item::Block(BlockType::Chest), 1);
+        let expected = vec![
+            chest,
+            ItemStack::new(Item::Coal, 1),
+            ItemStack::new(IRON_ORE, 3),
+        ];
+        assert_eq!(expected, dropped(&mut app));
+    }
+
+    #[test]
+    fn test_a_generated_chest_rolls_its_loot_once_as_its_first_opened() {
+        let mut app = server(GameMode::Survival);
+        let (loot, rolled) = watchtower(&mut app);
+        assert_eq!(None, container(&app, loot));
+        send(&mut app, UseBlock { block: loot });
+        assert_eq!(rolled, container(&app, loot).unwrap().slots);
+        // something taken out stays taken, closed and opened again
+        let slot = rolled.iter().position(Option::is_some).unwrap();
+        send(&mut app, click(Some(loot), slot as u8, Click::Shift));
+        send(&mut app, CloseInventory);
+        send(&mut app, UseBlock { block: loot });
+        let opened = container(&app, loot).unwrap();
+        assert_eq!(None, opened.slots[slot]);
+        // and as it's saved and loaded, a container like any other
+        let mut reloaded = server(GameMode::Survival);
+        watchtower(&mut reloaded);
+        let mut containers = reloaded.world_mut().resource_mut::<Containers>();
+        containers.put(loot, opened.clone());
+        send(&mut reloaded, UseBlock { block: loot });
+        assert_eq!(Some(opened), container(&reloaded, loot));
+    }
+
+    #[test]
+    fn test_a_generated_chest_no_structure_accounts_for_opens_empty() {
+        let mut app = server(GameMode::Survival);
+        send(&mut app, UseBlock { block: STRAY });
+        assert_eq!(Container::new(BlockType::Chest), container(&app, STRAY));
+    }
+
+    #[test]
+    fn test_a_generated_chest_broken_unopened_leaves_its_loot_and_one_put_back_is_empty() {
+        let mut app = server(GameMode::Survival);
+        let (loot, rolled) = watchtower(&mut app);
+        break_block(&mut app, loot);
+        let mut expected: Vec<_> = rolled.into_iter().flatten().collect();
+        expected.push(ItemStack::new(Item::Block(BlockType::Chest), 1));
+        expected.sort_unstable_by_key(|stack| (stack.item.name(), stack.count));
+        assert_eq!(expected, dropped(&mut app));
+        // a chest a player puts there is theirs, and empty
+        let mut world = app.world_mut().resource_mut::<World>();
+        world.edit(loot, BlockType::Chest);
+        send(&mut app, UseBlock { block: loot });
+        assert_eq!(Container::new(BlockType::Chest), container(&app, loot));
     }
 }

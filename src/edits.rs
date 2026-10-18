@@ -29,6 +29,13 @@ impl Edits {
         self.chunks.entry(coord).or_default().insert(local, to);
     }
 
+    /// What a player made the block at `block`, if they changed it.
+    pub fn get(&self, block: I64Vec3) -> Option<BlockType> {
+        let coord = ChunkCoordinate::containing(block);
+        let local = ChunkCoordinate::local_block(block);
+        self.chunks.get(&coord)?.get(&local).copied()
+    }
+
     /// The chunks edited since this was last called.
     pub fn take_changed(&mut self) -> HashSet<ChunkCoordinate> {
         std::mem::take(&mut self.changed)

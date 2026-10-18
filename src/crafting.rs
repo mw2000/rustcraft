@@ -177,6 +177,10 @@ recipes! {
         name: "furnace", station: CraftingTable,
         ingredients: [(COBBLESTONE, 8)], output: (Item::Block(BlockType::Furnace), 1),
     },
+    Chest {
+        name: "chest", station: CraftingTable,
+        ingredients: [(PLANKS, 8)], output: (Item::Block(BlockType::Chest), 1),
+    },
     StoneBricks {
         name: "stone_bricks", station: CraftingTable,
         ingredients: [(COBBLESTONE, 4)], output: (Item::Block(BlockType::StoneBricks), 4),
@@ -456,6 +460,21 @@ mod tests {
             Recipe::StoneHoe.ingredients()
         );
         assert_eq!(Station::CraftingTable, Recipe::IronHoe.station());
+    }
+
+    #[test]
+    fn test_a_chest_is_made_from_eight_planks_at_a_crafting_table() {
+        assert_eq!(Station::CraftingTable, Recipe::Chest.station());
+        let mut inventory = Inventory::default();
+        inventory.slots[0] = Some(ItemStack::new(PLANKS, 17));
+        assert_eq!(2, Recipe::Chest.times_makeable(&inventory));
+        assert_eq!(
+            Some(ItemStack::new(Item::Block(BlockType::Chest), 1)),
+            Recipe::Chest.make(&mut inventory)
+        );
+        assert_eq!(Some(ItemStack::new(PLANKS, 9)), inventory.slots[0]);
+        // and it isn't a station, but a container
+        assert_eq!(None, Station::of_block(BlockType::Chest));
     }
 
     #[test]

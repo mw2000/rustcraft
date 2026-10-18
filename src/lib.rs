@@ -19,6 +19,7 @@ pub mod hud;
 pub mod interaction;
 pub mod inventory;
 pub mod items;
+pub mod loot;
 pub mod menu;
 pub mod picker;
 pub mod player;

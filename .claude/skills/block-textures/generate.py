@@ -56,6 +56,8 @@ TILES = [
     dict(name="FarmlandTop", drawn=True),
     *[dict(name=f"Wheat{stage}", drawn=True) for stage in range(7)],  # from shoots to ripe ears, not tinted
     dict(name="RipeWheat", drawn=True),
+    dict(name="ChestTop", drawn=True),
+    dict(name="ChestSide", drawn=True),
 ]
 
 

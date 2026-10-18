@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::allowances::Allowances;
+use super::containers::fill_loot;
 use super::drops::{Chance, DroppedItem};
 use super::sync::BlockChanges;
 use crate::block::BlockType;
@@ -98,7 +99,8 @@ type Players<'w, 's> = Query<
 /// tells the client asking for one that doesn't what's there instead. In survival a block placed
 /// is taken from the player's hotbar, and one broken leaves its items to pick up if it was broken
 /// with a tool of the tier it needs, and wears the tool held. A container broken in either mode
-/// leaves what was in it, as items are never lost with their container. Dirt or grass made
+/// leaves what was in it, as items are never lost with their container, and a chest the world
+/// generated leaves its loot. Dirt or grass made
 /// farmland is tilled with the hoe held, which wears it in survival, and a crop placed is
 /// planted, to grow from then (`farming`).
 #[allow(clippy::too_many_arguments)]
@@ -128,6 +130,9 @@ pub(super) fn receive_edits(
     } in requests.read()
     {
         let was = world.get_block_at(block);
+        // a chest the world generated is filled before it can be broken, so it leaves its loot;
+        // it comes up the same whether that's now or when it's opened
+        fill_loot(&world, &mut containers, block);
         // every request counts, so a flood of bad ones is stopped too
         let why_not = if allowances.take(client, time.elapsed()) {
             refusal(

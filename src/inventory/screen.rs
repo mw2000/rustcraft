@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Button;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
+use super::chest::{show_chest, spawn_chest};
 use super::furnace::{
     container_stack, follow_container, show_furnace, spawn_furnace, ContainerSlot, ContainerView,
 };
@@ -32,7 +33,8 @@ const HINT: &str = "Right click takes half a stack or puts down one, and shift-c
 
 /// In survival, the inventory (E) is the inventory screen: the main inventory's 27 slots over
 /// the hotbar's 9, as in Minecraft, beside the recipes that can be made by hand, or at the
-/// crafting table it was opened at, or beside the furnace's slots if it was opened at one.
+/// crafting table it was opened at, or beside the furnace's slots if it was opened at one, or
+/// under a chest's if it was opened at one of those.
 /// Clicks on the slots ask the server to move stacks about, and the stack picked up follows the
 /// mouse until it's put down. The game carries on behind it, as behind the block picker, and
 /// closing it puts the stack carried back.
@@ -52,6 +54,7 @@ impl Plugin for InventoryScreenPlugin {
                         name_hovered_item,
                         show_recipes,
                         show_furnace,
+                        show_chest,
                     )
                         .run_if(in_state(GameState::Inventory)),
                 ),
@@ -120,6 +123,7 @@ fn spawn_screen(
                         ..default()
                     })
                     .with_children(|slots| {
+                        spawn_chest(slots, &icons);
                         spawn_slots(slots, &icons, HOTBAR_SLOTS..SLOTS, 0.0);
                         spawn_slots(slots, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP);
                     });
@@ -157,22 +161,25 @@ fn spawn_slots(
     slots: std::ops::Range<usize>,
     gap: f32,
 ) {
-    screen
-        .spawn(Node {
-            display: Display::Grid,
-            grid_template_columns: RepeatedGridTrack::px(HOTBAR_SLOTS as u16, SLOT_SIZE),
-            row_gap: Val::Px(SLOT_GAP),
-            column_gap: Val::Px(SLOT_GAP),
-            margin: UiRect::top(Val::Px(gap)),
-            ..default()
-        })
-        .with_children(|grid| {
-            for slot in slots {
-                grid.spawn((Slot(slot), slot_button()))
-                    .with_child(stack_view(icons, StackView::Slot(slot)))
-                    .observe(click_slot);
-            }
-        });
+    screen.spawn(slot_grid(gap)).with_children(|grid| {
+        for slot in slots {
+            grid.spawn((Slot(slot), slot_button()))
+                .with_child(stack_view(icons, StackView::Slot(slot)))
+                .observe(click_slot);
+        }
+    });
+}
+
+/// A grid of slots nine to a row, as wide as the hotbar, `gap` pixels below what's above it.
+pub(super) fn slot_grid(gap: f32) -> Node {
+    Node {
+        display: Display::Grid,
+        grid_template_columns: RepeatedGridTrack::px(HOTBAR_SLOTS as u16, SLOT_SIZE),
+        row_gap: Val::Px(SLOT_GAP),
+        column_gap: Val::Px(SLOT_GAP),
+        margin: UiRect::top(Val::Px(gap)),
+        ..default()
+    }
 }
 
 /// A slot's button, for an inventory's slot or a container's.
@@ -297,7 +304,7 @@ fn open(
 }
 
 // The menu holds the cursor again as play resumes. The next time it opens, it's by hand,
-// unless it's at a crafting table or a furnace again.
+// unless it's at a station or a container again.
 fn close(
     mut screen: Query<&mut Node, With<Screen>>,
     mut closes: MessageWriter<CloseInventory>,

@@ -72,14 +72,15 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
-| Containers | Blocks holding items of their own in the world, so far the furnace, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs` |
+| Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
+| Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures` and `structures` skills | `examples/`, `.claude/skills/` |
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
-cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace), plants
+cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace, chest), plants
 (tall grass, poppy, dandelion, cornflower), the torch and the bed, and for farming farmland and
 wheat's eight stages.
 
@@ -858,6 +859,23 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     block for a lit furnace through the edit layer would rebuild meshes and send `BlockChanged`
     each time it lights and goes out, and blocks have no facing to show it on the front; it
     waits for block state beyond `BlockType` (and block light from a lit furnace with it).
+- **Built (M2.3): chests.** `chest` is a block (planks' hardness, quicker with an axe, its own
+  top and a side with a latch on every face, as blocks have no facing yet) made from 8 planks at
+  a crafting table, and a container of 27 slots (`Container::new`). Its rules are a furnace's
+  without the furnace's: any slot takes anything, and a stack shift-clicked in from the
+  inventory tops up the stacks of it there and then fills the first empty slot, as picking up
+  does (`inventory::add_to`); shift-clicked out, it goes into the inventory. Opening, clicks,
+  sending (`ContainerChanged`) and breaking are the furnace's paths unchanged, so several
+  players can have one open and see each other's changes, and a chest broken leaves itself and
+  what was in it. Its container's saved as a furnace's is, its fire never lit, so the region
+  format stays 4.
+  - **The screen** (`src/inventory/chest.rs`): right-clicking a chest in survival opens the
+    inventory screen with the chest's 27 slots over the inventory's, and no crafting list.
+    `ContainerView::opening` holds an empty container of the block's kind until the server's
+    sent the real one, so the screen knows what it's showing from the first frame.
+  - **Loot:** a chest the world generated is filled from a loot table the first time it's
+    opened or broken (§5.6).
+  - `PROTOCOL_VERSION` is 10, for the new block and recipe.
 
 ### 5.3 Crafting and progression
 
@@ -1150,6 +1168,39 @@ landmarks visible from far away (P1).
 - **Visible at distance (INV-5):** structures appear in the LODs like trees do, and big landmarks
   are tall enough to be seen from tens of kilometres. Lit windows at night are a goal.
 - **Loot:** chests carry loot tables (data), giving good reasons to visit.
+- **Built (M2.3): loot tables** (`src/loot.rs`). `TABLES` is every loot table (INV-6): a stable
+  name, a range of rolls, and entries of an item, a range of counts and a weight. There's one
+  for each structure planned, `ruin`, `watchtower`, `outpost`, `mineshaft`, `dungeon` and
+  `temple`, better the deeper or further out it's found: food, coal and torches near the
+  surface and the start, with a little metal and a tool now and then, and iron and iron tools
+  deep down and far away. `LootTable::roll(seed, at, slots)` draws the rolls, each entry by
+  weight and its count in its range, each stack into a random empty slot, from an RNG seeded
+  from the world's seed and the chest's position alone (INV-2), so every player, machine and
+  reload gets the same chest, and neighbouring chests differ.
+- **Loot chests (M2.3)**, the contract structures keep. Nothing about loot is stored in the
+  generated world (INV-1); a chest's loot comes to exist when it's first looked into.
+  - **Generation** puts a `chest` block at each `loot` marker of a template (`LOOT`: the
+    template's cell there becomes a chest as it's loaded, so full detail and LODs agree), and
+    records nothing else. A structure's chests roll from the loot table with the structure's
+    name; a test checks every structure with `loot` markers has one. M2.4's structures add a
+    table to `TABLES` under their name as they add their file. If one template ever wants
+    different chests, marker kinds such as `loot.<table>` can name tables per marker without
+    changing the server's side.
+  - **The server** (`server::containers::fill_loot`) treats a `chest` with no edit at its
+    position (players' chests are edits) and no chest container as unopened loot. The first
+    time anyone opens it or tries to break it, `loot::generated_table` finds the structure
+    whose `loot` marker is there, through `RegionStore::structures_near` as chunks find theirs
+    (its placement's remembered from generating the chunk, so this is a lookup), and its table
+    is rolled from the seed and the chest's position into a new container. From then on it's an
+    ordinary container, saved with its chunk's region like any other, so what's taken stays
+    taken and nothing's rolled again; a chunk with only containers and no edits is saved too.
+    Breaking one unopened leaves its loot. A generated chest no structure accounts for (a
+    template changed under an old world) opens empty, and a chest a player places where one was
+    broken is theirs, and empty.
+  - **Proven on the watchtower:** its top floor's marker is a chest, which seed 3's tower
+    nearest the spawn rolls the same from a fresh world as from one that's generated it, and
+    which the server fills once on first opening and keeps through closing and reloading.
+    Putting the chest there changed the golden checksum, which samples that structure's chunks.
 - **First structures, proposed:** desert temple, forest ruin, glacier outpost, mountain
   watchtower, mineshaft, dungeon, then villages.
 - New biomes come with the structures that need them, such as a jungle for jungle temples.
@@ -1158,7 +1209,7 @@ landmarks visible from far away (P1).
     `STRUCTURES` from files built in with `include_str!`, so generation reads nothing from disk,
     on a server as on a client. A file names the type, its placement, and its template: a size,
     the layer standing at ground level (those under it are sunk), a foundation block, a palette
-    of one character a block name, markers by kind (`loot` points for M2.3), and the layers as
+    of one character a block name, markers by kind (`loot` points, chests since M2.3), and the layers as
     text grids, bottom first. `.` leaves the world as it is and `-` clears it to air, carving
     interiors out of the ground. Text over a binary format with a dump tool, since a template a
     few thousand blocks big reads and diffs as a picture of itself; M2.2's `/structure save` can
@@ -1326,7 +1377,8 @@ start.**
 
 - ☑ **M2.1 Structure system.** Placement, templates, terrain fit, LODs (§5.6).
 - ☐ **M2.2 Structure authoring.** `/structure save` and loading in creative mode (§5.6).
-- ☐ **M2.3 Chests and loot tables.** (§5.6)
+- ☑ **M2.3 Chests and loot tables.** Chests as containers, loot tables rolled from the seed for
+  chests the world generates (§5.2, §5.6).
 - ☐ **M2.4 First structures.** Temple, ruin, outpost, watchtower, mineshaft, dungeon (§5.6).
 - ☐ **M2.5 Regional ores and higher tiers.** (§5.3)
 - ☐ **M2.6 New biomes.** Starting with the ones structures need (§5.7).

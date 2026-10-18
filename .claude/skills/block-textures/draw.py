@@ -190,6 +190,27 @@ def furnace_side(rng):
     return out
 
 
+def chest_top(rng):
+    out = planks(rng)
+    rim = shades("LogBark")
+    out[[0, 15]] = rim[1]  # the lid's rim, darker than its boards
+    out[:, [0, 15]] = rim[1]
+    return out
+
+
+def chest_side(rng):
+    out = planks(rng)
+    rim = shades("LogBark")
+    out[[0, 15]] = rim[1]
+    out[:, [0, 15]] = rim[1]
+    out[7] = rim[0]  # where the lid shuts on the box, along a seam between boards
+    # an iron latch over the seam, since blocks have no facing yet to keep it to a front
+    iron = sprite(["lggd", "gddd", "gdkd", "gddd", "dddd"], dict(l=(206, 206, 210), g=(168, 168, 174), d=(118, 118, 126), k=(46, 44, 48)))
+    for dy, dx, c in iron:
+        out[5 + dy, 6 + dx] = c
+    return out
+
+
 # A bed's blanket, darkest first, and its sheet and pillow.
 BLANKET = np.array([(132, 26, 30), (166, 36, 38), (196, 54, 52)], float)
 LINEN = np.array([(206, 204, 194), (232, 230, 222)], float)
@@ -349,7 +370,7 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
             TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
             BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
-            RipeWheat=wheat(7))
+            RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

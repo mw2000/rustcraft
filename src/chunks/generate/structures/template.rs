@@ -9,6 +9,10 @@ use crate::block::BlockType;
 // clears it to air, carving interiors out of the ground.
 const LEAVE: char = '.';
 const CLEAR: char = '-';
+/// The kind of marker where a structure has a chest of loot: generation puts a chest there, and
+/// the server fills it from the loot table named after the structure the first time it's opened
+/// (`loot`, §5.6).
+pub const LOOT: &str = "loot";
 
 /// How far above its floor any structure reaches, and how far under it the layers sunk into
 /// the ground go, so chunks and LOD nodes know how far up and down to look for them.
@@ -120,6 +124,10 @@ impl TryFrom<TemplateFile> for Template {
                 if point.cmplt(I64Vec3::ZERO).any() || point.cmpge(size).any() {
                     return Err(format!("{kind} marker {point} is outside the template"));
                 }
+                if kind == LOOT {
+                    let index = (point.y * size.z + point.z) * size.x + point.x;
+                    cells[index as usize] = Some(BlockType::Chest);
+                }
                 markers.push((kind.clone(), point));
             }
         }
@@ -206,6 +214,8 @@ mod tests {
         // outside it, the world is left as it is
         assert_eq!(None, t.cell(0, I64Vec3::new(3, 0, 0)));
         assert_eq!(vec![("loot".to_string(), I64Vec3::new(2, 1, 0))], t.markers);
+        // and its loot marker is a chest
+        assert_eq!(Some(BlockType::Chest), t.cell(0, I64Vec3::new(2, 1, 0)));
     }
 
     #[test]

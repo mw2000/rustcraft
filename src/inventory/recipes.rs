@@ -8,6 +8,7 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui_widgets::Button;
 
+use super::furnace::ContainerView;
 use super::icons::{counted_icon, ItemIcons};
 use super::Inventory;
 use crate::client::player::LocalPlayer;
@@ -132,11 +133,12 @@ fn craft(
 }
 
 /// Shows the recipes made at the screen's station, dimming those there aren't the ingredients
-/// for, or none at a furnace, which smelts rather than crafts and shows its own panel instead.
+/// for, or none at a container, which shows its own slots instead.
 /// Run every frame the screen's open, changing only what's changed, as there are a handful.
 #[allow(clippy::type_complexity)]
 pub(super) fn show_recipes(
     station: Res<CraftingStation>,
+    view: Res<ContainerView>,
     player: Query<&Inventory, With<LocalPlayer>>,
     mut list: Query<&mut Node, With<RecipeList>>,
     mut cards: Query<(&RecipeCard, &mut Node, &Children), Without<RecipeList>>,
@@ -146,9 +148,9 @@ pub(super) fn show_recipes(
     let Ok(inventory) = player.single() else {
         return;
     };
-    let display = match station.0 {
-        Station::Furnace => Display::None,
-        _ => Display::Flex,
+    let display = match view.at {
+        Some(_) => Display::None,
+        None => Display::Flex,
     };
     for mut node in &mut list {
         if node.display != display {

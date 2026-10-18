@@ -286,8 +286,11 @@ mod tests {
     }
 
     fn sorted(edits: &Edits, containers: &Containers, crops: &Crops) -> Vec<ChunkEdits> {
-        let mut chunks: Vec<_> = edits
-            .chunks()
+        let mut coords: Vec<_> = edits.chunks().chain(containers.chunks()).collect();
+        coords.sort_unstable_by_key(|coord| coord.0.to_array());
+        coords.dedup();
+        coords
+            .into_iter()
             .map(|coord| {
                 let mut blocks: Vec<_> = edits.in_chunk(coord).collect();
                 blocks.sort_unstable_by_key(|(local, _)| local.to_array());
@@ -305,9 +308,7 @@ mod tests {
                     crops,
                 }
             })
-            .collect();
-        chunks.sort_unstable_by_key(|chunk| chunk.coord.0.to_array());
-        chunks
+            .collect()
     }
 
     fn decoded(bytes: &[u8]) -> Vec<ChunkEdits> {
@@ -336,6 +337,17 @@ mod tests {
         furnace.fire.lasts = 80.0;
         furnace.fire.smelted = 4.0;
         furnace
+    }
+
+    // A chest with a few things in it.
+    fn chest() -> Container {
+        let mut chest = Container::new(BlockType::Chest).unwrap();
+        chest.slots[4] = Some(ItemStack::new(Item::Bread, 2));
+        chest.slots[26] = Some(ItemStack {
+            wear: 9,
+            ..ItemStack::new(Item::IronPickaxe, 1)
+        });
+        chest
     }
 
     #[test]
@@ -368,8 +380,13 @@ mod tests {
             },
             edits(
                 chunk(-1, 0, 31),
-                vec![(U16Vec3::new(4, 5, 6), BlockType::StoneBricks)],
+                vec![(U16Vec3::new(4, 5, 6), BlockType::Chest)],
             ),
+            // a chest the world generated, opened, where nothing was edited
+            ChunkEdits {
+                containers: vec![(U16Vec3::new(7, 1, 9), chest())],
+                ..edits(chunk(2, 30, 2), Vec::new())
+            },
         ];
         let bytes = encode(saved.clone());
         let mut expected = saved;
