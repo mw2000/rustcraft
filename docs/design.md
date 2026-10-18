@@ -1473,6 +1473,17 @@ landmarks visible from far away (P1).
     never generate, and the golden checksum is as it was.
   - Later: copying and pasting a box, and undo, if building in the game asks for them.
 
+**Style guide for structures (M2.4b on).** Every structure is reviewed in screenshots from
+several angles, near and far, before it lands. It should have:
+- *A silhouette:* varied heights, roofs that overhang, towers, chimneys, never a flat-topped box.
+- *Depth:* recessed windows and doors, pillars and beams standing out from the walls, walls
+  thicker at the base, steps up to entrances.
+- *A palette:* a main material, a trim and an accent (e.g. a stone base, log frame and plank
+  walls; sandstone with a darker banding), chosen to suit its biome.
+- *Weathering:* random mossy and cracked blocks, collapsed corners, vines, partly buried or
+  overgrown where it's old; variety from seeded variation, so no two look identical.
+- *An inside:* furnished and lit, with its loot somewhere that makes sense.
+
 ### 5.7 World and biomes
 
 - More biomes as content needs them: jungle, plains, swamp, savanna, taiga, badlands, and
@@ -1732,7 +1743,21 @@ start.**
 - ☑ **M2.2 Structure authoring.** `/structure save` and loading in creative mode (§5.6).
 - ☑ **M2.3 Chests and loot tables.** Chests as containers, loot tables rolled from the seed for
   chests the world generates (§5.2, §5.6).
-- ☐ **M2.4 First structures.** Temple, ruin, outpost, watchtower, mineshaft, dungeon (§5.6).
+- ☐ **M2.4a Building blocks.** What structures and players need to build things that look good:
+  - **Block state:** blocks that face a direction or have a small state (facing, top/bottom half,
+    open/closed, axis), stored compactly in `ChunkData`'s runs, saved, synced and meshed, placed
+    facing the player. Logs placed sideways and a furnace with a front come with it.
+  - **New shapes,** each a render style: stairs, slabs, fences and walls (joining their
+    neighbours), doors and trapdoors (open and close), glass and glass panes, ladders (climbable),
+    lanterns (hanging or standing, giving light), and a few decorative ones (bookshelves, barrels).
+  - **Weathered and coloured variants:** mossy cobblestone, cracked and mossy stone bricks, vines
+    (climbable, growing down walls), polished stone, coloured terracotta, darker and lighter
+    planks; textures by script (INV-8).
+  - Collision, raycasts, light (glass and panes let light through), LODs (shapes drawn as their
+    nearest cube far away) and the creative picker all know the shapes.
+- ☐ **M2.4b First structures,** to the style guide in the `structures` skill (§5.6): desert
+  temple, jungle temple, forest ruin, glacier outpost, mineshaft, dungeon, alongside the
+  watchtower, each reworked with the new blocks (§5.6).
 - ☐ **M2.5 Regional ores and higher tiers.** (§5.3)
 - ☐ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☐ **M2.7 Landmarks.** (§5.7)
