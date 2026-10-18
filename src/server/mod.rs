@@ -1,10 +1,12 @@
 //! What the server decides (INV-4): in singleplayer it runs in the same App as the client, and
 //! a dedicated server runs it on its own (§4.4).
 
+mod chunks;
 mod clock;
 mod commands;
 mod edits;
 
+pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
 
 use std::path::PathBuf;
@@ -25,8 +27,18 @@ impl Plugin for ServerPlugin {
         app.init_resource::<edits::EditAllowances>()
             .init_resource::<TimeOfDay>()
             .init_resource::<clock::ClockRate>()
+            .init_resource::<ServerChunks>()
             .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
             .add_systems(Update, run_clock.run_if(is_authority))
+            .add_systems(
+                PostUpdate,
+                // after the client's loader has taken the chunks it wants this frame, so in
+                // singleplayer the server finds those near the player on their way already, and
+                // before the edits checked against them
+                keep_chunks_near_players
+                    .before(edits::receive_edits)
+                    .run_if(is_authority),
+            )
             .add_systems(
                 PostUpdate,
                 // after replicon hands the server the requests made this frame, which with no

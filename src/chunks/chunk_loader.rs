@@ -25,7 +25,7 @@ use super::{
     lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
     material::{ChunkMaterial, WaterMaterial},
 };
-use crate::world::{Reroofed, World};
+use crate::world::{Holder, Reroofed, World};
 
 #[derive(Component)]
 pub struct Chunk {
@@ -239,7 +239,7 @@ pub fn mesh_nearing_sealed_chunks(mut chunk_loader: ResMut<ChunkLoader>) {
 pub fn gather_chunks(
     mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
-    world: Res<World>,
+    mut world: ResMut<World>,
     camera_query: Query<&GlobalTransform, (With<Camera>, With<ChildOf>)>,
     generating_chunks_query: Query<(), With<GenerateChunkData>>,
 ) {
@@ -262,12 +262,22 @@ pub fn gather_chunks(
         sort_by_viewport_bias(&mut next_chunks, camera_chunk, camera.forward());
         in_flight += next_chunks.len();
         for coord in next_chunks {
-            let regions = world.region_store.clone();
-            let task = task_pool.spawn(async move { generate_chunk(regions, coord) });
-            let entity = commands
-                .spawn((Chunk { coord }, GenerateChunkData { task }))
-                .id();
-            loader.chunk_to_entity.insert(coord, entity);
+            world.hold(coord, Holder::Client);
+            let mut chunk = commands.spawn(Chunk { coord });
+            match world.get_chunk_data(coord) {
+                // loaded already for the server's players
+                Some(data) => {
+                    if !data.empty() {
+                        chunk.insert(DirtyChunk);
+                    }
+                }
+                None => {
+                    let regions = world.region_store.clone();
+                    let task = task_pool.spawn(async move { generate_chunk(regions, coord) });
+                    chunk.insert(GenerateChunkData { task });
+                }
+            }
+            loader.chunk_to_entity.insert(coord, chunk.id());
         }
         if loader.spawn_queue.is_exhausted() || start.elapsed() >= GATHER_TIME_BUDGET {
             break;
@@ -407,7 +417,7 @@ pub fn unload_chunks(
             loader.chunk_to_entity.remove(&chunk.coord);
             loader.held.remove(&chunk.coord);
             loader.sealed.remove(&chunk.coord);
-            world.clear_chunk(chunk.coord);
+            world.release(chunk.coord, Holder::Client);
             unloaded.insert(LodKey::containing(chunk.coord, 1));
         }
     }

@@ -2,7 +2,7 @@
 //! `MinimalPlugins` with no window, camera or renderer.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bevy::ecs::message::Messages;
 use bevy::math::I64Vec3;
@@ -11,10 +11,10 @@ use bevy::state::app::StatesPlugin;
 use bevy::time::TimeUpdateStrategy;
 use bevy_replicon::prelude::*;
 use rustcraft::block::BlockType;
-use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData};
+use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::clock::TimeOfDay;
 use rustcraft::game_mode::{GameMode, GameModePlugin};
-use rustcraft::player::{Movement, Player, PlayerLook, PlayerOwner};
+use rustcraft::player::{Movement, Player, PlayerLook, PlayerOwner, EYE_HEIGHT};
 use rustcraft::protocol::{BlockChanged, ProtocolPlugin, RequestEdit};
 use rustcraft::save::{SavePlugin, WorldSave};
 use rustcraft::server::{ServerPlugin, WorldToOpen};
@@ -45,6 +45,26 @@ fn server(dir: &Path) -> App {
     app
 }
 
+// Runs the server until `done`, giving it time to generate chunks.
+fn update_until(app: &mut App, done: impl Fn(&World) -> bool) {
+    let start = Instant::now();
+    while !done(app.world().resource::<World>()) {
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "the server never got there"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        app.update();
+    }
+}
+
+// A directory for a world, emptied.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rustcraft-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 // The one player, the host's.
 fn hosts_player(app: &mut App) -> Entity {
     let (player, owner) = app
@@ -58,8 +78,7 @@ fn hosts_player(app: &mut App) -> Entity {
 
 #[test]
 fn test_gameplay_runs_and_saves_with_no_rendering() {
-    let dir = std::env::temp_dir().join(format!("rustcraft-headless-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = temp_dir("headless");
     let mut app = server(&dir);
     let player = hosts_player(&mut app);
     let spawn = app.world().resource::<World>().spawn();
@@ -69,11 +88,11 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
     );
     let started = app.world().resource::<TimeOfDay>().0;
 
-    // a block under the player's feet, in a chunk loaded empty
+    // a block under the player's feet, in a chunk the server loads itself, with no client
     let below = spawn.floor().as_i64vec3() - I64Vec3::Y;
-    app.world_mut()
-        .resource_mut::<World>()
-        .insert_chunk(ChunkCoordinate::containing(below), ChunkData::default());
+    update_until(&mut app, |world| {
+        world.is_chunk_generated(ChunkCoordinate::containing(below))
+    });
     let look = PlayerLook {
         yaw: 1.0,
         pitch: 0.3,
@@ -121,5 +140,48 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
         GameMode::Survival,
         *app.world().get::<GameMode>(player).unwrap()
     );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_server_alone_keeps_the_chunks_near_its_player_loaded() {
+    let dir = temp_dir("residency");
+    let mut app = server(&dir);
+    let player = hosts_player(&mut app);
+    let feet = app.world().get::<Transform>(player).unwrap().translation;
+    let eye = ChunkCoordinate::containing((feet + Vec3::Y * EYE_HEIGHT).floor().as_i64vec3());
+    let near: Vec<_> = eye.neighbors_26().into_iter().chain([eye]).collect();
+    update_until(&mut app, |world| {
+        near.iter().all(|&chunk| world.is_chunk_generated(chunk))
+    });
+    let far = ChunkCoordinate(eye.0 + I64Vec3::new(10, 0, 0));
+    assert!(!app.world().resource::<World>().is_chunk_generated(far));
+
+    // a block placed in the air under the player roofs the chunk under it, which with no
+    // client to draw it isn't recorded for redrawing
+    let below = feet.floor().as_i64vec3() - I64Vec3::Y;
+    let under = below - I64Vec3::Y * CHUNK_SIZE as i64;
+    assert!(!app.world().resource::<World>().is_under_ground(under));
+    app.world_mut().write_message(RequestEdit {
+        block: below,
+        to: BlockType::Bricks,
+        seq: 1,
+    });
+    app.update();
+    let mut world = app.world_mut().resource_mut::<World>();
+    assert!(world.is_under_ground(under));
+    assert!(world.take_reroofed().is_empty());
+
+    // and the chunks it left are let go of as it goes
+    let away = feet + Vec3::X * 100.0 * CHUNK_SIZE as f32;
+    app.world_mut()
+        .get_mut::<Transform>(player)
+        .unwrap()
+        .translation = away;
+    app.update();
+    let world = app.world().resource::<World>();
+    assert!(near.iter().all(|&chunk| !world.is_chunk_generated(chunk)));
+    let there = ChunkCoordinate::containing(away.floor().as_i64vec3());
+    update_until(&mut app, |world| world.is_chunk_generated(there));
     std::fs::remove_dir_all(&dir).unwrap();
 }

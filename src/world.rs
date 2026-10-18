@@ -23,11 +23,28 @@ pub struct Reroofed {
     pub sealed_changed: bool,
 }
 
+/// What keeps a chunk loaded, see `World::hold`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Holder {
+    /// The client, drawing it.
+    Client,
+    /// The server, for the players near it.
+    Server,
+}
+
+impl Holder {
+    fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
 #[derive(Resource)]
 pub struct World {
     seed: u32,
     pub height: u64,
     chunks: HashMap<ChunkCoordinate, Arc<ChunkData>>,
+    // what holds each chunk loaded or on its way, as a bit for each `Holder`
+    holders: HashMap<ChunkCoordinate, u8>,
     edits: Edits,
     // chunks whose roofs edits have changed, see `take_reroofed`
     reroofed: Vec<Reroofed>,
@@ -61,6 +78,7 @@ impl World {
             seed,
             height,
             chunks: HashMap::new(),
+            holders: HashMap::new(),
             edits,
             reroofed: Vec::new(),
             below: Arc::new(below),
@@ -154,18 +172,22 @@ impl World {
             if data.roofed == roof {
                 break;
             }
-            let sealed = |roof| roof == ColumnSet::ALL;
-            self.reroofed.push(Reroofed {
-                chunk: below,
-                sealed_changed: sealed(data.roofed) != sealed(roof),
-            });
+            // only what the client holds is drawn, so a server on its own records nothing
+            if self.holders.get(&below) != Some(&Holder::Server.bit()) {
+                let sealed = |roof| roof == ColumnSet::ALL;
+                self.reroofed.push(Reroofed {
+                    chunk: below,
+                    sealed_changed: sealed(data.roofed) != sealed(roof),
+                });
+            }
             Arc::make_mut(data).roofed = roof;
             roof = roof.union(data.opaque_columns());
         }
     }
 
     /// The loaded chunks whose roofs changed since this was last called, for the chunks lit
-    /// through them to be meshed again.
+    /// through them to be meshed again. Those the server alone holds are left out, as nothing
+    /// draws them.
     pub fn take_reroofed(&mut self) -> Vec<Reroofed> {
         std::mem::take(&mut self.reroofed)
     }
@@ -192,7 +214,26 @@ impl World {
         self.chunk(coord).cloned()
     }
 
-    pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
+    /// Has `holder` keep the chunk at `coord` loaded once it's generated, until it lets go of
+    /// it. Returns whether anything held it already, in which case it's loaded or on its way.
+    pub fn hold(&mut self, coord: ChunkCoordinate, holder: Holder) -> bool {
+        let holders = self.holders.entry(coord).or_default();
+        let held = *holders != 0;
+        *holders |= holder.bit();
+        held
+    }
+
+    /// Lets go of the chunk at `coord` for `holder`, and unloads it once nothing holds it, so
+    /// the client unloading behind the camera leaves what the server keeps for a player, and
+    /// the other way round.
+    pub fn release(&mut self, coord: ChunkCoordinate, holder: Holder) {
+        if let Some(holders) = self.holders.get_mut(&coord) {
+            *holders &= !holder.bit();
+            if *holders != 0 {
+                return;
+            }
+            self.holders.remove(&coord);
+        }
         self.chunks.remove(&coord);
     }
 
@@ -260,7 +301,7 @@ impl Debug for World {
 mod tests {
     use bevy::math::I64Vec3;
 
-    use super::World;
+    use super::{Holder, Reroofed, World};
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
     use crate::chunks::generate::generator::generate_chunk;
@@ -293,7 +334,7 @@ mod tests {
         world.insert_chunk(ChunkCoordinate(I64Vec3::Y), ChunkData::default());
         assert!(!world.is_chunk_buried(centre));
         // nor is a chunk buried by one not generated yet
-        world.clear_chunk(ChunkCoordinate(I64Vec3::Y));
+        world.release(ChunkCoordinate(I64Vec3::Y), Holder::Client);
         assert!(!world.is_chunk_buried(centre));
     }
 
@@ -323,13 +364,56 @@ mod tests {
         }
         assert!(!world.edit(I64Vec3::new(0, -1, 0), BlockType::Air));
 
-        world.clear_chunk(coord);
+        world.release(coord, Holder::Client);
         world.insert_chunk(coord, generate(&world));
         for (block, to) in edits {
             assert_eq!(to, world.get_block_at(block));
         }
         let local = ChunkCoordinate::local_block(untouched);
         assert_eq!(generated.get_block_at(local), world.get_block_at(untouched));
+    }
+
+    #[test]
+    fn test_a_chunk_is_unloaded_only_once_nothing_holds_it() {
+        let mut world = World::new(16);
+        let coord = ChunkCoordinate(I64Vec3::new(1, 2, 3));
+        assert!(!world.hold(coord, Holder::Client));
+        assert!(
+            world.hold(coord, Holder::Server),
+            "on its way for the client"
+        );
+        world.insert_chunk(coord, ChunkData::default());
+        // the client unloading it behind the camera leaves it for the server's players
+        world.release(coord, Holder::Client);
+        assert!(world.is_chunk_generated(coord));
+        world.release(coord, Holder::Server);
+        assert!(!world.is_chunk_generated(coord));
+        assert!(!world.hold(coord, Holder::Client), "forgotten once let go");
+    }
+
+    #[test]
+    fn test_reroofs_are_recorded_only_where_theyre_drawn() {
+        let mut world = World::new(16);
+        let (top, under) = (
+            ChunkCoordinate(I64Vec3::new(0, 2, 0)),
+            ChunkCoordinate(I64Vec3::new(0, 1, 0)),
+        );
+        for coord in [top, under] {
+            world.hold(coord, Holder::Server);
+            world.insert_chunk(coord, ChunkData::default());
+        }
+        let roof = top.0 * CHUNK_SIZE as i64;
+        assert!(world.edit(roof, BlockType::Stone));
+        assert!(world.is_under_ground(under.0 * CHUNK_SIZE as i64));
+        assert_eq!(Vec::<Reroofed>::new(), world.take_reroofed());
+
+        world.hold(under, Holder::Client);
+        assert!(world.edit(roof + I64Vec3::X, BlockType::Stone));
+        let reroofed = world.take_reroofed();
+        assert_eq!(
+            vec![under],
+            reroofed.iter().map(|r| r.chunk).collect::<Vec<_>>()
+        );
     }
 
     #[test]

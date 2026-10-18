@@ -372,10 +372,16 @@ mod tests {
     #[test]
     fn test_edits_beyond_the_world_or_its_loaded_chunks_are_refused() {
         let mut app = server(GameMode::Creative);
+        // to -x, in reach of the player at the edge of the loaded chunks, in the first frame,
+        // before the server has generated the chunks round the player
+        let edits = [
+            (I64Vec3::new(-1, 1, 0), BlockType::Stone),
+            (I64Vec3::new(-1, 0, 0), BlockType::Air),
+        ];
+        let (changed, rejected) = request(&mut app, &edits);
+        assert!(changed.is_empty(), "{changed:?}");
+        assert_eq!(2, rejected.len());
         assert_refused(&mut app, I64Vec3::new(0, -1, 0), BlockType::Air);
-        // to -x, in reach of the player at the edge of the loaded chunks
-        assert_refused(&mut app, I64Vec3::new(-1, 1, 0), BlockType::Stone);
-        assert_refused(&mut app, I64Vec3::new(-1, 0, 0), BlockType::Air);
     }
 
     #[test]

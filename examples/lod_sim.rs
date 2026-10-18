@@ -1,8 +1,8 @@
-// Runs the chunk and LOD loading systems headless (no window or GPU) with the
-// renderer settings from assets/settings.toml: lets the start area load, flies the
-// player along +x, then stops. Every 2 seconds it reports, by distance in chunks,
-// surface chunks with nothing visible drawing them, and full-detail chunks still
-// drawn outside the full-detail area, and logs frames slower than 100ms. Run with:
+// Runs the chunk and LOD loading systems headless (no window or GPU), with the server's
+// chunks near the player, and the renderer settings from assets/settings.toml: lets the
+// start area load, flies the player along +x, then stops. Every 2 seconds it reports, by
+// distance in chunks, surface chunks with nothing visible drawing them, and full-detail
+// chunks still drawn outside the full-detail area, and logs frames slower than 100ms. Run with:
 //   cargo run --release --example lod_sim -- [speed in blocks/s, default 80] [seconds moving, default 10] [up]
 // `up` flies straight up instead, checking every frame for holes under the camera.
 use std::time::{Duration, Instant};
@@ -23,6 +23,8 @@ use rustcraft::chunks::lod::{LodKey, LodLayout, LodLoader, LodNode};
 use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
 use rustcraft::horizon::render_distance_at;
+use rustcraft::player::Player;
+use rustcraft::server::{keep_chunks_near_players, ServerChunks};
 use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
 
 #[derive(Component)]
@@ -42,7 +44,9 @@ fn setup(
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
-    let player = commands.spawn(Transform::from_translation(spawn)).id();
+    let player = commands
+        .spawn((Player::default(), Transform::from_translation(spawn)))
+        .id();
     let camera = commands
         .spawn((
             SimCamera,
@@ -365,7 +369,10 @@ fn main() {
     .init_asset::<Image>()
     .init_asset::<ChunkMaterial>()
     .init_asset::<WaterMaterial>()
-    .add_systems(Startup, setup);
+    .init_resource::<ServerChunks>()
+    .add_systems(Startup, setup)
+    // as the integrated server does in singleplayer
+    .add_systems(PostUpdate, keep_chunks_near_players);
     app.update();
 
     let speed: f32 = std::env::args().nth(1).map_or(80.0, |s| s.parse().unwrap());
@@ -392,10 +399,14 @@ fn main() {
         if let Some(from) = moving_from {
             if t - from < move_secs {
                 let world = app.world_mut();
+                let step = (if climb { Vec3::Y } else { Vec3::X }) * speed * dt;
                 let mut q = world.query_filtered::<&mut GlobalTransform, With<SimCamera>>();
                 for mut g in q.iter_mut(world) {
-                    let step = if climb { Vec3::Y } else { Vec3::X };
-                    *g = GlobalTransform::from_translation(g.translation() + step * speed * dt);
+                    *g = GlobalTransform::from_translation(g.translation() + step);
+                }
+                let mut q = world.query_filtered::<&mut Transform, With<Player>>();
+                for mut body in q.iter_mut(world) {
+                    body.translation += step;
                 }
             }
         }

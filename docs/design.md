@@ -59,7 +59,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 
 | Area | What's there | Where |
 |---|---|---|
-| World | 1024 blocks tall, sea level 448, 16³ chunks stored run-length encoded, seeded with `RC_SEED` | `src/world.rs`, `src/chunks/chunk.rs`, `src/chunks/generate/mod.rs` |
+| World | 1024 blocks tall, sea level 448, 16³ chunks stored run-length encoded, seeded with `RC_SEED`; chunks held loaded by the client round the camera and by the server round each player | `src/world.rs`, `src/chunks/chunk.rs`, `src/chunks/generate/mod.rs`, `src/server/chunks.rs` |
 | Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it and ores in its stone (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`, `ores.rs`) |
 | Biomes | Climate-driven desert, forest, foothills, glacier; tinted grass and leaves | `src/chunks/generate/biome/` |
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
@@ -341,6 +341,24 @@ The world's state beyond the seed (INV-1).
   however far its frames have drifted from the server's, a fraction of a second's worth, or a
   moment's while it's wound; neither is worth smoothing yet. A client that leaves while
   winding should unwind the clock (M0.6).
+- **Built (M0.5f):** `World` keeps who holds each chunk, a bit for each `Holder` (`Client`,
+  `Server`): `hold` as a chunk's asked for, before it's generated, and `release`, which unloads
+  it once nothing holds it, in place of `clear_chunk`. The client holds a chunk as
+  `gather_chunks` takes it and lets go in `unload_chunks`; a chunk the server has loaded already
+  is taken as it is, with no generation. The server's `keep_chunks_near_players`
+  (`src/server/chunks.rs`, in `PostUpdate` before edits are checked) holds every chunk within 2
+  of a player's eye chunk, generating on the async compute pool (INV-7) those that aren't loaded
+  or on their way, and never meshing; it lets go of them past 3, cancelling any still
+  generating. Everything in reach of the eye (6 blocks with the slack) and the whole body is in
+  the eye's chunk or one against it, at most √3 off, so 2 leaves a chunk's margin to move into,
+  and letting go only past 3 keeps walking to and fro over a border from generating the same
+  chunks again. It runs after the client's loader, which in singleplayer has taken those chunks
+  already, so it generates nothing there (a flight in `lod_sim`, which now runs it, generated
+  none). `World::reroofed` records no chunk the server alone holds, as nothing draws it, so a
+  dedicated server, where no client holds anything, records nothing and needn't drain it.
+  The server draining it instead would, in one App, take it from the client.
+  `tests/headless.rs` checks a server on its own loads the chunks round its player and none far
+  off, lets go of them as it leaves, checks edits against them, and records no reroofs.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
   `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
@@ -587,7 +605,7 @@ and loads.**
 - ☑ **M0.3 Saving and loading.** World directory, edits and player position saved and loaded
   (§4.3). Edits survive a restart.
 - ☑ **M0.4 Game modes.** Survival and creative, `/gamemode`, creative block picker (§4.5).
-- ◐ **M0.5 Client/server split.** Integrated server in-process; game state flows through it
+- ☑ **M0.5 Client/server split.** Integrated server in-process; game state flows through it
   (§4.4). Singleplayer plays the same as before. In steps, each playable with tests green:
   - ☑ **M0.5a Game state off the camera.** A `PlayerLook { yaw, pitch }` on the player that the
     camera follows; movement and saving read it; the movement step as a pure function; the clock
@@ -598,13 +616,12 @@ and loads.**
     the camera on its `LocalPlayer`.
   - ☑ **M0.5d Commands and game modes on the server.**
   - ☑ **M0.5e Time on the server**, with `TimeSync`.
-  - ☐ **M0.5f Server chunk residency**, headless, with shared holders in `World`. A dedicated
-    server must drain `World::reroofed` itself, since only the client takes it now, and
-    `EditAllowances` must forget a client when it disconnects (M0.6).
+  - ☑ **M0.5f Server chunk residency**, headless, with shared holders in `World`.
 - ☐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
   replicated, simple player models, chat (§4.4). In steps:
   - ☐ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
-    two-App tests over the memory transport.
+    two-App tests over the memory transport. `EditAllowances` forgets a client when it
+    disconnects.
   - ☐ **M0.6b Determinism handshake**, with golden checksums and a CI matrix of Windows, macOS
     and Linux (D-3).
   - ☐ **M0.6c Edit sync**: `ChunkEdits` on joining and moving, `BlockChanged` by area, client
