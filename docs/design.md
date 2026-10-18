@@ -906,17 +906,17 @@ Done when: **the world feels inhabited, and night is dangerous.**
 
 ### Open
 
-- **D-3 Cross-platform determinism.** Is same-version determinism enough, or does generation need
-  to avoid platform-dependent float functions (`sin`, `exp` and the like differ across libm
-  implementations) so Windows, macOS and Linux agree? Test early, in M0.6, by comparing chunk
-  checksums across platforms. If they differ, switch the noise to deterministic math. Since
-  M0.6b CI's `determinism` job runs the golden checksum test (§4.4) on `ubuntu-latest`,
-  `windows-latest` and `macos-latest`: if they all pass, same-version determinism holds there
-  for now and this can be decided; a platform that fails shows where it doesn't.
 - **D-4 Crafting model.** Minecraft-style shaped grid, or ingredient lists at stations. Leaning
   towards ingredient lists: simpler, clearer, and less of a copy.
 
 ### Decided
+
+- **D-3 Same-version determinism is enough, and CI guards it.** On 2026-10-18 the golden
+  checksum test (§4.4, M0.6b) passed on `ubuntu-latest`, `windows-latest` and `macos-latest`
+  alike, so generation is byte-identical across the three platforms at the same game version, and
+  no deterministic-maths rewrite of the noise is needed. CI's `determinism` job runs it on every
+  push: a platform that ever disagrees fails there, and the join handshake refuses the mismatch
+  rather than letting players see different worlds. Decided 2026-10-18.
 
 - **D-5 Hunger is in, kept simple** (§5.5): a food bar, eating to refill it, healing when it's
   full enough and hurting when it's empty. Farming joins the plan as M1.9 to feed it.
