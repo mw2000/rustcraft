@@ -258,6 +258,50 @@ def ember_lamp(rng):
     return bevel(out, (214, 242, 255), (110, 160, 200), width=2)
 
 
+def cells(rng, n=3, jitter=(0.15, 0.85)):
+    """Jittered points on an n x n grid, wrapped so the tile is seamless: each texel's nearest point, and how much
+    nearer it is than the next, small where two cells meet."""
+    points = (np.stack(np.meshgrid(np.arange(n), np.arange(n)), -1).reshape(-1, 2) + rng.uniform(*jitter, (n * n, 2))) * 16 / n
+    yx = np.stack(np.mgrid[:16, :16], -1)[:, :, None] + 0.5
+    dist = np.linalg.norm((yx - points + 8) % 16 - 8, axis=-1)
+    order = np.sort(dist, -1)
+    return dist.argmin(-1), order[..., 1] - order[..., 0]
+
+
+def basalt_side(rng):
+    """Dark columns standing side by side, four texels wide, each lit down its left edge, cracked across now and
+    then, with dark joints between them."""
+    rock = np.array([(58, 56, 62), (70, 68, 74), (82, 80, 86), (98, 96, 102)], float)
+    y, x = np.mgrid[:16, :16]
+    out = rock[1:3][levels(noise(rng, (2, 0)), 2)]  # streaked up and down the columns
+    out[x % 4 == 1] = rock[3]
+    out[x % 4 == 0] = rock[0] * 0.75
+    for column in range(4):  # a crack across each, at its own height
+        out[rng.integers(0, 16), column * 4 + 1:column * 4 + 4] = rock[0]
+    return out
+
+
+def basalt_top(rng):
+    """The ends of the columns, cut across: rough polygons of dark rock with dark joints."""
+    rock = np.array([(60, 58, 64), (72, 70, 76), (84, 82, 88)], float)
+    nearest, gap = cells(rng, 3, (0.25, 0.75))
+    out = rock[rng.integers(0, 3, 9)[nearest]]
+    out[gap < 1.0] = rock[0] * 0.7
+    return out
+
+
+def magma(rng):
+    """Molten rock glowing between plates of dark crust, yellow-white where it's hottest, so it reads as glowing
+    orange from far off."""
+    glow = np.array([(206, 64, 18), (240, 110, 28), (255, 162, 48), (255, 222, 120)], float)
+    crust = np.array([(58, 30, 26), (82, 42, 30)], float)
+    nearest, gap = cells(rng, 2, (0.1, 0.9))
+    out = glow[levels(noise(rng) + np.clip(2.0 - gap, 0, 2.0), 4)]
+    plate = (gap > 2.4) & (noise(rng, (2, 2)) > 0.3)  # crusted over in plates, short of the cracks
+    out[plate] = crust[(noise(rng) > 0.5).astype(int)][plate]
+    return out
+
+
 def crafting_table_top(rng):
     wood = shades("LogEnd")
     frame = shades("LogBark")
@@ -814,7 +858,7 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             Terracotta=terracotta((152, 94, 67)), RedTerracotta=terracotta((143, 61, 47)), YellowTerracotta=terracotta((186, 133, 35)),
             BlueTerracotta=terracotta((70, 62, 94)), GreenTerracotta=terracotta((76, 83, 42)), DarkPlanks=dark_planks,
             LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end,
-            Wool=wool)
+            Wool=wool, BasaltSide=basalt_side, BasaltTop=basalt_top, Magma=magma)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

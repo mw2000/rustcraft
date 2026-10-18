@@ -1698,6 +1698,50 @@ need the ground shaped low and wet, and plains were most of the gap savanna now 
 - **Map:** `map::Relief` colours grass by `Biomes::grass_colour`, under leaves by tree density,
   and draws snow where the grass is under it, so the in-game map and `world_map` both show the
   new biomes.
+
+Built (M2.7): great peaks, volcanoes and giant trees, under `src/chunks/generate/landmarks/`.
+The fallen tower is left for a later milestone, built from structure templates.
+
+- **Placement.** The world is a grid of cells 8192 blocks across (`LANDMARK_CELL`), each
+  holding at most one landmark that stays wholly inside it, so a column only asks its own cell
+  (INV-3). Each cell tries the kinds in an order hashed from the seed and the cell, a few spots
+  each (giant trees 24, as they need forest or jungle), on the terrain as it is without
+  landmarks (`NoiseGenerator::without_landmarks`), so they're placed once when the noise is
+  made and every LOD and machine finds the same ones (INV-2). A world holds 6–16, every kind
+  common, and every seed tested has a peak or volcano within 14 km of its spawn; seed 3 has a
+  volcano 2.7 km off. `world_map` lists them.
+- **Shaped into the height field.** Peaks and volcanoes are lifts on the column's height
+  (`Landmarks::shape`), past their reach exactly the land as it was, and blending into it with
+  no step steeper than the land's own. Most of the world pays a cell lookup and a distance.
+  A coarse cell sees the lift averaged over its width, so LODs keep a peak's shape and the
+  coarsest still stand within 60 blocks of the summit (INV-5).
+- **Great peak:** 1500–1900 blocks across its foot, raised to 950–990 (500 or more over the
+  sea, eased under the top of the world), concave flanks with three to five faces between
+  ridges, crags, and bands of cliff that fade out of coarse cells. It stands on low land not
+  in a range. Its top is the `summit` biome, snow-capped from 420 over the sea in any climate
+  but for its cliffs. Fog thins over high ground (`land_haze` in `fog.wesl`), so its snows
+  stand out against the sky from as far as the haze hides the lowlands; tests check its
+  summit rises over the horizon at nine tenths of the drawn distance from the ground or the
+  air, with the world's curve (§4.6).
+- **Volcano:** a cone 1200–1500 blocks across rising 340–440 blocks, with a crater 110–150
+  blocks wide and 45–65 deep. The `volcano` biome turns the cone to basalt (new, with its own
+  tiles) out to a wandering ash line; the `crater` biome floors it with magma (new, light 14,
+  breaking to basalt), and four streams of magma run part way down its flanks. Magma glows at
+  every distance (`MAGMA_GLOW` in `world.wesl`), as LODs carry no block light, so a crater
+  shows at night. Caves stay shut under it.
+- **Giant tree:** 150–230 blocks tall in forest or jungle, a trunk 12–16 thick on buttress
+  roots, six to nine branches each ending in a mass of leaves, built block by block on its
+  own, like trees. The trunk is hollow, with a door at its foot, windows up it, and a stair
+  winding up the inside, turned so it reaches the way out onto the lowest branch; a test walks
+  from the door to the branch for the smallest and biggest. Cells up to 4 wide draw it as wood
+  and leaves where enough of the cell is them, wider ones as boxes, as structures are. Normal
+  trees keep out of its roots, and caves out from under its trunk.
+- **Structures** keep out of a peak's steep heart, a volcano's ash and a giant tree's crown
+  (`Landmarks::keeps_clear`).
+- **Map:** `map::Relief` draws basalt and magma, so volcanoes show on the map and in
+  `world_map`; peaks show by their height and snow as any mountain.
+- **Blocks:** basalt and magma, tiles drawn by the `block-textures` skill. The golden checksum
+  changed, now sampling the landmark nearest the spawn.
 - **Structures** name biomes in their placement; a test checks every name is a biome's. The
   watchtower stands in taiga and savanna too, as they took ground it had in forest and
   foothills.
@@ -2100,7 +2144,10 @@ start.**
   watchtower, each reworked with the new blocks (§5.6).
 - ☑ **M2.5 Regional ores and higher tiers.** (§5.3, §5.4)
 - ☑ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
-- ☐ **M2.7 Landmarks.** (§5.7)
+- ☑ **M2.7 Landmarks.** Great peaks, volcanoes and giant trees (§5.7).
+  - ☐ Follow-up: a fallen tower and other built landmarks, from structure templates.
+  - ☐ Follow-up: magma streams down a volcano's flanks show only in cells two blocks wide or
+    narrower, so they vanish past a few hundred blocks; draw them in coarse LODs too.
 - ☑ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2, §4.4).
   - ☐ Follow-up: draw builds as boxes in coarse LODs, as structures are, so towers and houses
     narrower than half a cell stay visible beyond ~1 km (§4.2, Built M2.8).

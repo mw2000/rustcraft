@@ -5,6 +5,7 @@ use super::fractal::{resolved, Fractal};
 
 use super::biome::{smoothstep, BaseColumn, BiomeId, Biomes, Climate};
 use super::caves::Caves;
+use super::landmarks::Landmarks;
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -126,6 +127,7 @@ pub struct NoiseGenerator {
     humidity: Fbm<Perlin>,
     biomes: Biomes,
     caves: Caves,
+    landmarks: Landmarks,
 }
 
 impl NoiseGenerator {
@@ -141,7 +143,7 @@ impl NoiseGenerator {
         let fractal = |i: u32, wavelength: f64, octaves: usize| {
             Fractal::new(field_seed(i), wavelength, octaves, 2.0, 0.5)
         };
-        Self {
+        let mut noise = Self {
             seed,
             warp_x: fbm(0, WARP_WAVELENGTH, 3),
             warp_z: fbm(1, WARP_WAVELENGTH, 3),
@@ -158,7 +160,11 @@ impl NoiseGenerator {
             humidity: fbm(10, CLIMATE_WAVELENGTH, 4),
             biomes: Biomes::new(seed),
             caves: Caves::new(seed),
-        }
+            landmarks: Landmarks::none(seed),
+        };
+        // placed on the terrain as it is without them, which `sample` gives until they're in
+        noise.landmarks = Landmarks::place(&noise);
+        noise
     }
 
     // Column height in blocks.
@@ -178,7 +184,20 @@ impl NoiseGenerator {
         &self.caves
     }
 
-    // The base terrain, then whichever biomes the climate here calls for.
+    pub fn landmarks(&self) -> &Landmarks {
+        &self.landmarks
+    }
+
+    /// The world of `seed` as it would be without its landmarks.
+    #[cfg(test)]
+    pub(super) fn without_landmarks(seed: u32) -> Self {
+        Self {
+            landmarks: Landmarks::none(seed),
+            ..Self::new(seed)
+        }
+    }
+
+    // The base terrain, then whichever biomes the climate here calls for, then any landmark.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
         self.sample_for_cell(x, z, 1.0)
     }
@@ -188,7 +207,7 @@ impl NoiseGenerator {
     /// gaps that change from one LOD level to the next. The same as `sample` for single blocks.
     pub fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
         let (continentalness, ruggedness, height) = self.base_terrain(x, z, cell);
-        let (height, biome, trees) = self.biomes.shape(&BaseColumn {
+        let shaped = self.biomes.shape(&BaseColumn {
             x,
             z,
             cell,
@@ -197,6 +216,7 @@ impl NoiseGenerator {
             ruggedness,
             climate: self.climate(x, z),
         });
+        let (height, biome, trees) = self.landmarks.shape(x, z, cell, shaped);
         TerrainSample {
             continentalness,
             height: height.max(0.0),
@@ -355,6 +375,22 @@ fn ease_peaks(height: f64) -> f64 {
     MAX_HEIGHT - room * (-(height - PEAK_EASE_START) / room).exp()
 }
 
+/// Ground `height` high raised by `lift`, as if the lift had been there before peaks were
+/// eased under the top of the world: the same as `height + lift` below the ease, and never
+/// reaching the top.
+pub(super) fn raise(height: f64, lift: f64) -> f64 {
+    ease_peaks(unease_peaks(height) + lift)
+}
+
+// The height `ease_peaks` eased to `height`.
+fn unease_peaks(height: f64) -> f64 {
+    if height <= PEAK_EASE_START {
+        return height;
+    }
+    let room = MAX_HEIGHT - PEAK_EASE_START;
+    PEAK_EASE_START - room * ((MAX_HEIGHT - height).max(f64::MIN_POSITIVE) / room).ln()
+}
+
 // 0 inside the world, rising to 1 in the ocean ring at its edge.
 fn edge_falloff(x: f64, z: f64) -> f64 {
     let half = WORLD_HALF_SIZE as f64;
@@ -399,6 +435,16 @@ mod tests {
         assert_eq!(300.0, ease_peaks(300.0));
         assert!(ease_peaks(450.0) > ease_peaks(420.0));
         assert!(ease_peaks(1000.0) < MAX_HEIGHT);
+    }
+
+    #[test]
+    fn test_raising_eases_under_max_height_and_undoes_the_ease() {
+        for height in [300.0, 900.0, 950.0, 1000.0] {
+            assert!((raise(height, 0.0) - height).abs() < 1e-9, "{height}");
+            assert!(raise(height, 400.0) < MAX_HEIGHT);
+            assert!(raise(height, 1.0) > height);
+        }
+        assert_eq!(500.0, raise(450.0, 50.0));
     }
 
     #[test]

@@ -563,6 +563,21 @@ blocks! {
         top: Tile::EmberLamp, side: Tile::EmberLamp, bottom: Tile::EmberLamp,
         lod: Tile::EmberLamp,
     },
+    // A volcano's rock (§5.7), dark and columnar, worked like stone.
+    Basalt {
+        name: "basalt", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 8.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::BasaltTop, side: Tile::BasaltSide, bottom: Tile::BasaltTop, lod: Tile::BasaltSide,
+    },
+    // Molten rock glowing in a volcano's crater, bright enough to see from far off at night,
+    // see `world.wesl`. Broken, it cools to basalt.
+    Magma {
+        name: "magma", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 14,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Basalt),
+        hardness: 6.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::Magma, side: Tile::Magma, bottom: Tile::Magma, lod: Tile::Magma,
+    },
     CraftingTable {
         name: "crafting_table", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
@@ -1078,9 +1093,12 @@ pub enum Tile {
     BarrelSide,
     BarrelBottom,
     Wool,
+    BasaltSide,
+    BasaltTop,
+    Magma,
 }
 
-pub const TILE_COUNT: usize = 79;
+pub const TILE_COUNT: usize = 82;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -1129,7 +1147,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Wool as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Magma as usize + 1);
     }
 
     #[test]

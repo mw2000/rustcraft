@@ -128,12 +128,15 @@ pub(super) fn terrain_block(
 }
 
 // How deep each surface goes before the rock under it, counting the top layer: grass over dirt,
-// sand over sandstone, gravel, and snow, or the ice of a glacier over snow.
+// sand over sandstone, gravel, and snow, or the ice of a glacier over snow, and a volcano's
+// basalt, with stone at its heart for embers to grow in, and its magma over basalt.
 const DIRT_DEPTH: i64 = 4;
 const SAND_DEPTH: i64 = 4;
 const SANDSTONE_DEPTH: i64 = 8;
 const GRAVEL_DEPTH: i64 = 4;
 const SNOW_DEPTH: i64 = 8;
+const BASALT_DEPTH: i64 = 16;
+const MAGMA_DEPTH: i64 = 2;
 
 // The ground at `world_y`, which the terrain has as `block` all the way down: the top layer is
 // the surface itself, then soil a few blocks deep, then stone. Only for full detail, since wider
@@ -161,6 +164,9 @@ pub(super) fn under_surface(
         BlockType::Sand => soil(BlockType::Sandstone, SANDSTONE_DEPTH),
         BlockType::Gravel => soil(BlockType::Gravel, GRAVEL_DEPTH),
         BlockType::Snow | BlockType::Ice => soil(BlockType::Snow, SNOW_DEPTH),
+        BlockType::Basalt => soil(BlockType::Basalt, BASALT_DEPTH),
+        BlockType::Magma if depth < MAGMA_DEPTH => BlockType::Magma,
+        BlockType::Magma => soil(BlockType::Basalt, BASALT_DEPTH),
         other => other,
     }
 }

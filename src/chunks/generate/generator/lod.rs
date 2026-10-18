@@ -12,6 +12,7 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::{BiomeId, Biomes};
 use crate::chunks::generate::columns::ColumnGrid;
 use crate::chunks::generate::columns::COARSE_CELL;
+use crate::chunks::generate::landmarks::GiantTree;
 use crate::chunks::generate::light::{Light, SkyLight};
 use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::region_store::RegionStore;
@@ -24,6 +25,7 @@ use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::THIN_TRUNK_CELL;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::{LodKey, NodeEdits};
+use bevy::math::DVec3;
 use bevy::math::I64Vec2;
 use bevy::math::I64Vec3;
 use bevy::math::IVec3;
@@ -217,6 +219,19 @@ impl LodBlocks {
                 boxes.extend(structure_boxes(placed, &grid, base, cell, size));
             }
         }
+        let giants = noise.landmarks().giant_trees_near(min, min + span + cell);
+        for giant in &giants {
+            if GiantTree::drawn_as_boxes(cell) {
+                boxes.extend(giant_tree_boxes(giant, base, cell, size));
+            } else {
+                giant.plant(
+                    base,
+                    cell,
+                    (IVec3::splat(-1), IVec3::splat(size)),
+                    |coord, block| cells[Self::index(size, coord)] = block,
+                );
+            }
+        }
         if real_trees {
             if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
                 let mut ground = GridGround {
@@ -228,7 +243,7 @@ impl LodBlocks {
                     last: None,
                 };
                 let mut trees = trees_near(noise, &mut ground, min, min + span + cell);
-                clear_trees(&mut trees, &structures);
+                clear_trees(&mut trees, &structures, &giants);
                 let canopy = (cell >= CANOPY_CELL).then(|| Canopy::new(&trees, base, cell, size));
                 if let Some(canopy) = &canopy {
                     forest = canopy.cover.clone();
@@ -368,10 +383,11 @@ impl LodBlocks {
                 );
             }
         }
+        let giants = noise.landmarks().giant_trees_near(min, min + span + cell);
         let mut trees = Vec::new();
         if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
             trees = trees_near(regions.noise(), &mut heights, min, min + span + cell);
-            clear_trees(&mut trees, &structures);
+            clear_trees(&mut trees, &structures, &giants);
             for tree in &trees {
                 tree.plant(
                     base,
@@ -385,6 +401,14 @@ impl LodBlocks {
                     },
                 );
             }
+        }
+        for giant in &giants {
+            giant.plant(
+                base,
+                cell,
+                (IVec3::splat(-1), IVec3::splat(size)),
+                |coord, block| cells[Self::index(size, coord)] = block,
+            );
         }
 
         apply_edits(&mut cells, edits);
@@ -680,6 +704,27 @@ fn structure_boxes(
             block,
             tint: Vec3::ONE,
             faces: BoxFaces::NoBottom,
+        })
+        .collect()
+}
+
+// The boxes `giant` is drawn as in a coarse node with its lowest block and cell size at `base`,
+// if its trunk's foot is in the node: one node draws each, as each tree.
+fn giant_tree_boxes(giant: &GiantTree, base: I64Vec3, cell: i64, size: i32) -> Vec<LodBox> {
+    let at = (giant.base - base).div_euclid(I64Vec3::splat(cell));
+    if at.cmplt(I64Vec3::ZERO).any() || at.cmpge(I64Vec3::splat(size as i64)).any() {
+        return Vec::new();
+    }
+    let mesh_at = |block: DVec3| ((block - base.as_dvec3()) / cell as f64 - 0.5).as_vec3();
+    giant
+        .boxes(cell)
+        .into_iter()
+        .map(|(min, max, block)| LodBox {
+            min: mesh_at(min),
+            max: mesh_at(max),
+            block,
+            tint: Vec3::ONE,
+            faces: BoxFaces::All,
         })
         .collect()
 }

@@ -18,19 +18,20 @@ const FAR_COLUMNS: [I64Vec2; 4] = [
     I64Vec2::new(2_900, -1_700),
     I64Vec2::new(-7_400, 5_300),
     I64Vec2::new(11_976, 12_500),
-    I64Vec2::new(-2_112, -2_112),
+    I64Vec2::new(6_144, 1_152),
 ];
 // The chunk layers sampled in each column besides those at, over and just under its ground: a
 // cavern's depth, near the bottom where ores are richest, where embers are, halfway between,
 // and where gold is under the spawn's savanna.
 const DEEP_LAYERS: [i64; 5] = [1, 3, 6, 12, 20];
 // The nearest structure to the spawn within this many blocks each way is sampled too, its floor
-// and the chunk over it, so the structures a world builds are checked like its terrain.
+// and the chunk over it, so the structures a world builds are checked like its terrain, and so
+// is the nearest landmark, at its middle.
 const STRUCTURE_SEARCH: i64 = 4096;
 
 /// The checksum of the sample chunks `seed` generates: a few at the spawn and a few thousands
-/// of blocks away, from the surface with its plants and trees down through caves and ores, and
-/// a structure.
+/// of blocks away, from the surface with its plants and trees down through caves and ores, a
+/// structure and a landmark.
 /// FNV-1a over each block's name and each column's roof, so it's the same on every machine and
 /// in every version that generates the same blocks, whatever the block table's order.
 pub fn world_checksum(seed: u32) -> u64 {
@@ -45,8 +46,18 @@ pub fn world_checksum(seed: u32) -> u64 {
 fn samples(seed: u32) -> Vec<ChunkData> {
     let noise = Arc::new(NoiseGenerator::new(seed));
     let (spawn_x, spawn_z, _) = noise.find_spawn();
-    let regions = Arc::new(RegionStore::new(noise));
     let spawn = I64Vec2::new(spawn_x, spawn_z);
+    let landmark = noise
+        .landmarks()
+        .all()
+        .map(|landmark| landmark.centre().round().as_i64vec2())
+        .min_by_key(|at| (*at - spawn).length_squared());
+    let regions = Arc::new(RegionStore::new(noise));
+    let landmark = landmark.into_iter().flat_map(|at| {
+        let ground = regions.get_height(at.x, at.y) as i64;
+        let ground = ChunkCoordinate::containing(I64Vec3::new(at.x, ground, at.y));
+        [ground, ChunkCoordinate(ground.0 + I64Vec3::Y)]
+    });
     let structure = regions
         .structures_near(spawn - STRUCTURE_SEARCH, spawn + STRUCTURE_SEARCH)
         .into_iter()
@@ -65,6 +76,7 @@ fn samples(seed: u32) -> Vec<ChunkData> {
                 .map(move |layer| ChunkCoordinate(ground.0.with_y(layer)))
         })
         .chain(structure)
+        .chain(landmark)
         .map(|coord| generate_chunk(regions.clone(), coord))
         .collect()
 }
@@ -111,10 +123,10 @@ mod tests {
     // update it deliberately, knowing that worlds will generate differently from before, so a
     // game of the version before can't join one of this version, and saved edits sit on new
     // terrain. CI runs this on Linux, Windows and macOS to see whether they agree (D-3).
-    // Last changed by M2.5, which brought ores under the far climates and embers at the bottom
-    // of the world, frost crystal under the taiga column and jade under the jungle's among them,
-    // and sampled two more layers, for gold under the spawn's savanna and the embers.
-    const GOLDEN: u64 = 0xb76e_b1aa_0d6b_57f7;
+    // Last changed by M2.7, which raised great peaks and volcanoes and grew giant trees, kept
+    // structures and caves out of them, and sampled the landmark nearest the spawn, a volcano
+    // with its crater's magma, moving a far column there that had fallen inside one.
+    const GOLDEN: u64 = 0x1d28_6dd7_c575_1b75;
 
     #[test]
     fn test_generation_matches_its_golden_checksum() {
@@ -131,6 +143,8 @@ mod tests {
         assert!(blocks.iter().any(BlockType::is_plant));
         assert!(blocks.contains(&BlockType::Leaves));
         assert!(blocks.contains(&BlockType::StoneBricks));
+        // the volcano nearest the spawn's crater
+        assert!(blocks.contains(&BlockType::Magma));
         // and the far climates' ores, under the spawn's savanna and the taiga and jungle
         // columns, and the deepest
         for ore in [

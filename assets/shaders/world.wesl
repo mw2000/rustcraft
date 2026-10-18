@@ -8,7 +8,7 @@ import bevy_pbr::render::{
 };
 import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
 import super::foliage::{is_leaf, sway, swayed};
-import super::fog::fogged;
+import super::fog::{fogged_by, land_haze};
 import super::lighting::{direct_moon, direct_sun, open_sky};
 import super::sky::SUN_LIGHT;
 import super::cloud_shadow::cloud_shadow;
@@ -35,6 +35,9 @@ const BLOCK_LIGHT_CURVE: f32 = 2.0;
 // brightly whatever the light.
 const FLAME_BOTTOM: f32 = 9.0 / 16.0;
 const FLAME_GLOW: f32 = 1.6;
+// Magma glows at least this brightly, near or far, so a volcano's crater shows at night from
+// kilometres away, where LODs draw no block light.
+const MAGMA_GLOW: f32 = 1.4;
 
 // Light from the sky for sky light 0..1, see `light.rs`.
 fn sky_ambient(sky: f32, normal: vec3<f32>) -> vec3<f32> {
@@ -58,6 +61,11 @@ fn is_flame(vertex_alpha: f32, uv: vec2<f32>) -> bool {
     let lantern = abs(vertex_alpha - f32(constants::LANTERN_CELL)) < 0.5
         && all(tile >= LANTERN_GLASS_MIN) && all(tile < LANTERN_GLASS_MAX);
     return lantern || (abs(vertex_alpha - f32(constants::TORCH_CELL)) < 0.5 && tile.y < FLAME_BOTTOM);
+}
+
+// Whether a fragment is of magma, from its atlas cell.
+fn is_magma(vertex_alpha: f32) -> bool {
+    return abs(vertex_alpha - f32(constants::MAGMA_CELL)) < 0.5;
 }
 
 fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
@@ -212,10 +220,13 @@ fn fragment(
     if is_flame(in.color.a, in.uv) {
         light = vec3<f32>(FLAME_GLOW);
     }
+    if is_magma(in.color.a) {
+        light = max(light, vec3<f32>(MAGMA_GLOW));
+    }
     color = vec4<f32>(color.rgb * light, color.a);
 
-    // so distant chunks fade into the sky instead of popping in and out
-    color = fogged(color, world_position, in.position.xy);
+    // so distant chunks fade into the sky instead of popping in and out, high ground the least
+    color = fogged_by(color, world_position, in.position.xy, land_haze(uncurved(world_position).y));
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);

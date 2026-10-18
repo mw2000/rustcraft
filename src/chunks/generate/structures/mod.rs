@@ -9,6 +9,7 @@ use bevy::math::{I64Vec2, I64Vec3, IVec3, Vec3Swizzles};
 
 use super::columns::Recent;
 use super::generator::ground_top;
+use super::landmarks::GiantTree;
 use super::noise::NoiseGenerator;
 use super::trees::{hash, Tree, TREE_REACH};
 use super::WATER_LEVEL;
@@ -224,10 +225,13 @@ impl Placed {
     }
 }
 
-/// Takes out the trees that would grow into any of `structures`, or the clearings round them.
-pub fn clear_trees(trees: &mut Vec<Tree>, structures: &[Placed]) {
-    if !structures.is_empty() {
-        trees.retain(|tree| !structures.iter().any(|s| s.crowds(tree)));
+/// Takes out the trees that would grow into any of `structures`, or the clearings round them,
+/// or into the roots of any of `giants`.
+pub fn clear_trees(trees: &mut Vec<Tree>, structures: &[Placed], giants: &[&GiantTree]) {
+    if !structures.is_empty() || !giants.is_empty() {
+        trees.retain(|tree| {
+            !structures.iter().any(|s| s.crowds(tree)) && !giants.iter().any(|g| g.crowds(tree))
+        });
     }
 }
 
@@ -334,7 +338,7 @@ fn place(noise: &NoiseGenerator, kind: usize, cell: I64Vec2, seed: u64) -> Optio
         let name = noise.biomes().name(biome);
         placement.biomes.iter().any(|b| name == Some(b.as_str()))
     };
-    if !suits(spot) {
+    if noise.landmarks().keeps_clear(spot) || !suits(spot) {
         return None;
     }
     if placement.hilltop {
@@ -356,7 +360,7 @@ fn place(noise: &NoiseGenerator, kind: usize, cell: I64Vec2, seed: u64) -> Optio
             }
             (spot, here) = (next, up);
         }
-        if !summit || !suits(spot) {
+        if !summit || noise.landmarks().keeps_clear(spot) || !suits(spot) {
             return None;
         }
     }

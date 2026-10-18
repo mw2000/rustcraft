@@ -4,6 +4,7 @@ pub mod checksum;
 pub mod columns;
 pub mod fractal;
 pub mod generator;
+pub mod landmarks;
 pub mod light;
 pub mod noise;
 pub mod ores;

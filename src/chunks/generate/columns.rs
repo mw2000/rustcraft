@@ -157,6 +157,17 @@ impl ChunkColumns {
                 }
             }
         }
+        // and where a landmark keeps them shut
+        for cx in 0..size {
+            for cz in 0..size {
+                let (world_x, world_z) = (x * size + cx, z * size + cz);
+                let ground = || ground_top(heights.height(world_x, world_z).round() as i64);
+                if let Some(roof) = noise.landmarks().cave_roof(world_x, world_z, ground) {
+                    let top = &mut cave_tops[Self::index(cx, cz)];
+                    *top = (*top).min(Caves::top_under(roof));
+                }
+            }
+        }
         let mut columns = Self {
             heights: Vec::with_capacity(cells),
             gradients: Vec::with_capacity(cells),

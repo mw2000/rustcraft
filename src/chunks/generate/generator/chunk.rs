@@ -120,10 +120,14 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
         }
     }
 
+    let min = I64Vec2::new(origin.x, origin.z);
+    let giants = regions
+        .noise()
+        .landmarks()
+        .giant_trees_near(min, min + size - 1);
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
-        let min = I64Vec2::new(origin.x, origin.z);
         let mut trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
-        clear_trees(&mut trees, &columns.structures);
+        clear_trees(&mut trees, &columns.structures, &giants);
         for tree in &trees {
             tree.plant(
                 origin,
@@ -138,6 +142,14 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             );
         }
         chunk_data.trees = TreeTints::new(&trees, origin, 1);
+    }
+    for giant in &giants {
+        giant.plant(
+            origin,
+            1,
+            (IVec3::ZERO, IVec3::splat(size as i32 - 1)),
+            |coord, block| chunk_data.set_block_at(coord.as_u16vec3(), block),
+        );
     }
 
     chunk_data

@@ -1,7 +1,8 @@
 use bevy::math::I64Vec3;
 
+use super::biome::landmark::VOLCANO;
 use super::trees::hash;
-use super::WORLD_HEIGHT;
+use super::{WATER_LEVEL, WORLD_HEIGHT};
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
 
@@ -35,8 +36,9 @@ struct Ore {
 // deserts and savannas, frost crystal under the glaciers and taiga from a little under the
 // sea, and jade under the jungles. Their veins are a quarter as many as iron's but nearly three
 // times as big, so they're rarer, and one found is worth the journey. Embers are deepest of
-// all, in the bottom hundred blocks under every climate.
-const ORES: [Ore; 7] = [
+// all, in the bottom hundred blocks under every climate, and in the heart of every volcano
+// (§5.7), in the stone under its basalt, high above the sea, half as many again.
+const ORES: [Ore; 8] = [
     Ore {
         block: BlockType::CoalOre,
         climates: &[],
@@ -91,6 +93,14 @@ const ORES: [Ore; 7] = [
         bottom: 16,
         top: 112,
         veins: 0.4,
+        size: (4, 10),
+    },
+    Ore {
+        block: BlockType::EmberOre,
+        climates: &[VOLCANO],
+        bottom: WATER_LEVEL,
+        top: WORLD_HEIGHT as i64,
+        veins: 0.6,
         size: (4, 10),
     },
 ];
@@ -412,12 +422,21 @@ mod tests {
             for (x, z) in (0..32).map(|i| (i % 8 * 3, i / 8 * 5)) {
                 for (y, cells) in stone_column(7, x, z, biome).iter().enumerate() {
                     for (index, block) in cells.iter().enumerate() {
-                        let Some(ore) = ORES.iter().position(|ore| ore.block == *block) else {
+                        if *block == BlockType::Stone {
                             continue;
-                        };
+                        }
+                        // the ore whose band it's in, of those found under the biome, as embers
+                        // come in two
                         let height = y as i64 * size + local(index).y;
+                        let ore = ORES.iter().position(|ore| {
+                            ore.block == *block
+                                && ore.found_under(biome)
+                                && (ore.bottom - REACH..ore.top + REACH).contains(&height)
+                        });
+                        let Some(ore) = ore else {
+                            panic!("{block:?} at {height} under {biome:?}");
+                        };
                         let Ore { bottom, top, .. } = ORES[ore];
-                        assert!((bottom - REACH..top + REACH).contains(&height), "{block:?}");
                         found[ore] += 1;
                         let fade = FADE as i64;
                         thick[ore] += (bottom + fade..top - fade).contains(&height) as usize;

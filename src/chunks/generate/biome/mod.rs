@@ -3,6 +3,7 @@ mod foothills;
 mod forest;
 mod glacier;
 mod jungle;
+pub mod landmark;
 mod savanna;
 mod taiga;
 
@@ -17,6 +18,7 @@ pub use foothills::Foothills;
 pub use forest::Forest;
 pub use glacier::Glacier;
 pub use jungle::Jungle;
+pub use landmark::{Crater, Summit, Volcano};
 pub use savanna::Savanna;
 pub use taiga::Taiga;
 
@@ -138,6 +140,10 @@ impl Biomes {
             Box::new(Taiga),
             Box::new(Forest),
             Box::new(Foothills::new(seed)),
+            // given their columns by landmarks, never by the climate
+            Box::new(Summit),
+            Box::new(Volcano),
+            Box::new(Crater),
         ])
     }
 
@@ -243,6 +249,12 @@ impl Biomes {
 
     fn owner(&self, biome: BiomeId) -> Option<&dyn Biome> {
         biome.0.checked_sub(1).map(|i| &*self.biomes[i as usize])
+    }
+
+    /// The biome named `name`.
+    pub fn id(&self, name: &str) -> Option<BiomeId> {
+        let i = self.biomes.iter().position(|b| b.name() == name)?;
+        Some(BiomeId(i as u8 + 1))
     }
 
     // The biome's name, or None for the base terrain.

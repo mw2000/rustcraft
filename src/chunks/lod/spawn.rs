@@ -20,6 +20,7 @@ use bevy::ecs::system::Query;
 use bevy::ecs::system::Res;
 use bevy::ecs::system::ResMut;
 use bevy::math::I64Vec2;
+use bevy::math::I64Vec3;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::time::Time;
 
@@ -130,6 +131,15 @@ pub(super) fn known_empty(key: LodKey, regions: &RegionStore, edits: &LodEdits) 
         return false;
     };
     let (bottom, top) = (min.y - cell, min.y + width + cell);
+    // a giant tree stands far taller than anything else on the ground
+    let reach = I64Vec3::new(margin, 0, margin);
+    if regions.noise().landmarks().stands_in(
+        (min - reach).with_y(bottom),
+        (min + width + reach).with_y(top),
+        cell,
+    ) {
+        return false;
+    }
     // coarse nodes' canopies stand at least a cell tall
     let standing = TREE_HEIGHT.max(STRUCTURE_HEIGHT).max(cell);
     let above_terrain = bottom > highest.round() as i64 + 1 + standing;

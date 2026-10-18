@@ -184,6 +184,8 @@ impl Material for ChunkMaterial {
             ShaderDefVal::UInt("LANTERN_CELL".into(), Tile::Lantern.atlas_cell() as u32);
         // glass's holes are cut out of its shadow, as leaves' are, see `world_prepass.wesl`
         let glass_cell = ShaderDefVal::UInt("GLASS_CELL".into(), Tile::Glass.atlas_cell() as u32);
+        // and so does magma, at every distance
+        let magma_cell = ShaderDefVal::UInt("MAGMA_CELL".into(), Tile::Magma.atlas_cell() as u32);
         let mut defs = vec![
             leaf_cell,
             grass_top_cell,
@@ -191,6 +193,7 @@ impl Material for ChunkMaterial {
             torch_cell,
             lantern_cell,
             glass_cell,
+            magma_cell,
             water_level(),
         ];
         // compiled in or out, so the switches leave no trace of the code they turn off

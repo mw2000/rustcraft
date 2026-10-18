@@ -121,6 +121,18 @@ fn main() {
     print_stats(&relief, noise.biomes());
     let spawn = noise.find_spawn();
     println!("spawn: x={} z={} height={:.1}", spawn.0, spawn.1, spawn.2);
+    for landmark in noise.landmarks().all() {
+        let at = landmark.centre();
+        let top = noise.sample(at.x, at.y).height;
+        let away = at.distance(DVec2::new(spawn.0 as f64, spawn.1 as f64));
+        println!(
+            "{}: x={:.0} z={:.0} ground={top:.0}, {:.1} km from the spawn",
+            landmark.name(),
+            at.x,
+            at.y,
+            away / 1000.0
+        );
+    }
 
     render(&relief, noise.biomes(), &args)
         .save(&args.out)

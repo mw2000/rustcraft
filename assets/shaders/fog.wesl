@@ -9,6 +9,19 @@ import super::horizon::horizon_haze;
 // never shows against the sky, and nodes coming into reach fade in as the fog eases out.
 const EDGE_FADE_START: f32 = 0.9;
 
+// Haze lies thickest in the low air, so land this high over the sea is fogged less, down to
+// this share at the second height: a great peak's snows stand out against the sky from as far
+// off as the haze hides the lowlands under it, see `landmarks`.
+const HIGH_HAZE_FROM: f32 = 150.0;
+const HIGH_HAZE_TO: f32 = 550.0;
+const HIGH_HAZE: f32 = 0.55;
+
+// How much of the haze land `height` blocks up is under, for `fogged_by`.
+fn land_haze(height: f32) -> f32 {
+    let above_sea = height - f32(constants::WATER_LEVEL);
+    return mix(1.0, HIGH_HAZE, smoothstep(HIGH_HAZE_FROM, HIGH_HAZE_TO, above_sea));
+}
+
 // `color` at `world_position` behind the camera's fog. Above water it thickens only with
 // distance across the land, not up or down, so it hides the far edge of the world in the
 // haze along the horizon without greying out the ground below when flying high: easing in
@@ -17,6 +30,12 @@ const EDGE_FADE_START: f32 = 0.9;
 // Underwater, Bevy's linear murk closes in every way. `WATER_LEVEL` comes from the
 // material's `specialize`.
 fn fogged(color: vec4<f32>, world_position: vec3<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
+    return fogged_by(color, world_position, frag_coord, 1.0);
+}
+
+// `fogged`, with the haze over the land thinned to `haze` of it, though it still fades out
+// altogether at the fog's end.
+fn fogged_by(color: vec4<f32>, world_position: vec3<f32>, frag_coord: vec2<f32>, haze: f32) -> vec4<f32> {
     let fog = view_bindings::fog;
     let view_position = view_bindings::view.world_position.xyz;
     if view_position.y < f32(constants::WATER_LEVEL) {
@@ -30,6 +49,6 @@ fn fogged(color: vec4<f32>, world_position: vec3<f32>, frag_coord: vec2<f32>) ->
     let near = distance / half;
     let far = clamp((distance - half) / (end - half), 0.0, 1.0);
     let amount = select(mix(0.5, 1.0, far), 0.5 * near * near, distance < half);
-    let opacity = mix(amount * fog.base_color.a, 1.0, smoothstep(EDGE_FADE_START, 1.0, distance / end));
+    let opacity = mix(amount * haze * fog.base_color.a, 1.0, smoothstep(EDGE_FADE_START, 1.0, distance / end));
     return vec4<f32>(mix(color.rgb, sky, opacity), color.a);
 }

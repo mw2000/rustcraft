@@ -5,6 +5,7 @@
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::{DVec2, DVec3, Vec3};
 
+use crate::chunks::generate::biome::landmark::{CRATER, VOLCANO};
 use crate::chunks::generate::biome::{Biomes, Climate};
 use crate::chunks::generate::generator::{FREEZE_TEMPERATURE, SNOWY_GRASS_TEMPERATURE};
 use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
@@ -14,6 +15,9 @@ const SAND: [f64; 3] = [222.0, 196.0, 132.0];
 const SEA_ICE: [f64; 3] = [190.0, 222.0, 240.0];
 const GLACIER: [f64; 3] = [226.0, 238.0, 248.0];
 const SNOW: [f32; 3] = [236.0, 242.0, 248.0];
+// A volcano's basalt and magma, at any height.
+const BASALT: [f64; 3] = [62.0, 58.0, 60.0];
+const MAGMA: [f64; 3] = [235.0, 110.0, 30.0];
 
 /// A square grid of the terrain and its climate, sampled `scale` blocks apart, x across and z
 /// down, so north is up.
@@ -88,6 +92,11 @@ impl Relief {
                 };
                 let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
                 colour = lerp_rgb(ground, colour, rock);
+            }
+            match biomes.name(sample.biome) {
+                Some(VOLCANO) => colour = BASALT,
+                Some(CRATER) => colour = MAGMA,
+                _ => {}
             }
             if above_sea <= 0.0 && above_sea > -60.0 {
                 let ice =
