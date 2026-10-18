@@ -25,6 +25,7 @@ use crate::containers::Container;
 use crate::crafting::Recipe;
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
+use crate::items::Item;
 use crate::player::name::PlayerName;
 use crate::player::{Movement, PlayerOwner};
 use crate::save::region::{local_block, local_index};
@@ -38,7 +39,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -200,12 +201,13 @@ pub struct DropItem {
     pub all: bool,
 }
 
-/// A player with every block to hand (creative) putting a stack of `block` in hotbar slot
-/// `slot`, from the block picker or by middle-clicking it.
+/// A player with every block to hand (creative) putting a stack of `item` in hotbar slot
+/// `slot`, from the block picker or by middle-clicking a block: a block, or seeds, which place
+/// one. Sent by name, so it's as it was when it was only ever a block.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PickBlock {
     pub slot: u8,
-    pub block: BlockType,
+    pub item: Item,
 }
 
 /// What a client joining is told as the server lets it in: the world's seed, to generate its

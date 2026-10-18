@@ -9,11 +9,13 @@ use crate::client::player::LocalPlayer;
 use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
 use crate::crafting::Station;
+use crate::farming::tilled;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::inventory::furnace::ContainerView;
 use crate::inventory::recipes::CraftingStation;
 use crate::inventory::Inventory;
+use crate::items::{Item, ToolKind};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT};
@@ -304,11 +306,12 @@ fn stop_breaking(mut breaking: ResMut<Breaking>) {
     *breaking = Breaking::default();
 }
 
-// Right click places the selected block in the hotbar against the face looked at, or in place
-// of a block that's replaceable, such as tall grass, and middle click selects the hotbar slot
-// holding the block looked at, or in creative asks for it in the selected slot. The server
-// decides whether a block can go where it's placed: into a replaceable block, never into a
-// player, and in survival only if it's held.
+// Right click places the selected block in the hotbar, or plants the seeds there, against the
+// face looked at, or in place of a block that's replaceable, such as tall grass, and with a hoe
+// tills the dirt or grass looked at. Middle click selects the hotbar slot holding the block
+// looked at, or in creative asks for it in the selected slot. The server decides whether a block
+// can go where it's placed: into a replaceable block, never into a player, and in survival only
+// if it's held, and whether what's tilled has room above it.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
@@ -327,19 +330,28 @@ fn use_target(
     // `use_station`
     let places = (replaceable || hit.face != I64Vec3::ZERO) && !is_used(&world, hit, *mode);
     if mouse.just_pressed(MouseButton::Right) && places {
-        if let Some(held) = hotbar.held(inventory).and_then(|stack| stack.item.block()) {
+        let held = hotbar.held(inventory).map(|stack| stack.item);
+        let hoe = held
+            .and_then(Item::tool)
+            .is_some_and(|tool| tool.kind == ToolKind::Hoe);
+        if let Some(farmland) = tilled(world.get_block_at(hit.block)).filter(|_| hoe) {
+            requests.edit(hit.block, farmland, slot);
+        } else if let Some(placed) = held.and_then(Item::places) {
             let at = if replaceable {
                 hit.block
             } else {
                 hit.block + hit.face
             };
-            requests.edit(at, held, slot);
+            requests.edit(at, placed, slot);
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
         let block = world.get_block_at(hit.block);
         if !hotbar.pick(block, inventory) && mode.has_every_block() {
-            picks.write(PickBlock { slot, block });
+            picks.write(PickBlock {
+                slot,
+                item: Item::Block(block),
+            });
         }
     }
 }
@@ -715,6 +727,30 @@ mod tests {
             // and an empty slot places nothing
             inventory(&mut app).slots[3] = None;
             assert!(click(&mut app, MouseButton::Right).is_empty());
+        }
+
+        #[test]
+        fn test_right_click_with_a_hoe_tills_and_with_seeds_plants() {
+            let mut app = app(AWAY, GameMode::Survival);
+            let to = |requests: Vec<RequestEdit>| {
+                let edits = requests.iter().map(|r| (r.block, r.to));
+                edits.collect::<Vec<_>>()
+            };
+            inventory(&mut app).slots[0] = Some(ItemStack::new(Item::StoneHoe, 1));
+            // sand can't be tilled, and a hoe places nothing
+            assert!(click(&mut app, MouseButton::Right).is_empty());
+            app.world_mut()
+                .resource_mut::<crate::world::World>()
+                .edit(I64Vec3::ZERO, BlockType::Grass);
+            assert_eq!(
+                vec![(I64Vec3::ZERO, BlockType::Farmland)],
+                to(click(&mut app, MouseButton::Right))
+            );
+            inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Seeds, 5));
+            assert_eq!(
+                vec![(I64Vec3::Y, BlockType::Wheat0)],
+                to(click(&mut app, MouseButton::Right))
+            );
         }
 
         #[test]

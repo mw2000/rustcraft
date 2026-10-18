@@ -1000,4 +1000,15 @@ mod tests {
         run(&mut app, EATING_SECONDS * 2.0);
         assert_eq!(1, apples(&mut app));
     }
+
+    #[test]
+    fn test_bread_fills_five() {
+        let (mut app, player) = server();
+        inventory(&mut app, player).slots[0] = Some(ItemStack::new(Item::Bread, 2));
+        app.world_mut().get_mut::<Vitals>(player).unwrap().food = 10;
+        app.world_mut().write_message(Eat(Some(0)));
+        run(&mut app, EATING_SECONDS + 0.1);
+        assert_eq!(15, vitals(&app, player).food);
+        assert_eq!(1, inventory(&mut app, player).count(Item::Bread));
+    }
 }

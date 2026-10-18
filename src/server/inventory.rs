@@ -6,7 +6,7 @@ use super::drops::DroppedItem;
 use crate::containers::{Container, Containers};
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory, HOTBAR_SLOTS};
-use crate::items::{Item, ItemStack};
+use crate::items::ItemStack;
 use crate::player::{PlayerLook, PlayerOwner};
 use crate::protocol::{CloseInventory, DropItem, InventoryClick, PickBlock};
 
@@ -89,15 +89,16 @@ pub(super) fn receive_inventory_requests(
     }
     for &FromClient {
         client_id,
-        message: PickBlock { slot, block },
+        message: PickBlock { slot, item },
     } in picks.read()
     {
         let Some((_, _, mode, mut inventory, _)) = player_of(&mut players, client_id) else {
             continue;
         };
         let slot = usize::from(slot);
-        if mode.has_every_block() && mode.can_place(block) && slot < HOTBAR_SLOTS {
-            inventory.slots[slot] = Some(ItemStack::full(Item::Block(block)));
+        let placeable = item.places().is_some_and(|block| mode.can_place(block));
+        if mode.has_every_block() && placeable && slot < HOTBAR_SLOTS {
+            inventory.slots[slot] = Some(ItemStack::full(item));
         }
     }
 }
@@ -259,7 +260,7 @@ mod tests {
     fn test_only_creative_picks_blocks_into_the_hotbar() {
         let pick = PickBlock {
             slot: 2,
-            block: BlockType::Furnace,
+            item: Item::Block(BlockType::Furnace),
         };
         let mut app = server(GameMode::Creative);
         app.world_mut().write_message(pick);
@@ -271,20 +272,23 @@ mod tests {
         app.world_mut().write_message(pick);
         app.update();
         assert_eq!(None, inventory(&mut app).slots[2]);
-        // nor water, nor into the main inventory, in either mode
+        // nor water, nor what places no block, nor into the main inventory, in either mode
         let mut app = server(GameMode::Creative);
+        for (slot, item) in [
+            (1, Item::Block(BlockType::Water)),
+            (3, Item::IronPickaxe),
+            (9, Item::Block(BlockType::Stone)),
+        ] {
+            app.world_mut().write_message(PickBlock { slot, item });
+        }
+        // but seeds, which are planted, are
         app.world_mut().write_message(PickBlock {
-            slot: 1,
-            block: BlockType::Water,
-        });
-        app.world_mut().write_message(PickBlock {
-            slot: 9,
-            block: BlockType::Stone,
+            slot: 4,
+            item: Item::Seeds,
         });
         app.update();
-        assert_eq!(
-            (None, None),
-            (inventory(&mut app).slots[1], inventory(&mut app).slots[9])
-        );
+        let slots = inventory(&mut app).slots;
+        assert_eq!([None, None, None], [slots[1], slots[3], slots[9]]);
+        assert_eq!(Some(ItemStack::full(Item::Seeds)), slots[4]);
     }
 }

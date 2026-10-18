@@ -11,6 +11,7 @@ pub mod crafting;
 pub mod curvature;
 pub mod debug;
 pub mod edits;
+pub mod farming;
 pub mod game_mode;
 pub mod horizon;
 pub mod hotbar;

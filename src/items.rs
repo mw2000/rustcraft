@@ -17,6 +17,8 @@ struct Properties {
     tool: Option<Tool>,
     /// How much of the food bar eating one fills (§5.5), or 0 if it isn't food.
     fills: u8,
+    /// The block it's planted as, if it's planted, as seeds are wheat's first stage.
+    plants: Option<BlockType>,
 }
 
 // What every block item has, and every row of the table unless it says otherwise: blocks
@@ -25,6 +27,7 @@ const PLAIN: Properties = Properties {
     max_stack: MAX_STACK,
     tool: None,
     fills: 0,
+    plants: None,
 };
 
 /// What a tool is for: each is quick at breaking the blocks whose row names it (M1.2).
@@ -33,6 +36,8 @@ pub enum ToolKind {
     Pickaxe,
     Axe,
     Shovel,
+    /// Breaks nothing quicker, but tills dirt and grass into farmland (`farming`).
+    Hoe,
 }
 
 /// A tool's columns in the table.
@@ -63,13 +68,21 @@ const fn tool(kind: ToolKind, tier: u8) -> Properties {
             durability,
             speed,
         }),
-        fills: 0,
+        ..PLAIN
     }
 }
 
 // A row's properties as food that fills `fills` of the food bar.
 const fn food(fills: u8) -> Properties {
     Properties { fills, ..PLAIN }
+}
+
+// A row's properties as what's planted as `crop`.
+const fn plants(crop: BlockType) -> Properties {
+    Properties {
+        plants: Some(crop),
+        ..PLAIN
+    }
 }
 
 // Declares `Item`, with a variant for each row beside the one for blocks, and each row's stable
@@ -114,12 +127,12 @@ macro_rules! items {
     (@properties $properties:expr) => { $properties };
 }
 
-use ToolKind::{Axe, Pickaxe, Shovel};
+use ToolKind::{Axe, Hoe, Pickaxe, Shovel};
 
 // Coal comes from coal ore, ingots from smelting ore in a furnace, and the tools are made from
 // planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
-// Apples come from leaves, now and then; bread and meat wait for farming (M1.9b) and animals
-// (M3.2).
+// Apples come from leaves, now and then, seeds from tall grass, and wheat from the seeds sown
+// (`farming`), which bread is baked from. Meat waits for animals (M3.2).
 items! {
     Stick { name: "stick" },
     Coal { name: "coal" },
@@ -138,6 +151,13 @@ items! {
     IronAxe { name: "iron_axe", tool(Axe, 4) },
     IronShovel { name: "iron_shovel", tool(Shovel, 4) },
     Apple { name: "apple", food(4) },
+    WoodenHoe { name: "wooden_hoe", tool(Hoe, 1) },
+    StoneHoe { name: "stone_hoe", tool(Hoe, 2) },
+    CopperHoe { name: "copper_hoe", tool(Hoe, 3) },
+    IronHoe { name: "iron_hoe", tool(Hoe, 4) },
+    Seeds { name: "seeds", plants(BlockType::Wheat0) },
+    Wheat { name: "wheat" },
+    Bread { name: "bread", food(5) },
 }
 
 impl Item {
@@ -178,6 +198,12 @@ impl Item {
             Item::Block(block) => Some(block),
             _ => None,
         }
+    }
+
+    /// The block it puts in the world, if any: a block item's block, and what seeds are planted
+    /// as.
+    pub fn places(self) -> Option<BlockType> {
+        self.block().or(self.properties().plants)
     }
 
     /// Which tile of `items.png` draws it, if it isn't a block, which its block's tiles draw.
@@ -347,7 +373,10 @@ mod tests {
         for item in Item::all() {
             let name = item.name();
             assert!(names.insert(name), "{name} is used twice");
-            assert!(name.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+            assert!(name.starts_with(|c: char| c.is_ascii_lowercase()));
+            assert!(name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
             assert_eq!(Some(item), Item::from_name(name));
         }
     }
@@ -377,22 +406,67 @@ mod tests {
     fn test_blocks_drop_themselves_or_what_their_row_says() {
         let mut rng = StdRng::seed_from_u64(1);
         let mut drop = |block: BlockType| block.drops(&mut rng);
-        let block = |block| Some(Item::Block(block));
+        let block = |block| vec![ItemStack::new(Item::Block(block), 1)];
         assert_eq!(block(BlockType::Dirt), drop(BlockType::Grass));
         assert_eq!(block(BlockType::Dirt), drop(BlockType::Dirt));
+        assert_eq!(block(BlockType::Dirt), drop(BlockType::Farmland));
         assert_eq!(block(BlockType::Cobblestone), drop(BlockType::Stone));
         assert_eq!(block(BlockType::IronOre), drop(BlockType::IronOre));
         assert_eq!(block(BlockType::Log), drop(BlockType::Log));
-        assert_eq!(block(BlockType::TallGrass), drop(BlockType::TallGrass));
+        assert_eq!(
+            vec![ItemStack::new(Item::Coal, 1)],
+            drop(BlockType::CoalOre)
+        );
         for nothing in [BlockType::Air, BlockType::Water, BlockType::Poppy] {
-            assert_eq!(Some(Item::Coal), drop(BlockType::CoalOre));
-            assert_eq!(None, drop(nothing), "{nothing:?}");
+            assert_eq!(Vec::<ItemStack>::new(), drop(nothing), "{nothing:?}");
         }
         // and every drop is an item there is
         for block in BlockType::ALL {
-            if let Some(item) = (0..100).find_map(|_| drop(block)) {
-                assert_eq!(Some(item), Item::from_name(item.name()));
+            for stack in (0..100).flat_map(|_| drop(block)) {
+                assert_eq!(Some(stack.item), Item::from_name(stack.item.name()));
             }
+        }
+    }
+
+    // How many of each item breaking `block` a thousand times leaves.
+    fn drops_of(block: BlockType) -> Vec<(Item, u32)> {
+        let mut rng = StdRng::seed_from_u64(3);
+        let mut counts: Vec<(Item, u32)> = Vec::new();
+        for stack in (0..1000).flat_map(|_| block.drops(&mut rng)) {
+            match counts.iter_mut().find(|(item, _)| *item == stack.item) {
+                Some((_, count)) => *count += u32::from(stack.count),
+                None => counts.push((stack.item, stack.count.into())),
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn test_tall_grass_drops_itself_and_a_seed_one_time_in_eight() {
+        let [(grass, grasses), (seeds, sown)] = drops_of(BlockType::TallGrass)[..] else {
+            panic!("tall grass drops more than grass and seeds");
+        };
+        assert_eq!((Item::Block(BlockType::TallGrass), 1000), (grass, grasses));
+        assert_eq!(Item::Seeds, seeds);
+        assert!((90..160).contains(&sown), "{sown} seeds");
+    }
+
+    #[test]
+    fn test_wheat_drops_its_seed_until_its_ripe_and_then_wheat_and_seeds() {
+        for unripe in &crate::farming::WHEAT[..crate::farming::WHEAT.len() - 1] {
+            assert_eq!(vec![(Item::Seeds, 1000)], drops_of(*unripe), "{unripe:?}");
+        }
+        let [(wheat, reaped), (seeds, sown)] = drops_of(BlockType::RipeWheat)[..] else {
+            panic!("ripe wheat drops more than wheat and seeds");
+        };
+        assert_eq!((Item::Wheat, 1000), (wheat, reaped));
+        // one to three a time, two on average
+        assert_eq!(Item::Seeds, seeds);
+        assert!((1900..2100).contains(&sown), "{sown} seeds");
+        let mut rng = StdRng::seed_from_u64(4);
+        for _ in 0..100 {
+            let seeds = BlockType::RipeWheat.drops(&mut rng)[1].count;
+            assert!((1..=3).contains(&seeds));
         }
     }
 
@@ -402,15 +476,13 @@ mod tests {
         let drops: Vec<_> = (0..2000)
             .map(|_| BlockType::Leaves.drops(&mut rng))
             .collect();
-        let apples = drops
-            .iter()
-            .filter(|&&drop| drop == Some(Item::Apple))
-            .count();
+        let apple = vec![ItemStack::new(Item::Apple, 1)];
+        let apples = drops.iter().filter(|&drop| *drop == apple).count();
         assert!((70..130).contains(&apples), "{apples} apples");
-        assert!(drops
-            .iter()
-            .all(|&drop| drop.is_none() || drop == Some(Item::Apple)));
+        assert!(drops.iter().all(|drop| drop.is_empty() || *drop == apple));
         assert_eq!(Some(4), Item::Apple.fills());
+        assert_eq!(Some(5), Item::Bread.fills());
+        assert_eq!(None, Item::Wheat.fills());
         assert_eq!(None, Item::Stick.fills());
         assert_eq!(None, Item::Block(BlockType::Leaves).fills());
     }
@@ -484,7 +556,21 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::Apple.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::Bread.sprite());
+    }
+
+    #[test]
+    fn test_seeds_plant_wheat_and_blocks_place_themselves() {
+        assert_eq!(Some(BlockType::Wheat0), Item::Seeds.places());
+        assert_eq!(None, Item::Seeds.block());
+        assert_eq!(
+            Some(BlockType::Farmland),
+            Item::Block(BlockType::Farmland).places()
+        );
+        for nothing in [Item::Wheat, Item::Bread, Item::WoodenHoe] {
+            assert_eq!(None, nothing.places(), "{nothing:?}");
+        }
+        assert_eq!(ToolKind::Hoe, Item::CopperHoe.tool().unwrap().kind);
     }
 
     #[test]

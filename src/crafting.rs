@@ -89,8 +89,8 @@ const PLANKS: Item = Item::Block(BlockType::Planks);
 const COBBLESTONE: Item = Item::Block(BlockType::Cobblestone);
 const SAND: Item = Item::Block(BlockType::Sand);
 
-// A tool takes three of its head's material and two sticks, or one and two for a shovel. A
-// furnace smelts one item into one, so its rows take a single ingredient.
+// A tool takes three of its head's material and two sticks, or one and two for a shovel and two
+// and two for a hoe. A furnace smelts one item into one, so its rows take a single ingredient.
 recipes! {
     Planks {
         name: "planks", station: Hand,
@@ -157,6 +157,22 @@ recipes! {
         name: "iron_shovel", station: CraftingTable,
         ingredients: [(Item::IronIngot, 1), (Item::Stick, 2)], output: (Item::IronShovel, 1),
     },
+    WoodenHoe {
+        name: "wooden_hoe", station: CraftingTable,
+        ingredients: [(PLANKS, 2), (Item::Stick, 2)], output: (Item::WoodenHoe, 1),
+    },
+    StoneHoe {
+        name: "stone_hoe", station: CraftingTable,
+        ingredients: [(COBBLESTONE, 2), (Item::Stick, 2)], output: (Item::StoneHoe, 1),
+    },
+    CopperHoe {
+        name: "copper_hoe", station: CraftingTable,
+        ingredients: [(Item::CopperIngot, 2), (Item::Stick, 2)], output: (Item::CopperHoe, 1),
+    },
+    IronHoe {
+        name: "iron_hoe", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 2), (Item::Stick, 2)], output: (Item::IronHoe, 1),
+    },
     Furnace {
         name: "furnace", station: CraftingTable,
         ingredients: [(COBBLESTONE, 8)], output: (Item::Block(BlockType::Furnace), 1),
@@ -174,6 +190,10 @@ recipes! {
         name: "bed", station: CraftingTable,
         ingredients: [(PLANKS, 3), (Item::Block(BlockType::TallGrass), 3)],
         output: (Item::Block(BlockType::Bed), 1),
+    },
+    Bread {
+        name: "bread", station: CraftingTable,
+        ingredients: [(Item::Wheat, 3)], output: (Item::Bread, 1),
     },
     CopperIngot {
         name: "copper_ingot", station: Furnace,
@@ -365,7 +385,10 @@ mod tests {
             &[(Item::Coal, 1), (Item::Stick, 1)],
             Recipe::Torches.ingredients()
         );
-        assert_eq!(Some(Item::Coal), BlockType::CoalOre.drops(&mut rand::rng()));
+        assert_eq!(
+            vec![ItemStack::new(Item::Coal, 1)],
+            BlockType::CoalOre.drops(&mut rand::rng())
+        );
     }
 
     #[test]
@@ -413,6 +436,26 @@ mod tests {
         assert_eq!(None, Recipe::WoodenPickaxe.make(&mut inventory));
         assert_eq!(before, inventory);
         assert_eq!(0, Recipe::Planks.times_makeable(&inventory));
+    }
+
+    #[test]
+    fn test_bread_is_baked_from_three_wheat_and_hoes_from_two_of_their_heads_material() {
+        assert_eq!(Station::CraftingTable, Recipe::Bread.station());
+        assert_eq!(&[(Item::Wheat, 3)], Recipe::Bread.ingredients());
+        assert_eq!(ItemStack::new(Item::Bread, 1), Recipe::Bread.output());
+        let mut inventory = Inventory::default();
+        inventory.slots[0] = Some(ItemStack::new(Item::Wheat, 7));
+        assert_eq!(2, Recipe::Bread.times_makeable(&inventory));
+        assert_eq!(
+            Some(ItemStack::new(Item::Bread, 1)),
+            Recipe::Bread.make(&mut inventory)
+        );
+        assert_eq!(Some(ItemStack::new(Item::Wheat, 4)), inventory.slots[0]);
+        assert_eq!(
+            &[(Item::Block(BlockType::Cobblestone), 2), (Item::Stick, 2)],
+            Recipe::StoneHoe.ingredients()
+        );
+        assert_eq!(Station::CraftingTable, Recipe::IronHoe.station());
     }
 
     #[test]

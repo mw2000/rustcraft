@@ -29,6 +29,7 @@ use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clock::TimeOfDay;
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
+use rustcraft::farming::Crops;
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
@@ -460,6 +461,33 @@ fn test_two_players_at_one_furnace_both_see_it_smelt() {
         host_saw |= received(server, &mut hosts).into_iter().any(smelted);
         guest_saw |= received(client, &mut guests).into_iter().any(smelted);
         host_saw && guest_saw
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_client_sees_wheat_grow() {
+    let dir = temp_dir("wheat");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let spawn = server.world().resource::<World>().spawn();
+    let wheat = spawn.floor().as_i64vec3() + I64Vec3::new(2, 1, 0);
+    update_until(&mut server, &mut client, |server, _| {
+        let world = server.world().resource::<World>();
+        world.is_chunk_generated(ChunkCoordinate::containing(wheat))
+    });
+    let now = server.world().resource::<TimeOfDay>().0;
+    let mut world = server.world_mut().resource_mut::<World>();
+    world.edit(wheat - I64Vec3::Y, BlockType::Farmland);
+    world.edit(wheat, BlockType::Wheat0);
+    server.world_mut().resource_mut::<Crops>().plant(wheat, now);
+    for _ in 0..10 {
+        server.update();
+    }
+    // days later, it's ripe, and the client's told
+    server.world_mut().resource_mut::<TimeOfDay>().0 = now + 4.0;
+    update_until(&mut server, &mut client, |_, client| {
+        client_has_edit(client, wheat, BlockType::RipeWheat)
     });
     std::fs::remove_dir_all(&dir).unwrap();
 }

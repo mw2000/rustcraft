@@ -7,6 +7,7 @@ use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::containers::{Container, Containers};
 use crate::edits::Edits;
+use crate::farming::Crops;
 
 /// How many chunks wide and deep a region is. It holds every chunk of its columns, all the way up.
 const REGION_CHUNKS: i64 = 32;
@@ -34,18 +35,20 @@ impl Region {
 
 pub const EXTENSION: &str = "edits";
 
-/// A chunk's edits and its containers, as they're snapshotted for saving.
+/// A chunk's edits, its containers and when its crops were planted, as they're snapshotted for
+/// saving.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkEdits {
     pub coord: ChunkCoordinate,
     pub blocks: Vec<(U16Vec3, BlockType)>,
     pub containers: Vec<(U16Vec3, Container)>,
+    pub crops: Vec<(U16Vec3, f32)>,
 }
 
 // The version of the region file format, which since format 3 starts each file after a 0 byte.
 // A format 2 file starts with its palette's length instead, which is never 0, as every file
-// names the blocks of at least one edit.
-const FORMAT: u8 = 3;
+// names the blocks of at least one edit. Format 4 has crops.
+const FORMAT: u8 = 4;
 
 // A region file, in postcard (D-6). Blocks are stored as indices into the file's palette of
 // block names, never as `BlockType` discriminants, so reordering the block table can't change
@@ -64,9 +67,33 @@ struct SavedChunk {
     blocks: Vec<(u16, u16)>,
     // each container as where it is in the chunk, and what it holds
     containers: Vec<(u16, Container)>,
+    // each crop as where it is in the chunk, and when it was planted, in game days
+    crops: Vec<(u16, f32)>,
 }
 
-// Format 2's, from before containers (M1.6), which is read and written again as format 3 the
+// Format 3's, from before crops (M1.9b), which is read and written again as format 4 the next
+// time its region's saved.
+mod format_3 {
+    use serde::Deserialize;
+
+    use crate::containers::Container;
+
+    #[derive(Deserialize)]
+    pub(super) struct RegionFile<'a> {
+        #[serde(borrow)]
+        pub(super) palette: Vec<&'a str>,
+        pub(super) chunks: Vec<SavedChunk>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct SavedChunk {
+        pub(super) chunk: [i64; 3],
+        pub(super) blocks: Vec<(u16, u16)>,
+        pub(super) containers: Vec<(u16, Container)>,
+    }
+}
+
+// Format 2's, from before containers (M1.6), which is read and written again as format 4 the
 // next time its region's saved.
 mod format_2 {
     use serde::Deserialize;
@@ -85,8 +112,8 @@ mod format_2 {
     }
 }
 
-/// Encodes a region's edits and containers. The same edits always encode the same, whatever
-/// order they come in.
+/// Encodes a region's edits, containers and crops. The same edits always encode the same,
+/// whatever order they come in.
 pub fn encode(mut chunks: Vec<ChunkEdits>) -> Vec<u8> {
     chunks.sort_unstable_by_key(|chunk| chunk.coord.0.to_array());
     let mut palette = Vec::new();
@@ -112,10 +139,17 @@ pub fn encode(mut chunks: Vec<ChunkEdits>) -> Vec<u8> {
                 .map(|(local, container)| (local_index(local), container))
                 .collect();
             containers.sort_unstable_by_key(|&(local, _)| local);
+            let mut crops: Vec<_> = chunk
+                .crops
+                .into_iter()
+                .map(|(local, planted)| (local_index(local), planted))
+                .collect();
+            crops.sort_unstable_by_key(|&(local, _)| local);
             SavedChunk {
                 chunk: chunk.coord.0.to_array(),
                 blocks,
                 containers,
+                crops,
             }
         })
         .collect();
@@ -123,13 +157,32 @@ pub fn encode(mut chunks: Vec<ChunkEdits>) -> Vec<u8> {
     postcard::to_extend(&file, vec![0, FORMAT]).expect("edits always encode")
 }
 
-/// Decodes a region file's edits into `edits` and its containers into `containers`. A block or
-/// item it doesn't know, or a format newer than this game's, saved by a newer version, is an
-/// error rather than turning into air.
-pub fn decode(bytes: &[u8], edits: &mut Edits, containers: &mut Containers) -> io::Result<()> {
+/// Decodes a region file's edits into `edits`, its containers into `containers` and its crops
+/// into `crops`. A block or item it doesn't know, or a format newer than this game's, saved by
+/// a newer version, is an error rather than turning into air.
+pub fn decode(
+    bytes: &[u8],
+    edits: &mut Edits,
+    containers: &mut Containers,
+    crops: &mut Crops,
+) -> io::Result<()> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
     let file: RegionFile = match bytes {
         [0, FORMAT, file @ ..] => postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?,
+        [0, 3, file @ ..] => {
+            let file: format_3::RegionFile =
+                postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?;
+            let chunks = file.chunks.into_iter().map(|chunk| SavedChunk {
+                chunk: chunk.chunk,
+                blocks: chunk.blocks,
+                containers: chunk.containers,
+                crops: Vec::new(),
+            });
+            RegionFile {
+                palette: file.palette,
+                chunks: chunks.collect(),
+            }
+        }
         [0, format, ..] => {
             return Err(invalid(format!(
                 "region format {format}, perhaps saved by a newer version"
@@ -142,6 +195,7 @@ pub fn decode(bytes: &[u8], edits: &mut Edits, containers: &mut Containers) -> i
                 chunk: chunk.chunk,
                 blocks: chunk.blocks,
                 containers: Vec::new(),
+                crops: Vec::new(),
             });
             RegionFile {
                 palette: file.palette,
@@ -184,6 +238,9 @@ pub fn decode(bytes: &[u8], edits: &mut Edits, containers: &mut Containers) -> i
             }
             containers.put(origin + in_chunk(local)?.as_i64vec3(), container);
         }
+        for (local, planted) in chunk.crops {
+            crops.put(coord, in_chunk(local)?, planted);
+        }
     }
     Ok(())
 }
@@ -212,6 +269,7 @@ mod tests {
     use crate::chunks::chunk::ChunkCoordinate;
     use crate::containers::{Container, Containers, FUEL, INPUT};
     use crate::edits::Edits;
+    use crate::farming::Crops;
     use crate::items::{Item, ItemStack};
 
     fn chunk(x: i64, y: i64, z: i64) -> ChunkCoordinate {
@@ -223,10 +281,11 @@ mod tests {
             coord,
             blocks,
             containers: Vec::new(),
+            crops: Vec::new(),
         }
     }
 
-    fn sorted(edits: &Edits, containers: &Containers) -> Vec<ChunkEdits> {
+    fn sorted(edits: &Edits, containers: &Containers, crops: &Crops) -> Vec<ChunkEdits> {
         let mut chunks: Vec<_> = edits
             .chunks()
             .map(|coord| {
@@ -237,10 +296,13 @@ mod tests {
                     .map(|(local, container)| (local, container.clone()))
                     .collect();
                 containers.sort_unstable_by_key(|(local, _)| local.to_array());
+                let mut crops: Vec<_> = crops.in_chunk(coord).collect();
+                crops.sort_unstable_by_key(|(local, _)| local.to_array());
                 ChunkEdits {
                     coord,
                     blocks,
                     containers,
+                    crops,
                 }
             })
             .collect();
@@ -249,12 +311,20 @@ mod tests {
     }
 
     fn decoded(bytes: &[u8]) -> Vec<ChunkEdits> {
-        let (mut edits, mut containers) = (Edits::default(), Containers::default());
-        decode(bytes, &mut edits, &mut containers).unwrap();
+        let (mut edits, mut containers, mut crops) =
+            (Edits::default(), Containers::default(), Crops::default());
+        decode(bytes, &mut edits, &mut containers, &mut crops).unwrap();
         // loading isn't a change to save again
         assert!(edits.take_changed().is_empty());
         assert!(containers.take_changed().is_empty());
-        sorted(&edits, &containers)
+        assert!(crops.take_changed().is_empty());
+        sorted(&edits, &containers, &crops)
+    }
+
+    fn fails(bytes: &[u8]) -> std::io::Error {
+        let (mut edits, mut containers, mut crops) =
+            (Edits::default(), Containers::default(), Crops::default());
+        decode(bytes, &mut edits, &mut containers, &mut crops).unwrap_err()
     }
 
     // A furnace part way through smelting iron, with coal on the fire.
@@ -280,17 +350,21 @@ mod tests {
     }
 
     #[test]
-    fn test_edits_and_containers_round_trip_through_a_region_file() {
+    fn test_edits_containers_and_crops_round_trip_through_a_region_file() {
         let furnace_at = U16Vec3::new(15, 15, 15);
+        let (wheat_at, more_at) = (U16Vec3::new(4, 9, 4), U16Vec3::new(5, 9, 4));
         let saved = vec![
             ChunkEdits {
                 coord: chunk(3, 28, -4),
                 blocks: vec![
                     (U16Vec3::new(0, 0, 0), BlockType::Air),
                     (U16Vec3::new(1, 2, 3), BlockType::Air),
+                    (wheat_at, BlockType::Wheat2),
+                    (more_at, BlockType::Wheat0),
                     (furnace_at, BlockType::Furnace),
                 ],
                 containers: vec![(furnace_at, furnace())],
+                crops: vec![(wheat_at, 12.75), (more_at, 13.0625)],
             },
             edits(
                 chunk(-1, 0, 31),
@@ -329,7 +403,7 @@ mod tests {
                 (U16Vec3::new(3, 0, 0), BlockType::Bricks),
             ],
         )]);
-        assert_eq!([0, 3], bytes[..2]);
+        assert_eq!([0, 4], bytes[..2]);
         let file: RegionFile = postcard::from_bytes(&bytes[2..]).unwrap();
         assert_eq!(vec!["bricks", "air"], file.palette);
         assert_eq!(vec![(1, 0), (2, 1), (3, 0)], file.chunks[0].blocks);
@@ -357,9 +431,42 @@ mod tests {
             (U16Vec3::new(12, 1, 2), BlockType::Air),
         ];
         assert_eq!(vec![edits(chunk(2, 30, -1), blocks)], loaded);
-        // and it's written as format 3 when it's saved again
+        // and it's written as format 4 when it's saved again
         let again = encode(loaded.clone());
-        assert_eq!([0, 3], again[..2]);
+        assert_eq!([0, 4], again[..2]);
+        assert_eq!(loaded, decoded(&again));
+    }
+
+    // A format 3 file, as saved before crops: format 4's but for each chunk's crops.
+    type Format3Chunk = ([i64; 3], Vec<(u16, u16)>, Vec<(u16, Container)>);
+
+    #[derive(Serialize)]
+    struct Format3<'a> {
+        palette: Vec<&'a str>,
+        chunks: Vec<Format3Chunk>,
+    }
+
+    #[test]
+    fn test_a_region_file_from_before_crops_still_loads() {
+        let file = Format3 {
+            palette: vec!["furnace", "wheat_3"],
+            chunks: vec![([2, 30, -1], vec![(5, 0), (300, 1)], vec![(5, furnace())])],
+        };
+        let bytes = postcard::to_extend(&file, vec![0, 3]).unwrap();
+        let loaded = decoded(&bytes);
+        let expected = ChunkEdits {
+            containers: vec![(U16Vec3::new(5, 0, 0), furnace())],
+            ..edits(
+                chunk(2, 30, -1),
+                vec![
+                    (U16Vec3::new(5, 0, 0), BlockType::Furnace),
+                    (U16Vec3::new(12, 1, 2), BlockType::Wheat3),
+                ],
+            )
+        };
+        assert_eq!(vec![expected], loaded);
+        let again = encode(loaded.clone());
+        assert_eq!([0, 4], again[..2]);
         assert_eq!(loaded, decoded(&again));
     }
 
@@ -371,14 +478,13 @@ mod tests {
                 chunk: [0, 0, 0],
                 blocks: vec![(0, 0), (1, 1)],
                 containers: Vec::new(),
+                crops: Vec::new(),
             }],
         };
-        let bytes = postcard::to_extend(&file, vec![0, 3]).unwrap();
-        let error = decode(&bytes, &mut Edits::default(), &mut Containers::default());
-        assert!(error.unwrap_err().to_string().contains("mithril_ore"));
-        let newer = [&[0, 4][..], &bytes[2..]].concat();
-        let error = decode(&newer, &mut Edits::default(), &mut Containers::default());
-        assert!(error.unwrap_err().to_string().contains("newer version"));
+        let bytes = postcard::to_extend(&file, vec![0, 4]).unwrap();
+        assert!(fails(&bytes).to_string().contains("mithril_ore"));
+        let newer = [&[0, 5][..], &bytes[2..]].concat();
+        assert!(fails(&newer).to_string().contains("newer version"));
     }
 
     #[test]
@@ -388,11 +494,8 @@ mod tests {
             ..edits(chunk(0, 0, 0), vec![(U16Vec3::ZERO, BlockType::Furnace)])
         }];
         let bytes = encode(chunks.clone());
-        let load = |bytes: &[u8]| {
-            decode(bytes, &mut Edits::default(), &mut Containers::default()).is_err()
-        };
-        assert!(load(&bytes[..bytes.len() - 1]));
+        fails(&bytes[..bytes.len() - 1]);
         chunks[0].containers[0].1.slots.push(None);
-        assert!(load(&encode(chunks)));
+        fails(&encode(chunks));
     }
 }

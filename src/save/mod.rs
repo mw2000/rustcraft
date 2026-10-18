@@ -23,6 +23,7 @@ use bevy_replicon::prelude::ClientId;
 use crate::clock::{TimeOfDay, START_TIME};
 use crate::containers::Containers;
 use crate::edits::Edits;
+use crate::farming::Crops;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::inventory::Inventory;
@@ -39,7 +40,7 @@ const WORLD_FILE: &str = "world.toml";
 const EDITS_DIR: &str = "edits";
 const PLAYERS_DIR: &str = "players";
 
-/// Saves the world (§4.3): its edits and containers, `world.toml` with the host's player, and
+/// Saves the world (§4.3): its edits, containers and crops, `world.toml` with the host's player, and
 /// each player who's joined from elsewhere as `players/<name>.toml`, every so often if they've
 /// changed, as such a player leaves, and as the game quits.
 pub struct SavePlugin;
@@ -101,7 +102,8 @@ struct Snapshot {
 
 impl WorldSave {
     /// Opens the world saved in `dir`, or makes a new one there, with `requested_seed` or else a
-    /// random one. Returns it with its `world.toml`, every edit made in it and every container.
+    /// random one. Returns it with its `world.toml`, every edit made in it, every container and
+    /// every crop.
     ///
     /// All the edits are loaded at once, which is quick while worlds are small. A world with a
     /// great many would load its regions as chunks near them load instead. So are the saves
@@ -109,7 +111,7 @@ impl WorldSave {
     pub fn open(
         dir: PathBuf,
         requested_seed: Option<u32>,
-    ) -> io::Result<(Self, WorldFile, Edits, Containers)> {
+    ) -> io::Result<(Self, WorldFile, Edits, Containers, Crops)> {
         let path = dir.join(WORLD_FILE);
         let file = match fs::read_to_string(&path) {
             Ok(text) => {
@@ -133,16 +135,19 @@ impl WorldSave {
             Err(error) => return Err(error),
         };
 
-        let (mut edits, mut containers) = (Edits::default(), Containers::default());
+        let (mut edits, mut containers, mut crops) =
+            (Edits::default(), Containers::default(), Crops::default());
         match fs::read_dir(dir.join(EDITS_DIR)) {
             Ok(entries) => {
                 for entry in entries {
                     let path = entry?.path();
                     if path.extension() == Some(region::EXTENSION.as_ref()) {
                         let bytes = fs::read(&path)?;
-                        region::decode(&bytes, &mut edits, &mut containers).map_err(|error| {
-                            io::Error::new(error.kind(), format!("{}: {error}", path.display()))
-                        })?;
+                        region::decode(&bytes, &mut edits, &mut containers, &mut crops).map_err(
+                            |error| {
+                                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+                            },
+                        )?;
                     }
                 }
             }
@@ -185,7 +190,7 @@ impl WorldSave {
             writing: None,
             next_autosave: AUTOSAVE_INTERVAL,
         };
-        Ok((save, file, edits, containers))
+        Ok((save, file, edits, containers, crops))
     }
 
     /// The saved state of the player from elsewhere called `name`, if they've played here.
@@ -213,23 +218,26 @@ impl WorldSave {
     }
 
     // Takes what's changed since the last snapshot: the regions with new edits or changed
-    // containers, all of whose edits and containers are copied to be written again, `file` if
-    // it's not what was last written, and the players changed.
+    // containers or crops, all of whose edits, containers and crops are copied to be written
+    // again, `file` if it's not what was last written, and the players changed.
     fn snapshot(
         &mut self,
         edits: &mut Edits,
         containers: &mut Containers,
+        crops: &mut Crops,
         file: WorldFile,
     ) -> Snapshot {
         let changed = edits
             .take_changed()
             .into_iter()
-            .chain(containers.take_changed());
+            .chain(containers.take_changed())
+            .chain(crops.take_changed());
         self.unsaved.extend(changed.map(Region::containing));
         let mut regions: HashMap<_, HashMap<_, _>> =
             self.unsaved.drain().map(|r| (r, HashMap::new())).collect();
         if !regions.is_empty() {
             // with those of chunks with no edits, as chests in structures (M2.3) will be
+            // and every crop's chunk has an edit, the crop itself
             for coord in edits.chunks().chain(containers.chunks()) {
                 if let Some(chunks) = regions.get_mut(&Region::containing(coord)) {
                     chunks.entry(coord).or_insert_with(|| ChunkEdits {
@@ -239,6 +247,7 @@ impl WorldSave {
                             .in_chunk(coord)
                             .map(|(local, container)| (local, container.clone()))
                             .collect(),
+                        crops: crops.in_chunk(coord).collect(),
                     });
                 }
             }
@@ -327,6 +336,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 struct Savable<'w, 's> {
     world: ResMut<'w, World>,
     containers: ResMut<'w, Containers>,
+    crops: ResMut<'w, Crops>,
     clock: Res<'w, TimeOfDay>,
     operators: Res<'w, Operators>,
     players: Query<
@@ -361,7 +371,12 @@ impl Savable<'_, '_> {
                 _ => {}
             }
         }
-        save.snapshot(self.world.edits_mut(), &mut self.containers, file)
+        save.snapshot(
+            self.world.edits_mut(),
+            &mut self.containers,
+            &mut self.crops,
+            file,
+        )
     }
 }
 
@@ -427,6 +442,7 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
     use bevy_replicon::prelude::*;
 
+    use super::world_file::FORMAT_VERSION;
     use super::{region, Region, SavePlugin, WorldFile, WorldSave, EDITS_DIR, WORLD_FILE};
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
@@ -434,6 +450,7 @@ mod tests {
     use crate::containers::{Containers, FUEL, INPUT};
     use crate::crafting::SMELT_TIME;
     use crate::edits::Edits;
+    use crate::farming::Crops;
     use crate::game_mode::GameMode;
     use crate::hotbar::Hotbar;
     use crate::inventory::Inventory;
@@ -472,7 +489,7 @@ mod tests {
     #[test]
     fn test_a_new_world_takes_the_seed_asked_for_and_keeps_it() {
         let dir = TempDir::new("seed");
-        let (_, file, edits, _) = WorldSave::open(dir.world(), Some(7)).unwrap();
+        let (_, file, edits, ..) = WorldSave::open(dir.world(), Some(7)).unwrap();
         assert_eq!(7, file.seed);
         assert!(edits.chunks().next().is_none());
         // a never edited world is just its world.toml
@@ -512,18 +529,18 @@ mod tests {
     #[test]
     fn test_only_regions_with_new_edits_are_written() {
         let dir = TempDir::new("regions");
-        let (mut save, file, mut edits, mut containers) =
+        let (mut save, file, mut edits, mut containers, mut crops) =
             WorldSave::open(dir.world(), Some(1)).unwrap();
         let (here, there) = (I64Vec3::new(5, 500, 5), I64Vec3::new(-600, 470, 9000));
         edits.set(here, BlockType::Air);
         edits.set(there, BlockType::Bricks);
-        let snapshot = save.snapshot(&mut edits, &mut containers, file.clone());
+        let snapshot = save.snapshot(&mut edits, &mut containers, &mut crops, file.clone());
         // world.toml hasn't changed since it was written
         assert!(snapshot.world_file.is_none());
         assert_eq!(2, snapshot.regions.len());
         snapshot.write().unwrap();
         assert!(save
-            .snapshot(&mut edits, &mut containers, file.clone())
+            .snapshot(&mut edits, &mut containers, &mut crops, file.clone())
             .is_empty());
 
         let (near, far) = (
@@ -532,7 +549,7 @@ mod tests {
         );
         fs::write(region_file(&dir, far), "left alone").unwrap();
         edits.set(here + I64Vec3::X, BlockType::Planks);
-        let snapshot = save.snapshot(&mut edits, &mut containers, file);
+        let snapshot = save.snapshot(&mut edits, &mut containers, &mut crops, file);
         assert_eq!(vec![&near], snapshot.regions.keys().collect::<Vec<_>>());
         snapshot.write().unwrap();
         assert_eq!(
@@ -543,7 +560,13 @@ mod tests {
         // the rewritten region keeps its old edits as well as the new
         let mut loaded = Edits::default();
         let bytes = fs::read(region_file(&dir, near)).unwrap();
-        region::decode(&bytes, &mut loaded, &mut Containers::default()).unwrap();
+        region::decode(
+            &bytes,
+            &mut loaded,
+            &mut Containers::default(),
+            &mut Crops::default(),
+        )
+        .unwrap();
         let chunk = ChunkCoordinate::containing(here);
         let mut blocks: Vec<_> = loaded.in_chunk(chunk).collect();
         blocks.sort_unstable_by_key(|(local, _)| local.x);
@@ -560,7 +583,7 @@ mod tests {
     #[test]
     fn test_containers_are_saved_with_their_regions_and_alone_rewrite_them() {
         let dir = TempDir::new("containers");
-        let (mut save, file, mut edits, mut containers) =
+        let (mut save, file, mut edits, mut containers, mut crops) =
             WorldSave::open(dir.world(), Some(1)).unwrap();
         let at = I64Vec3::new(-40, 460, 3);
         edits.set(at, BlockType::Furnace);
@@ -569,23 +592,47 @@ mod tests {
         furnace.slots[FUEL] = Some(ItemStack::new(Item::Coal, 2));
         containers.run(SMELT_TIME * 1.5);
         let saved = containers.get(at).cloned();
-        save.snapshot(&mut edits, &mut containers, file.clone())
+        save.snapshot(&mut edits, &mut containers, &mut crops, file.clone())
             .write()
             .unwrap();
-        let (_, _, _, loaded) = WorldSave::open(dir.world(), None).unwrap();
+        let (_, _, _, loaded, _) = WorldSave::open(dir.world(), None).unwrap();
         assert_eq!(saved, loaded.get(at).cloned());
 
         // a furnace burning changes nothing but itself, and that's saved too
         containers.run(1.0);
-        let snapshot = save.snapshot(&mut edits, &mut containers, file);
+        let snapshot = save.snapshot(&mut edits, &mut containers, &mut crops, file);
         assert_eq!(1, snapshot.regions.len());
         snapshot.write().unwrap();
-        let (_, _, _, loaded) = WorldSave::open(dir.world(), None).unwrap();
+        let (_, _, _, loaded, _) = WorldSave::open(dir.world(), None).unwrap();
         assert_eq!(containers.get(at), loaded.get(at));
     }
 
     #[test]
-    fn test_a_format_2_world_opens_and_is_written_as_format_3() {
+    fn test_crops_are_saved_with_their_regions_and_alone_rewrite_them() {
+        let dir = TempDir::new("crops");
+        let (mut save, file, mut edits, mut containers, mut crops) =
+            WorldSave::open(dir.world(), Some(1)).unwrap();
+        let at = I64Vec3::new(70, 460, -3);
+        edits.set(at, BlockType::Wheat0);
+        crops.plant(at, 2.25);
+        save.snapshot(&mut edits, &mut containers, &mut crops, file.clone())
+            .write()
+            .unwrap();
+        let (.., loaded) = WorldSave::open(dir.world(), None).unwrap();
+        assert_eq!(Some(2.25), loaded.planted(at));
+
+        // a crop ripening and let go of changes no edit, and is saved all the same
+        crops.grew(at, None);
+        let snapshot = save.snapshot(&mut edits, &mut containers, &mut crops, file);
+        assert_eq!(1, snapshot.regions.len());
+        snapshot.write().unwrap();
+        let (_, _, edits, _, loaded) = WorldSave::open(dir.world(), None).unwrap();
+        assert_eq!(None, loaded.planted(at));
+        assert_eq!(1, edits.chunks().count());
+    }
+
+    #[test]
+    fn test_a_format_2_world_opens_and_is_written_in_the_latest_format() {
         type Format2Chunk = ([i64; 3], Vec<(u16, u16)>);
         #[derive(serde::Serialize)]
         struct Format2Region<'a> {
@@ -604,17 +651,27 @@ mod tests {
         .unwrap();
         fs::write(region_file(&dir, Region { x: 0, z: 0 }), region).unwrap();
 
-        let (mut save, file, mut edits, mut containers) =
+        let (mut save, file, mut edits, mut containers, mut crops) =
             WorldSave::open(dir.world(), None).unwrap();
         assert_eq!((5, 2), (file.seed, file.format));
         let chunk = ChunkCoordinate(I64Vec3::new(0, 28, 0));
         let blocks: Vec<_> = edits.in_chunk(chunk).collect();
         assert_eq!(vec![(U16Vec3::new(7, 0, 0), BlockType::Furnace)], blocks);
         // and its world.toml's written in the new format, its regions as they change
-        let snapshot = save.snapshot(&mut edits, &mut containers, WorldFile::new(5, 0.4));
-        assert_eq!(3, snapshot.world_file.as_ref().unwrap().format);
+        let snapshot = save.snapshot(
+            &mut edits,
+            &mut containers,
+            &mut crops,
+            WorldFile::new(5, 0.4),
+        );
+        assert_eq!(FORMAT_VERSION, snapshot.world_file.as_ref().unwrap().format);
         snapshot.write().unwrap();
-        assert_eq!(3, WorldSave::open(dir.world(), None).unwrap().1.format);
+        let (.., crops) = WorldSave::open(dir.world(), None).unwrap();
+        assert_eq!(0, crops.chunks().count());
+        assert_eq!(
+            FORMAT_VERSION,
+            WorldSave::open(dir.world(), None).unwrap().1.format
+        );
     }
 
     // The game's saving, headless: a world played in one app is there in the next. The
@@ -724,7 +781,7 @@ mod tests {
             app.update();
         }
         assert!(region_file(&dir, region).exists());
-        let (_, file, edits, _) = WorldSave::open(dir.world(), None).unwrap();
+        let (_, file, edits, ..) = WorldSave::open(dir.world(), None).unwrap();
         assert!(file.player.is_some());
         assert_eq!(
             1,

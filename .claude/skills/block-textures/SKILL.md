@@ -33,7 +33,7 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 
 ## Hand-drawn tiles
 
-`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table, the furnace, the plants, the torch and the bed. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
+`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table, the furnace, the plants, the torch, the bed, farmland and the stages of wheat. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
 
 ```
 cd .claude/skills/block-textures
@@ -46,7 +46,7 @@ Each tile is a function that paints a few shades by index, like the 4-colour qua
 
 ## Item sprites
 
-Items that aren't blocks (sticks, coal, ingots, tools) are pictures on transparency in their own strip, `assets/textures/items.png`, one 16px tile per row of the `items!` table in `src/items.rs`, in its order. `items.py` draws them all from shapes in a frame along the diagonal (tools have the handle bottom left and the head top right), lit from the upper left and outlined, with wood and stone shades from the block atlas, and writes `out/items_contact.png` on a slot's grey. Adding an item: add its row, then a sprite to `SPRITES` in `items.py` at the same place, which it checks against the table, and run it.
+Items that aren't blocks (sticks, coal, ingots, tools, food, seeds) are pictures on transparency in their own strip, `assets/textures/items.png`, one 16px tile per row of the `items!` table in `src/items.rs`, in its order. `items.py` draws them all from shapes in a frame along the diagonal (tools have the handle bottom left and the head top right), lit from the upper left and outlined, with wood and stone shades from the block atlas, and writes `out/items_contact.png` on a slot's grey. Adding an item: add its row, then a sprite to `SPRITES` in `items.py` at the same place, which it checks against the table, and run it.
 
 ```
 python items.py

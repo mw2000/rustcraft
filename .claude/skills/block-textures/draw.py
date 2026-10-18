@@ -291,10 +291,65 @@ def torch(rng):
     return out
 
 
+def farmland_top(rng):
+    """Dirt tilled into furrows across the tile, a little darker and damper than dirt, each ridge lit along its top
+    and shaded down into the groove after it."""
+    dirt = shades("Dirt", 1.2) * 0.85
+    y = np.mgrid[:16, :16][0]
+    ridge = np.array([2, 2, 1, 0])[y % 4]  # four furrows, four rows each: lit, lit, shaded, groove
+    out = dirt[np.clip(ridge + (noise(rng, (0, 1)) > 0.75) - (noise(rng) > 0.8), 0, len(dirt) - 1)]
+    out[y % 4 == 3] *= 0.8
+    return out
+
+
+GREEN = np.array([(58, 98, 30), (76, 124, 40), (98, 148, 52)], float)  # untinted, as STEM, darkest first
+GOLD = np.array([(164, 122, 40), (212, 170, 70), (240, 212, 124)], float)
+
+
+def wheat(stage):
+    """Wheat at `stage` of 8: stalks rising from the ground, taller each stage and turning from green to gold,
+    leafy while young and with braided ears at their tops from stage 4, golden and bearded once ripe. Drawn on
+    transparency and not tinted, as a crop's colour is its ripeness rather than the climate's."""
+    def draw(rng):
+        out = clear()
+        ripeness = max(0, stage - 3) / 4
+        stalk = GREEN + (GOLD - GREEN) * ripeness * 0.85
+        grains = GREEN + (GOLD - GREEN) * min(1, ripeness * 1.4)
+        height = 3 + stage * 12 // 7  # from 3 to 15 texels
+        ear = 0 if stage < 4 else 3 + (stage >= 6)  # how many texels of ear top a stalk
+        for x0 in [1, 3, 6, 8, 11, 13]:
+            tall = height - rng.integers(0, 2 + (stage < 4))
+            lean = rng.uniform(-0.3, 0.3)
+            shade = stalk[1 + rng.integers(0, 2)]
+            leaf = rng.integers(1, max(2, tall - ear - 1))  # where a leaf sticks out of a young stalk
+            side = rng.choice([-1, 1])
+            for i in range(tall):  # from the ground up
+                x = int(round(x0 + lean * i * i / tall))
+                if not 0 <= x < 16:
+                    break
+                y = 15 - i
+                if i >= tall - ear:  # the ear: grains either side of the stalk, in turn
+                    paint(out, y, x, grains[1])
+                    grain = x + (1 if i % 2 else -1)
+                    if 0 <= grain < 16:
+                        paint(out, y, grain, grains[2] if grain < x else grains[0])
+                    if stage == 7 and i == tall - 1 and y > 0:  # its beard, above the ear
+                        paint(out, y - 1, x + (1 if lean > 0 else -1) if 0 < x < 15 else x, GOLD[2])
+                else:
+                    paint(out, y, x, stalk[0] if i == 0 else shade)
+                    if stage < 5 and i == leaf and 0 <= x + side < 16:
+                        paint(out, y, x + side, stalk[2])
+                        if 0 <= x + 2 * side < 16 and y > 0:
+                            paint(out, y - 1, x + 2 * side, stalk[2])
+        return out
+    return draw
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
             TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
-            BedSide=bed_side)
+            BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
+            RipeWheat=wheat(7))
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

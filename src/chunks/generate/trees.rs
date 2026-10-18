@@ -533,7 +533,7 @@ fn tree_in_cell(
 }
 
 // splitmix64 over a seed and two coordinates
-pub(super) fn hash(seed: u64, a: i64, b: i64) -> u64 {
+pub(crate) fn hash(seed: u64, a: i64, b: i64) -> u64 {
     let mut h = seed
         ^ (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (b as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);

@@ -11,6 +11,7 @@ mod containers;
 mod crafting;
 pub mod drops;
 mod edits;
+mod farming;
 mod host;
 mod inventory;
 mod players;
@@ -31,6 +32,7 @@ use bevy_replicon::prelude::{ClientId, ClientState, ClientSystems, ServerSystems
 
 use crate::clock::TimeOfDay;
 use crate::containers::Containers;
+use crate::farming::Crops;
 use crate::player::name::PlayerName;
 use crate::protocol::POSE_INTERVAL;
 use crate::save::{PlayerState, WorldSave};
@@ -46,6 +48,7 @@ impl Plugin for ServerPlugin {
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
             .init_resource::<Containers>()
+            .init_resource::<Crops>()
             .init_resource::<drops::Chance>()
             .init_resource::<chat::ChatAllowances>()
             .init_resource::<Operators>()
@@ -105,6 +108,16 @@ impl Plugin for ServerPlugin {
                 )
                     .chain()
                     .after(players::move_players)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
+                // with the chunks near players loaded and this frame's edits made, so a crop
+                // planted is looked at in the frame it's planted
+                farming::grow_crops
+                    .after(keep_chunks_near_players)
+                    .after(edits::receive_edits)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
             )
@@ -178,7 +191,7 @@ pub struct WorldToOpen {
 /// world's spawn if they're new.
 pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     let dir = &open.dir;
-    let (save, saved, edits, containers) = WorldSave::open(dir.clone(), open.seed)
+    let (save, saved, edits, containers, crops) = WorldSave::open(dir.clone(), open.seed)
         .unwrap_or_else(|error| panic!("couldn't open the world in {}: {error}", dir.display()));
     let world = World::from_save(saved.seed, edits, open.region_distance);
     info!(
@@ -201,6 +214,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
     commands.insert_resource(containers);
+    commands.insert_resource(crops);
     commands.insert_resource(Operators::new(saved.ops));
     commands.insert_resource(save);
     commands.remove_resource::<WorldToOpen>();

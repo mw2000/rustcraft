@@ -7,7 +7,7 @@
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, see `Tile` in block.rs
-const ATLAS_CELLS: f32 = 32.0;
+const ATLAS_CELLS: f32 = 41.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
@@ -54,7 +54,7 @@ fn block_sample(uv: vec2<f32>, vertex_alpha: f32, footprint: BlockFootprint) -> 
 // order. `gen_atlas` prints these and the block-textures skill's `pack.py`
 // rewrites them, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 32>(
+    var means = array<vec3<f32>, 41>(
         vec3<f32>(0.1182, 0.1186, 0.1186), // stone
         vec3<f32>(0.5003, 0.5003, 0.5003), // grass top
         vec3<f32>(0.4776, 0.3611, 0.1822), // sand
@@ -87,6 +87,15 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.4400, 0.2406, 0.0737), // torch
         vec3<f32>(0.4146, 0.1724, 0.1339), // bed top
         vec3<f32>(0.3625, 0.1686, 0.1236), // bed side
+        vec3<f32>(0.1558, 0.0746, 0.0371), // farmland top
+        vec3<f32>(0.0959, 0.2408, 0.0274), // wheat 0
+        vec3<f32>(0.0884, 0.2269, 0.0254), // wheat 1
+        vec3<f32>(0.0958, 0.2427, 0.0274), // wheat 2
+        vec3<f32>(0.0903, 0.2330, 0.0259), // wheat 3
+        vec3<f32>(0.1887, 0.2844, 0.0409), // wheat 4
+        vec3<f32>(0.3343, 0.3523, 0.0643), // wheat 5
+        vec3<f32>(0.5131, 0.3994, 0.0809), // wheat 6
+        vec3<f32>(0.6091, 0.4307, 0.0923), // ripe wheat
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

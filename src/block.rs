@@ -1,8 +1,9 @@
 use rand::{Rng, RngExt};
 
 use crate::chunks::generate::light::MAX_LIGHT;
-use crate::items::Item;
+use crate::farming::WHEAT;
 use crate::items::ToolKind::{self, Axe, Pickaxe, Shovel};
+use crate::items::{Item, ItemStack};
 
 /// A block's row in the table: how it behaves and looks.
 struct Properties {
@@ -66,7 +67,65 @@ pub enum Drops {
     /// An item one time in so many, and otherwise nothing, as leaves now and then leave an
     /// apple.
     Chance(Item, u32),
+    /// Some of an item, from the first count to the second, as ripe wheat leaves its seeds.
+    Several(Item, u8, u8),
+    /// What both leave, as tall grass leaves itself and now and then seeds.
+    Both(&'static Drops, &'static Drops),
 }
+
+impl Drops {
+    // Adds what `block` leaves to `stacks`, with `rng` deciding what's left to chance.
+    fn roll(self, block: BlockType, rng: &mut impl Rng, stacks: &mut Vec<ItemStack>) {
+        let one = |item| ItemStack::new(item, 1);
+        match self {
+            Drops::Nothing => {}
+            Drops::Itself => stacks.push(one(Item::Block(block))),
+            Drops::Block(block) => stacks.push(one(Item::Block(block))),
+            Drops::Item(item) => stacks.push(one(item)),
+            Drops::Chance(item, one_in) => {
+                if rng.random_ratio(1, one_in) {
+                    stacks.push(one(item));
+                }
+            }
+            Drops::Several(item, least, most) => {
+                stacks.push(ItemStack::new(item, rng.random_range(least..=most)));
+            }
+            Drops::Both(first, second) => {
+                first.roll(block, rng, stacks);
+                second.roll(block, rng, stacks);
+            }
+        }
+    }
+}
+
+// A crop's row: a plant (see `TallGrass`) that isn't built over, so a field isn't lost to a
+// block placed carelessly, and stands only on farmland (`BlockType::stands_on`).
+const fn crop(name: &'static str, tile: Tile, drops: Drops) -> Properties {
+    Properties {
+        name,
+        solid: false,
+        replaceable: false,
+        style: RenderStyle::Cross,
+        drops,
+        hardness: 0.0,
+        tool: None,
+        tier: 0,
+        light_opacity: 0,
+        emits: 0,
+        occlusion_weight: 0.0,
+        top: tile,
+        side: tile,
+        bottom: tile,
+        lod: tile,
+    }
+}
+
+// Unripe wheat gives back the seed it grew from, and ripe wheat gives wheat and a few more.
+const UNRIPE: Drops = Drops::Item(Item::Seeds);
+const RIPE: Drops = Drops::Both(
+    &Drops::Item(Item::Wheat),
+    &Drops::Several(Item::Seeds, 1, 3),
+);
 
 // Declares `BlockType` and its table of `Properties` together, so each block's properties sit
 // beside its variant and the table can't fall out of step with the enum.
@@ -226,10 +285,11 @@ blocks! {
     },
     // Plants, standing on the block below and gone with it. They're broken at a touch, let light
     // and the player through and are built over, so their faces hide nothing. Flowers drop
-    // nothing, and tall grass itself, for beds' mattresses, until farming has it drop seeds too.
+    // nothing, and tall grass itself, for beds' mattresses, and a seed one time in eight.
     TallGrass {
         name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
-        style: RenderStyle::Cross, replaceable: true, drops: Drops::Itself,
+        style: RenderStyle::Cross, replaceable: true,
+        drops: Drops::Both(&Drops::Itself, &Drops::Chance(Item::Seeds, 8)),
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::TallGrass, side: Tile::TallGrass, bottom: Tile::TallGrass, lod: Tile::TallGrass,
     },
@@ -267,6 +327,23 @@ blocks! {
         hardness: 1.0, tool: Some(Axe), tier: 0,
         top: Tile::BedTop, side: Tile::BedSide, bottom: Tile::Planks, lod: Tile::BedTop,
     },
+    // Dirt or grass a hoe's tilled, for crops to stand on (`farming`). It's dirt again once
+    // something solid's put on it, and breaking it leaves dirt.
+    Farmland {
+        name: "farmland", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Dirt),
+        hardness: 0.75, tool: Some(Shovel), tier: 0,
+        top: Tile::FarmlandTop, side: Tile::Dirt, bottom: Tile::Dirt, lod: Tile::Dirt,
+    },
+    // Wheat's stages, from the shoots seeds come up as to ripe ears (`farming::WHEAT`).
+    Wheat0 { ..crop("wheat_0", Tile::Wheat0, UNRIPE) },
+    Wheat1 { ..crop("wheat_1", Tile::Wheat1, UNRIPE) },
+    Wheat2 { ..crop("wheat_2", Tile::Wheat2, UNRIPE) },
+    Wheat3 { ..crop("wheat_3", Tile::Wheat3, UNRIPE) },
+    Wheat4 { ..crop("wheat_4", Tile::Wheat4, UNRIPE) },
+    Wheat5 { ..crop("wheat_5", Tile::Wheat5, UNRIPE) },
+    Wheat6 { ..crop("wheat_6", Tile::Wheat6, UNRIPE) },
+    RipeWheat { ..crop("ripe_wheat", Tile::RipeWheat, RIPE) },
 }
 
 impl BlockType {
@@ -306,16 +383,11 @@ impl BlockType {
         self.properties().style
     }
 
-    /// The item it leaves when it's broken in survival, if any, with `rng` deciding one left
-    /// to chance.
-    pub fn drops(self, rng: &mut impl Rng) -> Option<Item> {
-        match self.properties().drops {
-            Drops::Nothing => None,
-            Drops::Itself => Some(Item::Block(self)),
-            Drops::Block(block) => Some(Item::Block(block)),
-            Drops::Item(item) => Some(item),
-            Drops::Chance(item, one_in) => rng.random_ratio(1, one_in).then_some(item),
-        }
+    /// What it leaves when it's broken in survival, with `rng` deciding what's left to chance.
+    pub fn drops(self, rng: &mut impl Rng) -> Vec<ItemStack> {
+        let mut stacks = Vec::new();
+        self.properties().drops.roll(self, rng, &mut stacks);
+        stacks
     }
 
     /// How long it takes to break by hand in survival, in seconds, see `breaking`.
@@ -341,6 +413,21 @@ impl BlockType {
     /// Whether it stands on the block under it, and goes when that does: plants and torches.
     pub fn needs_ground(&self) -> bool {
         matches!(self.style(), RenderStyle::Cross | RenderStyle::Torch)
+    }
+
+    /// Whether it's one of a crop's stages, which grow on farmland.
+    pub fn is_crop(&self) -> bool {
+        WHEAT.contains(self)
+    }
+
+    /// Whether it can stand on `ground`, if it `needs_ground`: a crop on farmland, and the
+    /// rest on anything solid.
+    pub fn stands_on(self, ground: BlockType) -> bool {
+        if self.is_crop() {
+            ground == BlockType::Farmland
+        } else {
+            ground.is_solid()
+        }
     }
 
     /// Whether it's something there, rather than air or water: what's looked at, broken and
@@ -439,9 +526,18 @@ pub enum Tile {
     Torch,
     BedTop,
     BedSide,
+    FarmlandTop,
+    Wheat0,
+    Wheat1,
+    Wheat2,
+    Wheat3,
+    Wheat4,
+    Wheat5,
+    Wheat6,
+    RipeWheat,
 }
 
-pub const TILE_COUNT: usize = 32;
+pub const TILE_COUNT: usize = 41;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -467,7 +563,10 @@ mod tests {
         for block in BlockType::ALL {
             let name = block.name();
             assert!(names.insert(name), "{name} is used twice");
-            assert!(name.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+            assert!(name.starts_with(|c: char| c.is_ascii_lowercase()));
+            assert!(name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
             assert_eq!(Some(block), BlockType::from_name(name));
         }
         assert_eq!(None, BlockType::from_name("Stone"));
@@ -484,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::BedSide as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::RipeWheat as usize + 1);
     }
 
     #[test]
@@ -526,7 +625,7 @@ mod tests {
     fn test_plants_are_crosses_walked_through_seen_through_and_built_over() {
         let plants: Vec<_> = BlockType::ALL
             .into_iter()
-            .filter(BlockType::is_plant)
+            .filter(|plant| plant.is_plant() && !plant.is_crop())
             .collect();
         assert_eq!(
             vec![
@@ -537,13 +636,31 @@ mod tests {
             ],
             plants
         );
-        for plant in plants {
+        for plant in BlockType::ALL.into_iter().filter(BlockType::is_plant) {
             assert_eq!(RenderStyle::Cross, plant.style());
             assert!(!plant.is_solid() && !plant.is_opaque());
             assert_eq!(0, plant.light_opacity());
             assert_eq!(0.0, plant.occlusion_weight());
-            assert!(plant.is_replaceable() && plant.is_tangible());
+            assert!(plant.is_tangible() && plant.needs_ground());
+            // but crops aren't built over
+            assert_eq!(!plant.is_crop(), plant.is_replaceable(), "{plant:?}");
         }
+    }
+
+    #[test]
+    fn test_crops_stand_on_farmland_and_everything_else_on_solid_ground() {
+        for crop in crate::farming::WHEAT {
+            assert!(crop.is_crop() && crop.is_plant());
+            assert!(crop.stands_on(BlockType::Farmland));
+            assert!(!crop.stands_on(BlockType::Dirt) && !crop.stands_on(BlockType::Grass));
+        }
+        for plant in [BlockType::TallGrass, BlockType::Torch] {
+            assert!(!plant.is_crop());
+            assert!(plant.stands_on(BlockType::Farmland) && plant.stands_on(BlockType::Stone));
+            assert!(!plant.stands_on(BlockType::Water) && !plant.stands_on(BlockType::Poppy));
+        }
+        assert_eq!(Tile::FarmlandTop, BlockType::Farmland.tile(Face::Top));
+        assert_eq!(Tile::Dirt, BlockType::Farmland.tile(Face::Side));
     }
 
     #[test]
@@ -554,17 +671,16 @@ mod tests {
         assert!(!torch.is_solid() && !torch.is_opaque() && !torch.is_replaceable());
         assert_eq!(0, torch.light_opacity());
         assert!(torch.needs_ground() && torch.is_tangible() && !torch.is_plant());
-        assert_eq!(
-            Some(crate::items::Item::Block(torch)),
-            torch.drops(&mut rand::rng())
-        );
+        let one = crate::items::ItemStack::new(crate::items::Item::Block(torch), 1);
+        assert_eq!(vec![one], torch.drops(&mut rand::rng()));
         assert_eq!(0, BlockType::Stone.emits());
     }
 
     #[test]
-    fn test_only_air_water_and_plants_are_replaceable() {
+    fn test_only_air_water_and_plants_other_than_crops_are_replaceable() {
         for block in BlockType::ALL {
-            let expected = matches!(block, BlockType::Air | BlockType::Water) || block.is_plant();
+            let expected = matches!(block, BlockType::Air | BlockType::Water)
+                || (block.is_plant() && !block.is_crop());
             assert_eq!(expected, block.is_replaceable(), "{block:?}");
             assert_eq!(
                 !expected || block.is_plant(),

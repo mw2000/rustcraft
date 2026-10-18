@@ -51,6 +51,12 @@ def shovel():
     return ((U - 15.6) / 3.2) ** 2 + (V / 2.4) ** 2 < 1.0
 
 
+def hoe():
+    # a narrow blade out to one side of the handle's top, turned down at its edge
+    blade = (V > -0.6) & (V < 5.2) & (np.abs(U - 15.0) < 1.3)
+    return blade | ((V > 3.0) & (V < 5.2) & (U > 11.6) & (U < 16.3))
+
+
 def stick():
     return (np.abs(V) < 0.6) & (U > 2.5) & (U < 19.0)
 
@@ -75,6 +81,41 @@ def apple():
     out[6:8, 4] = out[6, 5] = (255, 200, 190, 255)  # a glint, upper left
     lit((x == 8) & (y >= 1) & (y <= 4), HANDLE, out)
     lit(((x - 11) / 2.2) ** 2 + ((y - 2.5) / 1.2) ** 2 < 1.0, np.array([(46, 102, 34), (72, 140, 48), (110, 176, 70)], float), out)
+    outline(out)
+    return out
+
+
+def seeds():
+    """A few seeds scattered, each a grain two texels long, lit at its upper end."""
+    out = np.zeros((16, 16, 4))
+    husk = np.array([(120, 100, 44), (176, 152, 76), (222, 204, 130)], float)
+    for gy, gx in [(3, 7), (6, 11), (7, 3), (10, 8), (12, 3), (12, 12)]:
+        lit((y >= gy) & (y <= gy + 2) & (x >= gx) & (x <= gx + 1) & ~((y == gy) & (x == gx + 1)), husk, out)
+    outline(out)
+    return out
+
+
+def sheaf():
+    """A sheaf of wheat lying on the diagonal: stalks bundled at the bottom left, tied, and fanning out into
+    golden ears at the top right."""
+    out = np.zeros((16, 16, 4))
+    stalks = np.array([(150, 112, 40), (196, 158, 66), (226, 196, 108)], float)
+    ears = np.array([(176, 128, 36), (226, 184, 76), (250, 226, 140)], float)
+    fan = np.abs(V) < 0.7 + np.clip(U - 7, 0, None) * 0.28
+    lit(fan & (U > 2.5) & (U < 12.5) & (np.round(V * 1.6) % 2 == 0), stalks, out)
+    lit(fan & (U >= 11.5) & (U < 19.0) & ((x + y) % 2 == 0), ears, out)
+    out[(U > 6.3) & (U < 7.7) & (np.abs(V) < 1.5)] = (110, 74, 34, 255)  # the band tying it
+    outline(out)
+    return out
+
+
+def bread():
+    """A loaf, longer than it's wide, its crust browner along its top, with slashes across it."""
+    out = np.zeros((16, 16, 4))
+    loaf = ((x - 7.5) / 6.8) ** 2 + ((y - 9.0) / 4.2) ** 2 < 1.0
+    lit(loaf, np.array([(132, 74, 30), (186, 116, 52), (222, 160, 86)], float), out)
+    for cut in [4, 7, 10]:  # slashes, pale where the crust split open
+        out[(x - cut == (9 - y) // 2) & (y >= 6) & (y <= 9) & loaf] = (238, 204, 140, 255)
     outline(out)
     return out
 
@@ -133,7 +174,7 @@ def single(shape, colours):
     return out
 
 
-HEADS = dict(pickaxe=pickaxe, axe=axe, shovel=shovel)
+HEADS = dict(pickaxe=pickaxe, axe=axe, shovel=shovel)  # and hoes, after the apple
 # In the order of the `items!` table.
 def coal():
     out = single(lump(), COAL)
@@ -148,6 +189,9 @@ for material in ["wooden", "stone", "copper", "iron"]:
     for kind, head in HEADS.items():
         SPRITES[f"{material}_{kind}"] = lambda head=head, material=material: tool(head, MATERIALS[material])
 SPRITES["apple"] = apple
+for material in ["wooden", "stone", "copper", "iron"]:
+    SPRITES[f"{material}_hoe"] = lambda material=material: tool(hoe, MATERIALS[material])
+SPRITES.update(seeds=seeds, wheat=sheaf, bread=bread)
 
 
 def table_order():

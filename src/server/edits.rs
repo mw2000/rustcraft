@@ -10,11 +10,13 @@ use super::sync::BlockChanges;
 use crate::block::BlockType;
 use crate::breaking::{break_time, harvests};
 use crate::chunks::chunk::ChunkCoordinate;
+use crate::clock::TimeOfDay;
 use crate::containers::Containers;
+use crate::farming::{tilled, Crops};
 use crate::game_mode::GameMode;
 use crate::interaction::{overlaps, REACH};
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
-use crate::items::{Item, ItemStack};
+use crate::items::{ItemStack, ToolKind};
 use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT};
 use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking};
 use crate::world::World;
@@ -94,14 +96,18 @@ type Players<'w, 's> = Query<
 
 /// Makes the edits clients ask for that pass the checks, telling the clients near them, and
 /// tells the client asking for one that doesn't what's there instead. In survival a block placed
-/// is taken from the player's hotbar, and one broken leaves its item to pick up if it was broken
+/// is taken from the player's hotbar, and one broken leaves its items to pick up if it was broken
 /// with a tool of the tier it needs, and wears the tool held. A container broken in either mode
-/// leaves what was in it, as items are never lost with their container.
+/// leaves what was in it, as items are never lost with their container. Dirt or grass made
+/// farmland is tilled with the hoe held, which wears it in survival, and a crop placed is
+/// planted, to grow from then (`farming`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_edits(
     mut requests: MessageReader<FromClient<RequestEdit>>,
     mut world: ResMut<World>,
     mut containers: ResMut<Containers>,
+    mut crops: ResMut<Crops>,
+    clock: Res<TimeOfDay>,
     mut allowances: ResMut<EditAllowances>,
     time: Res<Time>,
     mut players: Players,
@@ -159,7 +165,8 @@ pub(super) fn receive_edits(
             .find(|(_, _, _, owner, ..)| owner.0 == client)
             .expect("an edit allowed has a player making it");
         let slot = usize::from(slot);
-        let held = held(&inventory, slot).and_then(|stack| stack.item.tool());
+        let placed_from = held(&inventory, slot).map(|stack| stack.item);
+        let tool = placed_from.and_then(|item| item.tool());
         if to == BlockType::Air {
             // the time it was held for is spent, so a block put back there takes as long
             commands.entity(player).remove::<BreakingStarted>();
@@ -168,34 +175,51 @@ pub(super) fn receive_edits(
         for stack in held_in_it.flatten() {
             commands.spawn((DroppedItem::from_block(stack, block), Replicated));
         }
+        crops.remove(block);
+        if to.is_crop() {
+            crops.plant(block, clock.0);
+        }
         let drops = mode.drops_broken_blocks();
         let mut leave = |broken: BlockType, at: I64Vec3| {
-            let harvested = drops && harvests(broken, held);
-            if let Some(item) = broken.drops(&mut chance.0).filter(|_| harvested) {
-                commands.spawn((
-                    DroppedItem::from_block(ItemStack::new(item, 1), at),
-                    Replicated,
-                ));
+            if drops && harvests(broken, tool) {
+                for stack in broken.drops(&mut chance.0) {
+                    commands.spawn((DroppedItem::from_block(stack, at), Replicated));
+                }
             }
         };
+        // what breaks at a touch doesn't wear a tool, nor does anything in creative
         if to == BlockType::Air {
             leave(was, block);
-            // what breaks at a touch doesn't wear a tool, nor does anything in creative
-            if held.is_some() && !mode.breaks_at_once() && was.hardness() > 0.0 {
+            if tool.is_some() && !mode.breaks_at_once() && was.hardness() > 0.0 {
                 inventory.wear(slot);
             }
-        } else if !mode.has_every_block() {
-            inventory.use_one(slot, Item::Block(to));
+        } else if tilled(was) == Some(to) {
+            if !mode.breaks_at_once() {
+                inventory.wear(slot);
+            }
+        } else if let Some(item) = placed_from.filter(|_| !mode.has_every_block()) {
+            inventory.use_one(slot, item);
         }
-        // a plant or a torch goes with the ground it stood on
+        // a plant or a torch goes with the ground it stood on, as a crop does with its farmland
         let above = block + I64Vec3::Y;
         let standing = world.get_block_at(above);
-        if !to.is_solid() && standing.needs_ground() {
+        if standing.needs_ground() && !standing.stands_on(to) {
             world.edit(above, BlockType::Air);
+            crops.remove(above);
             leave(standing, above);
             changed.write(BlockChanged {
                 block: above,
                 to: BlockType::Air,
+                by: None,
+            });
+        }
+        // and farmland built on is packed back into dirt
+        let below = block - I64Vec3::Y;
+        if to.is_solid() && world.get_block_at(below) == BlockType::Farmland {
+            world.edit(below, BlockType::Dirt);
+            changed.write(BlockChanged {
+                block: below,
+                to: BlockType::Dirt,
                 by: None,
             });
         }
@@ -242,9 +266,10 @@ fn refusal(
     if !in_reach(feet.translation, block) {
         return Some("it's out of reach");
     }
+    let was = world.get_block_at(block);
     if to == BlockType::Air && !mode.breaks_at_once() {
         let tool = held(inventory, slot).and_then(|stack| stack.item.tool());
-        let takes = break_time(world.get_block_at(block), tool);
+        let takes = break_time(was, tool);
         let held_for = started
             .filter(|started| started.block == block)
             .map_or(0.0, |started| now.saturating_sub(started.at).as_secs_f32());
@@ -252,19 +277,29 @@ fn refusal(
             return Some("it's broken sooner than it takes");
         }
     }
+    if tilled(was) == Some(to) {
+        let tool = held(inventory, slot).and_then(|stack| stack.item.tool());
+        if tool.is_none_or(|tool| tool.kind != ToolKind::Hoe) {
+            return Some("they aren't holding a hoe");
+        }
+        if world.get_block_at(block + I64Vec3::Y) != BlockType::Air {
+            return Some("there's something on it");
+        }
+        return None;
+    }
     if to != BlockType::Air {
-        if !world.get_block_at(block).is_replaceable() {
+        if !was.is_replaceable() {
             return Some("it's into a solid block");
         }
         if !mode.can_place(to) {
             return Some("they can't place that");
         }
         let held = held(inventory, slot);
-        if !mode.has_every_block() && held.is_none_or(|stack| stack.item != Item::Block(to)) {
+        if !mode.has_every_block() && held.is_none_or(|stack| stack.item.places() != Some(to)) {
             return Some("they aren't holding that");
         }
-        if to.needs_ground() && !world.get_block_at(block - I64Vec3::Y).is_solid() {
-            return Some("it needs solid ground under it");
+        if to.needs_ground() && !to.stands_on(world.get_block_at(block - I64Vec3::Y)) {
+            return Some("it can't stand on what's under it");
         }
         let into_player = players
             .iter()
@@ -290,6 +325,8 @@ mod tests {
     use super::EDIT_BURST;
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
+    use crate::clock::TimeOfDay;
+    use crate::farming::Crops;
     use crate::game_mode::GameMode;
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
@@ -678,6 +715,106 @@ mod tests {
             .map(|(stack, _)| stack.count)
             .sum::<u8>();
         assert_eq!(2, stones);
+    }
+
+    // Puts `block` at `at`, as if it had always been there.
+    fn put(app: &mut App, at: I64Vec3, block: BlockType) {
+        app.world_mut().resource_mut::<World>().edit(at, block);
+    }
+
+    #[test]
+    fn test_a_hoe_tills_dirt_or_grass_with_air_above_and_wears() {
+        let mut app = server(GameMode::Survival);
+        let (grass, dirt) = (FLOOR, FLOOR + I64Vec3::X);
+        put(&mut app, grass, BlockType::Grass);
+        put(&mut app, dirt, BlockType::Dirt);
+        put(&mut app, dirt + I64Vec3::Y, BlockType::TallGrass);
+        // not by hand, nor with a shovel
+        assert_refused(&mut app, grass, BlockType::Farmland);
+        holding(&mut app, Item::WoodenShovel);
+        assert_refused(&mut app, grass, BlockType::Farmland);
+        holding(&mut app, Item::WoodenHoe);
+        let (changed, _) = request(&mut app, &[(grass, BlockType::Farmland)]);
+        assert_eq!(1, changed.len());
+        assert_eq!(BlockType::Farmland, block_at(&app, grass));
+        assert_eq!(1, inventory(&mut app).slots[0].unwrap().wear);
+        // nor with something on it, nor what isn't dirt or grass
+        assert_refused(&mut app, dirt, BlockType::Farmland);
+        assert_refused(&mut app, FLOOR + I64Vec3::X * 2, BlockType::Farmland);
+        assert_eq!(1, inventory(&mut app).slots[0].unwrap().wear);
+    }
+
+    #[test]
+    fn test_seeds_are_planted_only_on_farmland_and_used_up() {
+        let mut app = server(GameMode::Survival);
+        let on_stone = FLOOR + I64Vec3::Y;
+        let farmland = FLOOR + I64Vec3::X;
+        put(&mut app, farmland, BlockType::Farmland);
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Seeds, 2));
+        assert_refused(&mut app, on_stone, BlockType::Wheat0);
+        // nor is wheat placed as a block from seeds' slot as anything but its first stage
+        assert_refused(&mut app, farmland + I64Vec3::Y, BlockType::RipeWheat);
+        let (changed, _) = request(&mut app, &[(farmland + I64Vec3::Y, BlockType::Wheat0)]);
+        assert_eq!(1, changed.len());
+        assert_eq!(1, inventory(&mut app).slots[0].unwrap().count);
+        let planted = app
+            .world()
+            .resource::<Crops>()
+            .planted(farmland + I64Vec3::Y);
+        assert_eq!(Some(app.world().resource::<TimeOfDay>().0), planted);
+        // and a crop isn't built over
+        *inventory(&mut app) = Inventory::default();
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Block(BlockType::Dirt), 1));
+        assert_refused(&mut app, farmland + I64Vec3::Y, BlockType::Dirt);
+    }
+
+    #[test]
+    fn test_wheat_drops_by_its_ripeness_and_goes_with_its_farmland() {
+        let mut app = server(GameMode::Survival);
+        let (ripe, unripe) = (FLOOR + I64Vec3::new(1, 1, 0), FLOOR + I64Vec3::new(2, 1, 0));
+        for at in [ripe, unripe] {
+            put(&mut app, at - I64Vec3::Y, BlockType::Farmland);
+        }
+        put(&mut app, ripe, BlockType::RipeWheat);
+        put(&mut app, unripe, BlockType::Wheat4);
+        app.world_mut().resource_mut::<Crops>().plant(unripe, 0.0);
+        request(&mut app, &[(ripe, BlockType::Air)]);
+        let count = |app: &mut App, item| {
+            let stacks = dropped(app).into_iter().map(|(stack, _)| stack);
+            stacks
+                .filter(|s| s.item == item)
+                .map(|s| s.count)
+                .sum::<u8>()
+        };
+        let seeds = count(&mut app, Item::Seeds);
+        assert!((1..=3).contains(&seeds));
+        assert_eq!(1, count(&mut app, Item::Wheat));
+
+        // the farmland under the other broken takes the crop, which leaves its seed, and the
+        // farmland dirt
+        let (changed, _) = hold_and_break(&mut app, unripe - I64Vec3::Y, 0.75);
+        assert_eq!(2, changed.len());
+        assert_eq!(BlockType::Air, block_at(&app, unripe));
+        assert_eq!(None, app.world().resource::<Crops>().planted(unripe));
+        assert_eq!(seeds + 1, count(&mut app, Item::Seeds));
+        assert_eq!(1, count(&mut app, Item::Block(BlockType::Dirt)));
+    }
+
+    #[test]
+    fn test_farmland_built_on_is_dirt_again() {
+        let mut app = server(GameMode::Creative);
+        let farmland = FLOOR + I64Vec3::X;
+        put(&mut app, farmland, BlockType::Farmland);
+        put(&mut app, FLOOR + I64Vec3::X * 2, BlockType::Farmland);
+        // a torch isn't solid, so it leaves it be
+        request(
+            &mut app,
+            &[(FLOOR + I64Vec3::new(2, 1, 0), BlockType::Torch)],
+        );
+        let (changed, _) = request(&mut app, &[(farmland + I64Vec3::Y, BlockType::Planks)]);
+        assert_eq!(2, changed.len());
+        assert_eq!(BlockType::Dirt, block_at(&app, farmland));
+        assert_eq!(BlockType::Farmland, block_at(&app, FLOOR + I64Vec3::X * 2));
     }
 
     #[test]

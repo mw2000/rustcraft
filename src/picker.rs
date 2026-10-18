@@ -20,8 +20,8 @@ const TILE_GAP: f32 = 4.0;
 
 const HINT: &str = "Click a block to put it in the selected slot";
 
-/// In creative, the inventory (E) is a panel of every block to build with, and clicking one puts
-/// a stack of it in the hotbar's selected slot. The game carries on behind it, but the player
+/// In creative, the inventory (E) is a panel of every block to build with, and of seeds to plant,
+/// and clicking one puts a stack of it in the hotbar's selected slot. The game carries on behind it, but the player
 /// stands still and the cursor's let go. E or Escape closes it.
 pub struct PickerPlugin;
 
@@ -38,7 +38,17 @@ impl Plugin for PickerPlugin {
 struct Picker;
 
 #[derive(Component)]
-struct Tile(BlockType);
+struct Tile(Item);
+
+// What's offered: every block but air, water and wheat that's still growing, which only grows
+// from seeds, and the seeds, after the blocks.
+fn offered() -> impl Iterator<Item = Item> {
+    let growing = |block: BlockType| block.is_crop() && block != BlockType::RipeWheat;
+    Item::all().filter(move |item| match item.block() {
+        Some(block) => !growing(block),
+        None => item.places().is_some(),
+    })
+}
 
 #[derive(Component)]
 struct BlockName;
@@ -82,10 +92,9 @@ fn spawn_picker(mut commands: Commands, icons: Res<ItemIcons>) {
                     ..default()
                 })
                 .with_children(|grid| {
-                    // all but air and water
-                    for block in BlockType::ALL.into_iter().filter(BlockType::is_tangible) {
-                        grid.spawn(tile(block))
-                            .with_child(icons.icon(Item::Block(block)))
+                    for item in offered() {
+                        grid.spawn(tile(item))
+                            .with_child(icons.icon(item))
                             .observe(put_in_hotbar);
                     }
                 });
@@ -103,9 +112,9 @@ fn spawn_picker(mut commands: Commands, icons: Res<ItemIcons>) {
 }
 
 // A button like the menu's, which `highlight_buttons` lights up under the pointer.
-fn tile(block: BlockType) -> impl Bundle {
+fn tile(item: Item) -> impl Bundle {
     (
-        Tile(block),
+        Tile(item),
         Button,
         Hovered::default(),
         Node {
@@ -121,7 +130,7 @@ fn tile(block: BlockType) -> impl Bundle {
     )
 }
 
-// The server puts the block there, as it does all changes to inventories (INV-4).
+// The server puts the stack there, as it does all changes to inventories (INV-4).
 fn put_in_hotbar(
     activate: On<Activate>,
     tiles: Query<&Tile>,
@@ -131,7 +140,7 @@ fn put_in_hotbar(
     if let (Ok(tile), Ok(hotbar)) = (tiles.get(activate.entity), hotbar.single()) {
         picks.write(PickBlock {
             slot: hotbar.selected as u8,
-            block: tile.0,
+            item: tile.0,
         });
     }
 }
@@ -167,10 +176,7 @@ fn name_hovered_block(
     }
     let hovered = tiles.iter().find(|(_, hovered)| hovered.get());
     if let Ok(mut text) = name.single_mut() {
-        text.0 = hovered.map_or_else(
-            || HINT.into(),
-            |(tile, _)| Item::Block(tile.0).display_name(),
-        );
+        text.0 = hovered.map_or_else(|| HINT.into(), |(tile, _)| tile.0.display_name());
     }
 }
 
@@ -300,7 +306,7 @@ mod tests {
             .world_mut()
             .query::<(Entity, &Tile)>()
             .iter(app.world())
-            .find(|(_, tile)| tile.0 == BlockType::Furnace)
+            .find(|(_, tile)| tile.0 == Item::Block(BlockType::Furnace))
             .unwrap()
             .0;
         app.world_mut().trigger(Activate { entity: furnace });
@@ -316,16 +322,27 @@ mod tests {
     }
 
     #[test]
-    fn test_every_solid_block_and_nothing_else_is_offered() {
+    fn test_every_block_to_build_with_and_seeds_are_offered() {
         let mut app = app(GameMode::Creative);
-        let offered: Vec<BlockType> = app
+        let offered: Vec<Item> = app
             .world_mut()
             .query::<&Tile>()
             .iter(app.world())
             .map(|tile| tile.0)
             .collect();
-        assert!(!offered.contains(&BlockType::Air));
-        assert!(!offered.contains(&BlockType::Water));
-        assert_eq!(BlockType::ALL.len() - 2, offered.len());
+        let block = Item::Block;
+        for wanted in [
+            block(BlockType::Stone),
+            block(BlockType::Farmland),
+            block(BlockType::RipeWheat),
+            Item::Seeds,
+        ] {
+            assert!(offered.contains(&wanted), "{wanted:?}");
+        }
+        for unwanted in [block(BlockType::Wheat3), Item::Wheat, Item::IronHoe] {
+            assert!(!offered.contains(&unwanted), "{unwanted:?}");
+        }
+        // all but air, water and the seven stages wheat grows through, and seeds
+        assert_eq!(BlockType::ALL.len() - 2 - 7 + 1, offered.len());
     }
 }

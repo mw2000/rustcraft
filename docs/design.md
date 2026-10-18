@@ -72,17 +72,19 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
 | Containers | Blocks holding items of their own in the world, so far the furnace, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs` |
+| Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
 cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace), plants
-(tall grass, poppy, dandelion, cornflower) and the torch.
+(tall grass, poppy, dandelion, cornflower), the torch and the bed, and for farming farmland and
+wheat's eight stages.
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
-`src/client/`). Worlds are saved as their edits, containers and the player (`src/save/`).
+`src/client/`). Worlds are saved as their edits, containers, crops and the player (`src/save/`).
 
 Not there yet: structures, mobs.
 
@@ -196,7 +198,7 @@ The world's state beyond the seed (INV-1).
   `RC_WORLD` (default `world`). A missing world is made with `RC_SEED` or a random seed, and its
   `world.toml` written at once; an existing one keeps its seed, and a disagreeing `RC_SEED` is
   ignored with a log line.
-  - `world.toml` holds the format version (`FORMAT_VERSION`, now 3), the game version that wrote
+  - `world.toml` holds the format version (`FORMAT_VERSION`, now 4), the game version that wrote
     it, the seed, the time of day, and a `[player]` table with the one local player's position,
     look (yaw and pitch), movement, game mode, hotbar (the selected slot) and inventory (each
     stack's slot, item name and count, and the stack on the cursor if the inventory screen was
@@ -218,6 +220,12 @@ The world's state beyond the seed (INV-1).
     changing mark their chunk for saving as edits do, so a furnace burning has its region
     written every 30 s while it does. `world.toml`'s format is 3 so an older game refuses the
     world rather than misreading its region files; it reads format 2's `world.toml` as it was.
+  - **Since format 4 (M1.9b)** each chunk has its crops after its containers: each as its block
+    index and when it was planted, in game days, an `f32` (§5.5a). A format 3 file (`0, 3`) is
+    read with no crops, and written as format 4 the next time its region changes; format 2 still
+    loads as before. Crops changing (planted, broken, ripened and let go of) mark their chunk for
+    saving as edits do; a crop growing a stage is an edit. `world.toml`'s format is 4, for the
+    same reason as 3, and format 2's and 3's are read as they were.
   - `Edits` remembers which chunks changed since the last save. Every 30 s, and only if
     something changed, the main thread copies `world.toml`'s contents and the edits of the
     regions with new ones, which is quick, and the IO pool writes them, one
@@ -1021,7 +1029,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
     `assets/textures/hud.png`, drawn by the block-textures skill's `hud.py`.
   - `PROTOCOL_VERSION` is 7.
-  - **Later:** a two-block bed lain in, with a Leave Bed button; bread and meat (M1.9b, M3.2);
+  - **Later:** a two-block bed lain in, with a Leave Bed button; meat (M3.2);
     damage from mobs and lava; leaves dropping apples as they decay, once they do.
 - Day and night already exist; night brings hostile mobs (§5.8).
 - **Block light (built, M1.7).** Blocks that `emit` light (the torch, 14) light the blocks round
@@ -1078,6 +1086,49 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - **Built (M1.8):** the `apple`, the first food: food items have a `fills` column in `items!`
   (`food(4)`), and leaves drop one a time in 20 when broken (`Drops::Chance(Item::Apple, 20)`
   in `blocks!`).
+- **Built (M1.9b): farming** (`src/farming.rs`, `src/server/farming.rs`).
+  - **Hoes and farmland:** `Hoe` is a tool kind, in each tier (`wooden_hoe` to `iron_hoe`, 2 of
+    the head's material and 2 sticks at a crafting table), quicker at breaking nothing. Right
+    click with one on dirt or grass with air above asks for an edit to `farmland`
+    (`farming::tilled`), which the server makes only with a hoe in the slot named, wearing it a
+    block's worth in survival; `RequestEdit` needed nothing new, as a till is told from a place
+    by the block it's on. Farmland is a full cube with a furrowed top tile, broken like dirt
+    and dropping dirt; a solid block placed on it packs it back into dirt. It doesn't dry out
+    left unplanted, nor is it trampled: neither seemed worth its state yet.
+  - **Seeds and wheat:** tall grass drops a `seeds` one time in eight beside itself
+    (`Drops::Both`, with `Drops::Several` for counts, so a block can leave more than one stack).
+    Items have a `plants` column, so seeds place `wheat_0` (`Item::places`), and a crop stands
+    only on farmland (`BlockType::stands_on`, beside `needs_ground`), so breaking or packing the
+    farmland pops it. Wheat's stages are eight blocks, `wheat_0` to `wheat_6` and `ripe_wheat`,
+    declared a line each with a `crop` row helper: crosses like the other plants, but not built
+    over (not replaceable), so a misplaced block can't wipe out a field. Unripe wheat drops its
+    seed; ripe wheat drops a `wheat` and 1–3 seeds. Their tiles, untinted, from green shoots to
+    bearded gold ears, and farmland's are drawn by `draw.py`.
+  - **Growing (INV-4):** a stage is a block, so growing is an edit, saved and sent as any is.
+    The server keeps each crop's planting time, in game days (`TimeOfDay`, so sleeping through
+    the night grows crops too), in `Crops` beside the edit layer, as containers are kept, and a
+    crop's stage is a function of it: each of the seven steps takes 0.6–1.4 times a seventh of
+    2.5 days, by a hash of the seed, the crop's place and its planting time, divided by 1.5 if
+    there's water within 4 blocks sideways of its farmland, at its level or one above
+    (`farming::reaches`, `grown`). Dry wheat is ripe in about 2.5 days (25 minutes), watered
+    in about 1.7. Water's judged as the crop grows, as if it had always been as it is, so
+    water brought to a field hurries it on at once; a stage never goes back.
+  - **Scheduled, and caught up:** each crop remembers when it's next due, and each chunk's
+    field the soonest of its crops, so a frame looks at a number per field and only at crops
+    that are due (`grow_crops`, at most 256 a frame). A due crop in a loaded chunk is brought
+    to the stage its time says, which after a long time away may be several at once, as one
+    `BlockChanged`; one in a chunk no one holds waits, so a field far off costs nothing until
+    a player's near and then catches up exactly as if it had grown live (a test checks both
+    ways and an unloaded field). Ripe crops, and crops whose block was changed, are forgotten.
+    Clients see the changes like any other edit; a big field come back into reach sends its
+    changes over a few frames.
+  - **Food:** `bread`, 3 wheat at a crafting table, fills 5 (an apple 4). Sprites for hoes,
+    seeds, wheat and bread are drawn by `items.py`.
+  - **Creative:** the picker offers farmland, ripe wheat (to decorate with, standing still) and
+    seeds, which grow; `PickBlock` carries an item rather than a block, sent by name as before.
+    `PROTOCOL_VERSION` is 9.
+  - **Later:** farmland drying out and trampling, more crops (carrots, potatoes) and saplings,
+    bone-meal-like speed-ups, and middle-clicking a crop picking its seeds.
 
 ### 5.6 Structures
 
@@ -1199,9 +1250,9 @@ Done when: **you can start with nothing and make iron tools.**
 - ☑ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
 - ☑ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
   (§5.5).
-- ☐ **M1.9 Plants and farming** (§5.5a).
+- ☑ **M1.9 Plants and farming** (§5.5a).
   - ☑ **M1.9a Plant blocks.** The cross render style, tall grass and flowers in the world.
-  - ☐ **M1.9b Farming.** Hoes, farmland, wheat that grows, bread and apples.
+  - ☑ **M1.9b Farming.** Hoes, farmland, wheat that grows, bread and apples.
 
 ### Phase 2: exploration
 
