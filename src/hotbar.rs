@@ -50,9 +50,11 @@ impl Plugin for HotbarPlugin {
             .add_systems(
                 Update,
                 (
-                    // and while the block picker's open, to choose the slot a block goes in
+                    // and while the block picker's open, to choose the slot a block goes in, but
+                    // not while the wheel zooms the map
                     select_slot
                         .run_if(not(in_state(GameState::Paused)))
+                        .run_if(not(in_state(GameState::Map)))
                         .run_if(command_bar_closed),
                     (draw_selection, draw_stacks),
                 )
@@ -65,7 +67,9 @@ impl Plugin for HotbarPlugin {
                     .run_if(command_bar_closed),
             )
             .add_systems(OnEnter(GameState::Inventory), hide_hotbar)
-            .add_systems(OnExit(GameState::Inventory), show_hotbar);
+            .add_systems(OnExit(GameState::Inventory), show_hotbar)
+            .add_systems(OnEnter(GameState::Map), hide_hotbar)
+            .add_systems(OnExit(GameState::Map), show_hotbar);
     }
 }
 

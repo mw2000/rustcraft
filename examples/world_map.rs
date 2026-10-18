@@ -9,13 +9,12 @@
 
 use std::env;
 
-use bevy::color::{ColorToComponents, LinearRgba, Srgba};
-use bevy::math::DVec3;
+use bevy::math::DVec2;
 
-use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
-use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
+use rustcraft::chunks::generate::biome::Biomes;
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 use rustcraft::chunks::generate::WATER_LEVEL;
+use rustcraft::map::relief::Relief;
 
 struct Args {
     seed: u32,
@@ -60,125 +59,19 @@ fn parse_args() -> Args {
     args
 }
 
-fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<(TerrainSample, Climate)> {
-    let size = args.pixels as usize;
-    let half = args.pixels as f64 / 2.0;
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let rows_per_thread = size.div_ceil(threads);
-
-    let mut samples = vec![(TerrainSample::default(), Climate::default()); size * size];
-    std::thread::scope(|scope| {
-        for (chunk_index, rows) in samples.chunks_mut(rows_per_thread * size).enumerate() {
-            scope.spawn(move || {
-                for (i, sample) in rows.iter_mut().enumerate() {
-                    let row = chunk_index * rows_per_thread + i / size;
-                    let col = i % size;
-                    let x = args.center.0 + (col as f64 - half) * args.scale;
-                    let z = args.center.1 + (row as f64 - half) * args.scale;
-                    *sample = (noise.sample(x, z), noise.climate(x, z));
-                }
-            });
-        }
-    });
-    samples
-}
-
-fn lerp_rgb(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
-    DVec3::from(a)
-        .lerp(DVec3::from(b), t.clamp(0.0, 1.0))
-        .into()
-}
-
-// Height above (or below) sea level to a map colour.
-fn height_colour(above_sea: f64) -> [f64; 3] {
-    const STOPS: [(f64, [f64; 3]); 10] = [
-        (-380.0, [8.0, 18.0, 55.0]),
-        (-200.0, [14.0, 34.0, 90.0]),
-        (-70.0, [25.0, 70.0, 140.0]),
-        (-30.0, [55.0, 120.0, 180.0]),
-        (0.0, [100.0, 170.0, 205.0]),
-        (0.01, [210.0, 200.0, 140.0]),
-        (2.0, [90.0, 150.0, 70.0]),
-        (40.0, [60.0, 115.0, 50.0]),
-        (140.0, [125.0, 110.0, 95.0]),
-        (250.0, [245.0, 245.0, 250.0]),
-    ];
-    if above_sea <= STOPS[0].0 {
-        return STOPS[0].1;
-    }
-    for pair in STOPS.windows(2) {
-        let ((h0, c0), (h1, c1)) = (pair[0], pair[1]);
-        if above_sea < h1 {
-            return lerp_rgb(c0, c1, (above_sea - h0) / (h1 - h0));
-        }
-    }
-    STOPS[STOPS.len() - 1].1
-}
-
-const SAND: [f64; 3] = [222.0, 196.0, 132.0];
-const SEA_ICE: [f64; 3] = [190.0, 222.0, 240.0];
-const GLACIER: [f64; 3] = [226.0, 238.0, 248.0];
-
-// Grass in this climate under trees this dense, as an sRGB map colour.
-fn grass_map_colour(climate: Climate, trees: f64) -> [f64; 3] {
-    let canopy = (trees * 1.6).min(1.0) as f32;
-    let linear = grass_colour(climate).lerp(leaf_colour(climate), canopy);
-    let srgb = Srgba::from(LinearRgba::rgb(linear.x, linear.y, linear.z)).to_vec3();
-    (srgb.as_dvec3() * 255.0).into()
-}
-
-fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) -> image::RgbImage {
-    let size = args.pixels;
-    let at = |x: u32, z: u32| samples[(z.min(size - 1) * size + x.min(size - 1)) as usize];
-    let height_at = |x: u32, z: u32| at(x, z).0.height;
-
-    let mut img = image::RgbImage::new(size, size);
-    for z in 0..size {
-        for x in 0..size {
-            let height = height_at(x, z);
-            let above_sea = height - WATER_LEVEL as f64;
-            let mut colour = height_colour(above_sea);
-            // up to where the height colours turn to rock
-            if args.biomes && (2.0..140.0).contains(&above_sea) {
-                let (sample, climate) = at(x, z);
-                let ground = match biomes.name(sample.biome) {
-                    Some("desert") => SAND,
-                    Some("glacier") => GLACIER,
-                    _ => grass_map_colour(climate, sample.trees),
-                };
-                let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
-                colour = lerp_rgb(ground, colour, rock);
-            }
-
-            if args.biomes && above_sea <= 0.0 && above_sea > -60.0 {
-                let ice = (1.0 - at(x, z).1.temperature as f64 / FREEZE_TEMPERATURE as f64)
-                    .clamp(0.0, 1.0);
-                if ice > 0.0 {
-                    colour = lerp_rgb(colour, SEA_ICE, (ice * 4.0).min(1.0));
-                }
-            }
-
-            // Light from the north west, exaggerated so gentle slopes still read at map scale.
-            if above_sea > 0.0 {
-                let dx =
-                    (height_at(x + 1, z) - height_at(x.saturating_sub(1), z)) / (2.0 * args.scale);
-                let dz =
-                    (height_at(x, z + 1) - height_at(x, z.saturating_sub(1))) / (2.0 * args.scale);
-                let shade = (1.0 - (dx + dz) * 3.0).clamp(0.4, 1.4);
-                colour = colour.map(|c| c * shade);
-            }
-            img.put_pixel(x, z, image::Rgb(colour.map(|c| c.clamp(0.0, 255.0) as u8)));
-        }
-    }
-    img
+fn render(relief: &Relief, biomes: &Biomes, args: &Args) -> image::RgbImage {
+    let biomes = args.biomes.then_some(biomes);
+    image::RgbImage::from_fn(args.pixels, args.pixels, |x, z| {
+        image::Rgb(relief.colour(x as usize, z as usize, biomes))
+    })
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[((sorted.len() - 1) as f64 * p) as usize]
 }
 
-fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
-    let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
+fn print_stats(relief: &Relief, biomes: &Biomes) {
+    let samples: Vec<TerrainSample> = relief.terrain().copied().collect();
     let land = samples
         .iter()
         .filter(|s| s.height >= WATER_LEVEL as f64)
@@ -214,7 +107,10 @@ fn main() {
     let noise = NoiseGenerator::new(args.seed);
 
     let start = std::time::Instant::now();
-    let samples = sample_map(&noise, &args);
+    let half = args.pixels as f64 / 2.0 * args.scale;
+    let corner = DVec2::new(args.center.0 - half, args.center.1 - half);
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let relief = Relief::sample(&noise, corner, args.scale, args.pixels as usize, threads);
     println!(
         "sampled {}x{} in {:.1?}",
         args.pixels,
@@ -222,11 +118,11 @@ fn main() {
         start.elapsed()
     );
 
-    print_stats(&samples, noise.biomes());
+    print_stats(&relief, noise.biomes());
     let spawn = noise.find_spawn();
     println!("spawn: x={} z={} height={:.1}", spawn.0, spawn.1, spawn.2);
 
-    render(&samples, noise.biomes(), &args)
+    render(&relief, noise.biomes(), &args)
         .save(&args.out)
         .expect("failed to save image");
     println!("wrote {}", args.out);

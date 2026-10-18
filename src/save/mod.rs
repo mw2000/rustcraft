@@ -324,7 +324,7 @@ impl Snapshot {
 }
 
 // Written beside it and renamed over it, so a crash part way through leaves the old file whole.
-fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = path.with_added_extension("tmp");
     let mut file = File::create(&temporary)?;
     file.write_all(bytes)?;

@@ -69,7 +69,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
-| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
+| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
 | Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
@@ -1335,6 +1335,28 @@ landmarks visible from far away (P1).
   tower) placed far apart and visible from very far away.
 - A map: a top-down view of explored land, drawn from the same terrain sampling as `world_map`.
 
+Built (M2.9): M opens the map (`src/map/`), a `GameState` like the inventory's, which frees the
+cursor and stops the player but not the clock; M or Escape closes it. The client reveals 64-block
+tiles whose middles are within 256 blocks of the local player, the full detail distance at the
+default settings, so the map records where you've been rather than all you can see from there.
+The explored tiles are kept by the client, not the server: the map shows nothing the seed
+doesn't, which every client has (§4.4), so there's nothing for the server to guard (INV-4), and
+it needs no protocol or save format change. They're written as a sorted postcard list to
+`map-<seed>.bin` in the world's directory, or under `servers/<address>/` in the data directory
+for a player who joined, on the IO pool every 30 seconds and as the game quits. Each explored
+tile is drawn as a 32-pixel image (2 blocks a pixel) and, zoomed out past 1 block a pixel, four
+by four tiles share a 64-pixel one (4 blocks a pixel) with what's unexplored left clear; both are
+rendered on tasks by `map::relief`, the shaded relief, sea, biome and grass-tint colouring moved
+out of `world_map`, which now draws with it too, so a tile matches `world_map` pixel for pixel
+(tested). A tile takes about 0.8 ms (3.3 ms for the coarse ones), eight at once while the map's
+open and two while it's closed, keeping those round the player ready; at most 768 images are
+kept, the least recently wanted let go. The screen shows the player as an arrow the way they
+face, other players with their names, the world's spawn and the player's bed, a scale bar and
+the coordinates under the cursor; the wheel zooms about the cursor through four levels and
+dragging pans. Edits don't show: it's the land as generated. Not yet: a minimap, a joined
+player's bed set after joining (its `SpawnBed` isn't sent to the client), and revealing further
+from high places.
+
 ### 5.8 Mobs and entities (later)
 
 - Passive animals (food, materials) and hostile mobs at night and in dark caves.
@@ -1442,7 +1464,7 @@ start.**
 - ☐ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☐ **M2.7 Landmarks.** (§5.7)
 - ☐ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2).
-- ☐ **M2.9 Map.** (§5.7)
+- ☑ **M2.9 Map.** (§5.7)
 
 ### Phase 3: life
 

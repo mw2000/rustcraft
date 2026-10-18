@@ -21,20 +21,21 @@ pub(crate) const TEXT_SHADOW: TextShadow = TextShadow {
 };
 
 /// Whether the game's being played, paused under the menu, carrying on under the inventory
-/// (the block picker in creative, and the inventory screen in survival), or carrying on with
-/// the player dead, under the death screen until they respawn.
+/// (the block picker in creative, and the inventory screen in survival) or the map, or carrying
+/// on with the player dead, under the death screen until they respawn.
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameState {
     #[default]
     Playing,
     Paused,
     Inventory,
+    Map,
     Dead,
 }
 
 /// Escape opens a menu over the game, like Minecraft's, and pauses it: the clock stops, the
 /// player can't move and the cursor's let go. Escape again, or Back to Game, carries on. E opens
-/// and closes the inventory, which Escape closes too.
+/// and closes the inventory, which Escape closes too, as it does the map.
 pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
@@ -165,18 +166,20 @@ fn toggle_menu(
     mut next: ResMut<NextState<GameState>>,
 ) {
     if keys.just_pressed(TOGGLE_KEY) {
-        // which closes the inventory rather than pausing over it, and does nothing for the
-        // dead, who can only respawn
+        // which closes the inventory or the map rather than pausing over it, and does nothing
+        // for the dead, who can only respawn
         match state.get() {
             GameState::Playing => next.set(GameState::Paused),
-            GameState::Paused | GameState::Inventory => next.set(GameState::Playing),
+            GameState::Paused | GameState::Inventory | GameState::Map => {
+                next.set(GameState::Playing)
+            }
             GameState::Dead => {}
         }
     } else if keys.just_pressed(INVENTORY_KEY) {
         match state.get() {
             GameState::Playing => next.set(GameState::Inventory),
             GameState::Inventory => next.set(GameState::Playing),
-            GameState::Paused | GameState::Dead => {}
+            GameState::Paused | GameState::Map | GameState::Dead => {}
         }
     }
 }

@@ -53,6 +53,10 @@ name = "rustcraft-server"
 path = "src/bin/server.rs"
 
 [[example]]
+name = "world_map"
+required-features = ["client"]
+
+[[example]]
 name = "lod_sim"
 required-features = ["client"]
 

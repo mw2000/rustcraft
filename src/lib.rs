@@ -29,6 +29,8 @@ pub mod inventory;
 pub mod items;
 pub mod loot;
 #[cfg(feature = "client")]
+pub mod map;
+#[cfg(feature = "client")]
 pub mod menu;
 #[cfg(feature = "client")]
 pub mod picker;

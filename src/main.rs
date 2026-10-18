@@ -33,6 +33,8 @@ use rustcraft::hotbar::HotbarPlugin;
 use rustcraft::hud::HudPlugin;
 use rustcraft::interaction::InteractionPlugin;
 use rustcraft::inventory::screen::InventoryScreenPlugin;
+use rustcraft::map::explored::MapDir;
+use rustcraft::map::MapPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::picker::PickerPlugin;
 use rustcraft::player::input::{follow_look, player_look, player_move};
@@ -239,6 +241,7 @@ fn main() {
         DrawDropsPlugin,
         DrawPlayersPlugin,
         DrawCracksPlugin,
+        MapPlugin,
     ))
     // the client, and the server unless joining one elsewhere: in singleplayer they're in one
     // App with no transport running, so replicon passes their messages straight across (§4.4)
@@ -249,11 +252,14 @@ fn main() {
         ClientPlugin,
     ));
     if let Ok(address) = std::env::var("RC_JOIN") {
-        app.add_systems(Startup, join_from_env(address));
+        app.insert_resource(MapDir::joined(&address))
+            .add_systems(Startup, join_from_env(address));
     } else {
+        let dir = worlds_dir().join(world_name());
         app.add_plugins((ServerPlugin, SavePlugin))
+            .insert_resource(MapDir(dir.clone()))
             .insert_resource(WorldToOpen {
-                dir: worlds_dir().join(world_name()),
+                dir,
                 seed: World::requested_seed(),
                 time_of_day: start_time(),
                 region_distance: settings.renderer.lod_layout().region_reach() as u32,
