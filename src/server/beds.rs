@@ -1,5 +1,6 @@
-//! Beds (§5.5): right-clicking one makes it where its user respawns, and at night lies them
-//! down in it. Once everyone in the world is asleep, the night's skipped to morning.
+//! Beds (§5.5): right-clicking one makes it where its user respawns, and at night or in a storm
+//! lies them down in it. Once everyone in the world is asleep, the night's skipped to morning,
+//! or the storm to its end, and they wake to the sky clearing (§5.11).
 
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
@@ -11,6 +12,7 @@ use crate::clock::{is_night, morning_after, TimeOfDay};
 use crate::player::{Player, PlayerOwner};
 use crate::protocol::{CommandOutput, UseBlock};
 use crate::survival::{Asleep, SpawnBed, Vitals};
+use crate::weather::Weather;
 use crate::world::World;
 
 // How long everyone must have been asleep for the night to pass, in seconds, as their screens
@@ -20,11 +22,12 @@ const SLEEP_SECONDS: f32 = 2.0;
 const GET_UP_DISTANCE: f32 = 0.5;
 
 /// Sets the respawn point of each player who uses a bed in reach, and lies them down in it if
-/// it's night.
+/// it's night or storming.
 pub(super) fn use_beds(
     mut uses: MessageReader<FromClient<UseBlock>>,
     world: Res<World>,
     clock: Res<TimeOfDay>,
+    weather: Res<Weather>,
     mut players: Query<(Entity, &PlayerOwner, &Transform, &Vitals, &mut SpawnBed)>,
     mut output: MessageWriter<ToClients<CommandOutput>>,
     mut commands: Commands,
@@ -46,13 +49,15 @@ pub(super) fn use_beds(
             continue;
         }
         bed.0 = Some(block);
-        if is_night(clock.0) {
+        if is_night(clock.0) || weather.is_stormy(clock.0) {
             commands.entity(player).insert(Asleep { at: feet });
         } else {
             output.write(ToClients {
                 targets: SendTargets::Single(client_id),
                 message: CommandOutput {
-                    text: "You'll respawn at this bed. You can only sleep in it at night".into(),
+                    text: "You'll respawn at this bed. You can only sleep in it at night or in \
+                           a storm"
+                        .into(),
                     error: false,
                 },
             });
@@ -72,13 +77,15 @@ pub(super) fn get_up(
     }
 }
 
-/// Skips the night to morning once every player has been asleep for `SLEEP_SECONDS`, and wakes
-/// them, telling every client the time at once.
+/// Skips the night to morning, or a storm by day to its end, once every player has been asleep
+/// for `SLEEP_SECONDS`, and wakes them to any rain clearing, telling every client the time at
+/// once.
 pub(super) fn skip_night(
     time: Res<Time>,
     players: Query<(Entity, Has<Asleep>), With<Player>>,
     mut clock: ResMut<TimeOfDay>,
     mut rate: ResMut<ClockRate>,
+    mut weather: ResMut<Weather>,
     mut slept: Local<f32>,
     mut commands: Commands,
 ) {
@@ -92,13 +99,18 @@ pub(super) fn skip_night(
         return;
     }
     *slept = 0.0;
-    clock.0 = morning_after(clock.0);
+    if is_night(clock.0) {
+        clock.0 = morning_after(clock.0);
+    } else if weather.is_stormy(clock.0) {
+        clock.0 = weather.until;
+    }
+    weather.wake(clock.0);
     // which tells clients the time, as it's the rate that's usually changed
     rate.set_changed();
     for (player, _) in &players {
         commands.entity(player).remove::<Asleep>();
     }
-    info!("everyone slept through the night");
+    info!("everyone slept through the night or the storm");
 }
 
 #[cfg(test)]

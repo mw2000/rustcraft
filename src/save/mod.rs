@@ -36,6 +36,7 @@ use crate::player::{Player, PlayerLook, PlayerOwner};
 use crate::server::creatures::{saved, Dormant, Health, Life};
 use crate::server::Operators;
 use crate::survival::{SpawnBed, Vitals};
+use crate::weather::Weather;
 use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 use region::{ChunkEdits, Region};
 pub use world_file::{PlayerState, WorldFile};
@@ -481,6 +482,7 @@ struct Savable<'w, 's> {
     containers: ResMut<'w, Containers>,
     crops: ResMut<'w, Crops>,
     clock: Res<'w, TimeOfDay>,
+    weather: Res<'w, Weather>,
     operators: Res<'w, Operators>,
     dormant: Option<Res<'w, Dormant>>,
     creatures: Query<
@@ -515,6 +517,7 @@ impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
         file.ops = self.operators.names().to_vec();
+        file.weather = Some(*self.weather);
         file.new_player_mode = save.new_player_mode;
         file.player = save.host.clone();
         for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players

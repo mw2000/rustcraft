@@ -7,6 +7,7 @@ use super::creatures::creature;
 use super::players::PoseCheck;
 use super::structures::{list, Authoring};
 use crate::chunks::generate::WATER_LEVEL;
+use crate::clock::{TimeOfDay, DAY_SECONDS};
 use crate::commands::{help, parse, Command, Destination};
 use crate::creatures::SavedCreature;
 use crate::game_mode::GameMode;
@@ -14,6 +15,7 @@ use crate::player::name::PlayerName;
 use crate::player::PlayerOwner;
 use crate::protocol::{CommandOutput, RunCommand, Teleport};
 use crate::save::WorldSave;
+use crate::weather::Weather;
 use crate::world::World;
 
 // How far above the ground `/tp x z` puts the player.
@@ -73,6 +75,8 @@ pub(super) struct Running<'w, 's> {
     save: Option<ResMut<'w, WorldSave>>,
     allowances: ResMut<'w, ChatAllowances>,
     time: Res<'w, Time>,
+    clock: Res<'w, TimeOfDay>,
+    weather: ResMut<'w, Weather>,
     players: Players<'w, 's>,
     output: MessageWriter<'w, ToClients<CommandOutput>>,
     teleports: MessageWriter<'w, ToClients<Teleport>>,
@@ -243,6 +247,11 @@ impl Running<'_, '_> {
                     .place(world, dir, author()?, at, &name, rotation)
             }
             Command::ListStructures => Ok(list(self.save.as_ref().map(|save| save.dir()))),
+            Command::Weather { sky, seconds } => {
+                let days = seconds.map_or(sky.length(0.5), |s| f64::from(s / DAY_SECONDS));
+                self.weather.set(sky, self.clock.0, days);
+                Ok(format!("The weather's turning to {}", sky.name()))
+            }
         }
     }
 

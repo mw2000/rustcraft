@@ -10,6 +10,7 @@ use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
 use crate::survival::{SpawnBed, Vitals};
+use crate::weather::Weather;
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 /// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), format 3 added
@@ -34,6 +35,9 @@ pub struct WorldFile {
     /// before there was a choice.
     #[serde(default, skip_serializing_if = "GameMode::is_survival")]
     pub new_player_mode: GameMode,
+    /// The weather, which worlds saved before there was any start afresh.
+    #[serde(default)]
+    pub weather: Option<Weather>,
     /// The host's player, once they've played in it, the only one saved until M0.6.
     pub player: Option<PlayerState>,
 }
@@ -147,6 +151,7 @@ impl WorldFile {
             time_of_day,
             ops: Vec::new(),
             new_player_mode: GameMode::default(),
+            weather: None,
             player: None,
         }
     }

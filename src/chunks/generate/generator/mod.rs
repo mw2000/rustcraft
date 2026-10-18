@@ -16,4 +16,4 @@ pub use chunk::{chunks_meshed_with, generate_chunk, generate_chunk_mesh};
 pub use lod::generate_lod_mesh;
 pub(super) use shading::FACE_NORMAL_OFFSET;
 pub(super) use terrain::{column_block, ground_top};
-pub use terrain::{FREEZE_TEMPERATURE, SNOWY_GRASS_TEMPERATURE};
+pub use terrain::{snow_line, FREEZE_TEMPERATURE, SNOWY_GRASS_TEMPERATURE, SNOW_MAX_TEMPERATURE};

@@ -44,13 +44,14 @@ use crate::server::creatures::Whereabouts;
 use crate::server::drops::DroppedItem;
 use crate::server::HeldItem;
 use crate::survival::Vitals;
+use crate::weather::Weather;
 
 /// The port a world is hosted on unless another's asked for.
 pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -76,6 +77,7 @@ impl Plugin for ProtocolPlugin {
             .add_server_message::<CommandOutput>(Channel::Ordered)
             .add_client_message::<WindClock>(Channel::Ordered)
             .add_server_message::<TimeSync>(Channel::Ordered)
+            .add_server_message::<WeatherSync>(Channel::Ordered)
             // in order, as each click starts from where the last left the inventory
             .add_client_message::<InventoryClick>(Channel::Ordered)
             .add_client_message::<CloseInventory>(Channel::Ordered)
@@ -204,6 +206,11 @@ pub struct TimeSync {
     pub time: f64,
     pub rate: f64,
 }
+
+/// The world's weather, as the server has it now, sent as it changes and to clients as they
+/// join. Clients work out how far it's turned from their clock, as the server does.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct WeatherSync(pub Weather);
 
 /// A click in the inventory screen on slot `slot` of the container at `container`, which the
 /// player has open, or of their inventory if it's none, see `Container::click` and

@@ -650,6 +650,92 @@ def underwater(rng):
     return level(muffled + around(lambda x: lowpass(x, 1500), bubbles) * 0.6, LOOP_DB, window=12)
 
 
+def droplets(n, rng, rate, loudness=(0.2, 1.0)):
+    """Impulses scattered round a loop, `rate` a second, each its own loudness: rain's drops
+    before anything they land on rings them."""
+    out = np.zeros(n)
+    count = int(rate * n / SR)
+    out[rng.integers(0, n, count)] += rng.uniform(*loudness, count) ** 2
+    return out
+
+
+def rain(rng):
+    n = samples(12)
+    breathe = 0.75 + 0.25 * lfo(n, rng, (1, 2, 3))
+    # the hiss of a great many drops far and near, most of it between 1 and 6 kHz
+    hiss = periodic_band(n, rng, 900, 6500, -0.3) + periodic_band(n, rng, 150, 900, -1.0) * 0.25
+    # near drops on leaves and ground: soft ticks, a few brighter
+    drops = droplets(n, rng, 900)
+    ticks = around(lambda x: bandpass(x, 1800, 7000, 1), drops) + around(lambda x: resonator(x, 3200, 4), droplets(n, rng, 120)) * 0.3
+    return level((hiss * 0.6 + ticks * 1.2) * breathe, LOOP_DB, window=12)
+
+
+def rain_roof(rng):
+    n = samples(12)
+    breathe = 0.8 + 0.2 * lfo(n, rng, (1, 2, 3))
+    # the hiss dulled by the roof between
+    hiss = periodic_band(n, rng, 200, 1800, -0.8)
+    # drops on boards: mid ticks ringing a short, hollow body
+    drops = droplets(n, rng, 700, (0.3, 1.0))
+    board = lambda x: sum(resonator(x, f, q) * a for f, q, a in ((420, 8, 1.0), (960, 7, 0.6), (2100, 5, 0.35)))
+    patter = around(board, drops) + around(lambda x: bandpass(x, 1500, 5000, 1), drops) * 0.4
+    # heavier drips off the eave, now and then
+    drips = np.zeros(n)
+    at = rng.uniform(0, 0.5)
+    while at < 12:
+        drop = modes(samples(0.15), rng, [rng.uniform(600, 1100), rng.uniform(1700, 2600)], [0.02, 0.01], [1.0, 0.4], 0.1)
+        place(drips, drop * rng.uniform(0.5, 1.0), samples(at), wrap=True)
+        at += rng.exponential(0.5) + 0.15
+    return level((hiss * 0.5 + patter * 0.9 + drips * 0.5) * breathe, LOOP_DB + 2, window=12)
+
+
+def storm_wind(rng):
+    n = samples(20)
+    # gusts in two rates, slow surges with quicker buffets riding them
+    surge = lfo(n, rng, (1, 2, 3), smooth=0.6)
+    buffet = lfo(n, rng, (7, 11, 13, 17), smooth=0.3)
+    gusts = np.clip(surge * 0.7 + buffet * 0.5 - 0.15, 0, None)
+    gusts /= gusts.max()
+    roar = periodic_band(n, rng, 40, 350, -1.2)
+    rush = periodic_band(n, rng, 300, 2200, -0.5)
+    x = roar * (0.45 + 0.55 * surge) + rush * gusts**2 * 0.9
+    # a howl in the strongest gusts
+    for f in (330, 455):
+        howl = around(lambda x: resonator(x, f * rng.uniform(0.97, 1.03), 18), periodic_band(n, rng, f / 1.4, f * 1.4))
+        x += howl * gusts**4 * 0.9
+    return level(x, LOOP_DB + 2, window=20)
+
+
+# --- weather -------------------------------------------------------------------------------------
+
+
+def thunder(rng):
+    """A strike fairly near: a bright crack and its echoes off the ground, then a long, low roll
+    of rumbles that come and go as the sound arrives from further along the bolt."""
+    seconds = rng.uniform(5.5, 7.0)
+    n = samples(seconds)
+    t = times(n)
+    crack = np.zeros(n)
+    for at, gain, length in [(0.0, 1.0, rng.uniform(0.06, 0.15))] + [
+        (rng.uniform(0.03, 0.25), rng.uniform(0.3, 0.7), rng.uniform(0.02, 0.08)) for _ in range(rng.integers(2, 4))
+    ]:
+        m = samples(length + 0.05)
+        burst = highpass(coloured(m, rng, -0.4), 400) * envelope(m, 0.0008, length / 3)
+        place(crack, burst * gain, samples(at))
+    # rumbles: bumps of low noise, thickest just after the crack and thinning out
+    bumps = np.zeros(n)
+    for _ in range(rng.integers(9, 15)):
+        at = rng.exponential(seconds / 4)
+        if at > seconds - 0.5:
+            continue
+        width = rng.uniform(0.25, 0.9)
+        bumps += rng.uniform(0.4, 1.0) * np.exp(-0.5 * ((t - at - width) / (width / 2)) ** 2)
+    roll = lowpass(coloured(n, rng, -1.6, lo=20, hi=400), 200, 4) * (bumps + 0.25) * np.exp(-t / (seconds / 2.5))
+    body = lowpass(coloured(n, rng, -1.0, lo=60, hi=900), 600) * envelope(n, 0.02, 0.6) * 0.5
+    x = crack * 0.9 + roll * 1.6 + body
+    return level(fade_out(x, 1.0), -17, window=0.4)
+
+
 # --- music ---------------------------------------------------------------------------------------
 
 MUSIC_DB = -24
@@ -755,6 +841,8 @@ def catalogue():
                        ("moo", moo), ("oink", oink), ("cluck", cluck)):
         for v in range(VARIATIONS):
             out[f"{name}_{v + 1}"] = (make, 5000 + v)
+    for v in range(VARIATIONS):
+        out[f"thunder_{v + 1}"] = (thunder, 9000 + v)
     for name, make in (("death", death), ("chest_open", chest_open), ("chest_close", chest_close), ("click", click)):
         out[name] = (make, 7)
     for name, make in (
@@ -765,6 +853,9 @@ def catalogue():
         ("crickets", crickets),
         ("cave", cave),
         ("underwater", underwater),
+        ("rain", rain),
+        ("rain_roof", rain_roof),
+        ("storm_wind", storm_wind),
     ):
         out[f"ambience/{name}"] = (make, 11)
     for name, make in (("morning", morning), ("drift", drift), ("embers", embers)):
