@@ -136,12 +136,12 @@ mod tests {
     // update it deliberately, knowing that worlds will generate differently from before, so a
     // game of the version before can't join one of this version, and saved edits sit on new
     // terrain. CI runs this on Linux, Windows and macOS to see whether they agree (D-3).
-    // Last changed by M2.4b, as the structure nearest the spawn is the reworked watchtower,
-    // and the samples now take in the structure underground nearest it too, a dungeon. Before
-    // that by M2.7, which raised great peaks and volcanoes and grew giant trees, kept structures
-    // and caves out of them, and sampled the landmark nearest the spawn, a volcano with its
-    // crater's magma, moving a far column there that had fallen inside one.
-    const GOLDEN: u64 = 0x35c1_61de_777e_80f9;
+    // Last changed by the port of upstream #78's flora, which grows short and wild grass beside
+    // tall grass, ferns on the forest floor and under wet crowns, flowers in drifts of one kind,
+    // and thins grasses and flowers towards the snow. Before that by M2.4b, as the structure
+    // nearest the spawn is the reworked watchtower, and the samples take in the structure
+    // underground nearest it too, a dungeon.
+    const GOLDEN: u64 = 0xdabd_027d_b861_eb38;
 
     #[test]
     fn test_generation_matches_its_golden_checksum() {

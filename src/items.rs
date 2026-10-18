@@ -465,8 +465,17 @@ mod tests {
             vec![ItemStack::new(Item::Coal, 1)],
             drop(BlockType::CoalOre)
         );
-        for nothing in [BlockType::Air, BlockType::Water, BlockType::Poppy] {
+        for nothing in [BlockType::Air, BlockType::Water] {
             assert_eq!(Vec::<ItemStack>::new(), drop(nothing), "{nothing:?}");
+        }
+        // flowers and ferns are picked
+        for plant in [
+            BlockType::Poppy,
+            BlockType::Dandelion,
+            BlockType::Cornflower,
+            BlockType::Fern,
+        ] {
+            assert_eq!(block(plant), drop(plant), "{plant:?}");
         }
         // and every drop is an item there is
         for block in BlockType::ALL {
@@ -497,6 +506,24 @@ mod tests {
         assert_eq!((Item::Block(BlockType::TallGrass), 1000), (grass, grasses));
         assert_eq!(Item::Seeds, seeds);
         assert!((90..160).contains(&sown), "{sown} seeds");
+    }
+
+    #[test]
+    fn test_short_and_wild_grass_drop_themselves_and_seeds_less_and_more_often() {
+        let seeds = |grass| {
+            let drops = drops_of(grass);
+            assert_eq!((Item::Block(grass), 1000), drops[0], "{grass:?}");
+            assert_eq!(Item::Seeds, drops[1].0, "{grass:?}");
+            drops[1].1
+        };
+        let (short, tall, wild) = (
+            seeds(BlockType::ShortGrass),
+            seeds(BlockType::TallGrass),
+            seeds(BlockType::WildGrass),
+        );
+        assert!((50..120).contains(&short), "{short} seeds from short grass");
+        assert!((200..300).contains(&wild), "{wild} seeds from wild grass");
+        assert!(short < tall && tall < wild);
     }
 
     #[test]

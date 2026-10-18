@@ -3,6 +3,7 @@ use crate::block::TILE_COUNT;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::noise::NoiseGenerator;
 use bevy::asset::RenderAssetUsages;
+use bevy::math::I64Vec3;
 use bevy::math::Vec3;
 use bevy::mesh::Indices;
 use bevy::mesh::Mesh;
@@ -254,12 +255,14 @@ pub(super) struct FanQuad<'a> {
 }
 
 // `solid_leaves` draws leaves without their holes, so they hide the leaves behind them; `textured`
-// is whether faces draw their own tile, not the one their block's colour is read from.
+// is whether faces draw their own tile, not the one their block's colour is read from. `origin`
+// is the block the mesh's local origin is in the world, which plants take how they stand from.
 #[derive(Clone, Copy)]
 pub(super) struct MeshStyle {
     pub(super) ambient_occlusion: bool,
     pub(super) textured: bool,
     pub(super) solid_leaves: bool,
+    pub(super) origin: I64Vec3,
 }
 
 pub struct ChunkMeshes {

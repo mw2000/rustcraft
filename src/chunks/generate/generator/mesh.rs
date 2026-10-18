@@ -15,6 +15,8 @@ use crate::block::{Block, BlockType};
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
+use crate::chunks::generate::trees::hash;
+use bevy::math::I64Vec3;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
 use std::collections::HashMap;
@@ -115,7 +117,7 @@ pub(super) fn mesh_blocks(
     if cell_size == 1 {
         let plants = opaque.vertices.len();
         for &(coord, block) in non_air.iter().filter(|(_, block)| block.is_plant()) {
-            push_cross(&mut opaque, coord, block, grass_tint, light);
+            push_cross(&mut opaque, coord, block, style.origin, grass_tint, light);
         }
         opaque.plants = plants..opaque.vertices.len();
         for &(coord, block) in &non_air {
@@ -192,30 +194,64 @@ pub(super) fn mesh_blocks(
     }
 }
 
+// How far a wild plant may stand off its cell's middle, and how much shorter than a block grasses
+// and other wild plants may be: grasses vary far more, so a meadow isn't cut level. Crops stand
+// in their rows at their stage's height.
+const PLANT_JITTER: f32 = 0.12;
+const GRASS_SHORTEN: f32 = 0.45;
+const PLANT_SHORTEN: f32 = 0.2;
+// How dark a plant is at its roots, to its tips, as the grass round it shades them.
+const ROOT_SHADE: f32 = 0.65;
+
 // A plant at `coord`, as two crossed quads lit by the light of its cell, tinted to the climate's
-// grass if its tile is greyscale.
+// grass if its tile is greyscale and darker at its roots. A wild plant stands a little off its
+// cell's middle and a little shorter, by where it is in the world (`origin` is the mesh's), so
+// it's the same every time it's meshed and neighbours don't line up.
 fn push_cross(
     buffers: &mut MeshBuffers,
     coord: IVec3,
     block: BlockType,
+    origin: I64Vec3,
     grass_tint: &GrassTint,
     light: &Light,
 ) {
     let tile = block.tile(Face::Side);
-    let centre = coord.as_vec3();
+    let mut centre = coord.as_vec3();
+    let mut top = 0.5;
+    if !block.is_crop() {
+        let world = origin + coord.as_i64vec3();
+        let unit = |salt: u64| (hash(salt, world.x, world.z) >> 40) as f32 / (1u64 << 24) as f32;
+        centre += Vec3::new(unit(1) - 0.5, 0.0, unit(2) - 0.5) * 2.0 * PLANT_JITTER;
+        let shorten = if tile.tinted() && block != BlockType::Fern {
+            GRASS_SHORTEN
+        } else {
+            PLANT_SHORTEN
+        };
+        top -= unit(3) * shorten;
+    }
     let tint = if tile.tinted() {
-        grass_tint.at(centre)
+        grass_tint.at(coord.as_vec3())
     } else {
         Vec3::ONE
     };
-    let colour = tint.extend(tile.atlas_cell()).to_array();
+    let (tip, root) = (
+        tint.extend(tile.atlas_cell()).to_array(),
+        (tint * ROOT_SHADE).extend(tile.atlas_cell()).to_array(),
+    );
     let levels = light.levels(coord).map(|l| l as f32 / MAX_LIGHT as f32);
     for quad in &CROSS {
         buffers.push_double_sided_quad(
-            quad.map(|v| (Vec3::from(v.position) + centre).to_array()),
+            quad.map(|v| {
+                let mut at = Vec3::from(v.position);
+                if at.y > 0.0 {
+                    at.y = top;
+                }
+                (at + centre).to_array()
+            }),
             quad[0].normal,
             quad.map(|v| v.uv),
-            [colour; 4],
+            // v is 0 at the tip
+            quad.map(|v| if v.uv[1] == 0.0 { tip } else { root }),
             [levels; 4],
         );
     }

@@ -8,7 +8,7 @@ import bevy_pbr::{
 import bevy_render::globals::Globals;
 import super::block_texture::{block_alpha, material_fade};
 import super::dither::dither_threshold;
-import super::foliage::{is_cutout, is_glass, is_leaf, is_plant, sway, swayed};
+import super::foliage::{is_cutout, is_glass, is_leaf, is_plant, swayed};
 import super::curvature::{curved, curved_last};
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
@@ -27,8 +27,7 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
 @if(VERTEX_UVS_B) {
     draws = vertex.uv_b.y;
 }
-    let sways = sway(vertex.color.a, draws, vertex.uv.y);
-    out.world_position = vec4<f32>(curved(swayed(out.world_position.xyz, sways, globals.time)), 1.0);
+    out.world_position = vec4<f32>(curved(swayed(out.world_position.xyz, vertex.color.a, draws, vertex.uv.y, globals.time)), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
     // a mesh fading out sits a little farther than it is, as in the main pass, see `fade.rs`
@@ -51,7 +50,7 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
 @if(MOTION_VECTOR_PREPASS) {
     let previous_world_from_local = mesh_functions::get_previous_world_from_local(vertex.instance_index);
     let previous = mesh_functions::mesh_position_local_to_world(previous_world_from_local, vec4<f32>(vertex.position, 1.0));
-    out.previous_world_position = vec4<f32>(curved_last(swayed(previous.xyz, sways, globals.time)), 1.0);
+    out.previous_world_position = vec4<f32>(curved_last(swayed(previous.xyz, vertex.color.a, draws, vertex.uv.y, globals.time)), 1.0);
 }
 @if(VERTEX_OUTPUT_INSTANCE_INDEX) {
     out.instance_index = vertex.instance_index;
@@ -62,12 +61,18 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
 // Only leaves, plants, glass and shapes have holes, so only they pay for a texture sample.
 // Untextured LOD cells draw leaves solid, so cast solid shadows too.
 fn cut_holes(in: prepass_io::VertexOutput) {
-// `DebugSettings::solid_leaves` casts solid shadows everywhere
-@if(!SOLID_LEAVES) {
     var draws = 0.0;
 @if(VERTEX_UVS_B) {
     draws = in.uv_b.y;
 }
+// `DebugSettings::solid_leaves` casts solid shadows everywhere but a plant's, as a plant's sprite
+// is mostly air, so it casts its own shape whatever the leaves do
+@if(SOLID_LEAVES) {
+    if is_plant(draws) && block_alpha(in.uv, in.color.a) < 0.5 {
+        discard;
+    }
+}
+@if(!SOLID_LEAVES) {
     if draws > 0.5 {
         return;
     }

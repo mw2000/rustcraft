@@ -63,7 +63,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it and ores in its stone (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`, `ores.rs`) |
 | Biomes | Climate-driven desert, savanna, jungle, forest, taiga, glacier, and foothills round the mountains; grass and leaves tinted by climate and biome (§5.7) | `src/chunks/generate/biome/` |
 | Trees | Broadleaf, pine, jungle giants and acacias, by biome, placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
-| Plants | Tall grass, ferns and flowers on the grass, by climate and biome, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
+| Plants | Short, tall and wild grass, ferns and flowers on the grass, by climate, biome and the shade of crowns, drawn as crossed quads at full detail that sway in the wind (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
 | Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); seven so far, from watchtowers on hilltops to temples, ruins, lodges and mineshafts and dungeons underground | `src/chunks/generate/structures/`, `assets/structures/` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
@@ -85,7 +85,7 @@ Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own 
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
 cobblestone, stone bricks, bricks, coal, copper and iron ore, the far climates' gold, frost crystal
 and jade ores and embers with blocks made from them, crafting table, furnace, chest), plants
-(tall grass, poppy, dandelion, cornflower, fern), the torch and the bed, for farming farmland and
+(tall, short and wild grass, poppy, dandelion, cornflower, fern), the torch and the bed, for farming farmland and
 wheat's eight stages, and since M2.4a building blocks: stairs, slabs and walls cut from the
 stones and planks, fences, doors, trapdoors, glass and panes, ladders, vines, lanterns, weathered
 and coloured stone, two more woods of planks, bookshelves and barrels, with states (§4.1).
@@ -1430,6 +1430,34 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   ground and removes a plant whose ground is broken, as a `BlockChanged` of its own; it simply
   goes, dropping nothing until seeds from tall grass come with farming (since M1.8 tall grass
   drops itself, for beds).
+- **Built (port of upstream #78, Aymen Qader): flora.** Upstream's ground flora, merged into
+  these plants rather than beside them, so every one is still a block that's picked, built over,
+  pops off and is aimed at as before.
+  - **Blocks:** two more grasses, `short_grass` (a low tuft) and `wild_grass` (tall stalks gone
+    to seed over a tuft), tinted like tall grass. Every wild plant now drops itself when picked
+    or popped off, and the grasses a seed too: short grass one time in 12, tall grass in 8 and
+    wild grass in 4.
+  - **Tiles:** upstream's `flora.py` draws all seven plant tiles pixel by pixel (its tall grass,
+    fern, poppy, dandelion, short and wild grass, which read better than ours did, and a
+    cornflower drawn in its style), and `draw.py` draws them through it, from the seed alone so
+    the default seed gives the atlas's tiles.
+  - **Placement** (`generate/plants.rs`): ours, by column hash, climate, biome, tufts, slope and
+    cave mouths, with upstream's added: the grasses split into short tufts (45%, 65% in shade),
+    tall grass and wild grass (15%); ferns under any tree's crown where it's wet (humidity
+    0.5–0.7, up to a quarter of the ground), besides the biome's own, with the forest now having
+    its own plants (a floor of ferns, thinner grass); flowers in drifts of one kind, the kind of
+    the drift's middle; grasses and flowers thinning out towards the snow (temperatures
+    0.22–0.38), as ferns don't. The chunk's trees are worked out before its ground so their
+    crowns can be asked, only for a column a crown could change.
+  - **Drawing:** a wild plant stands up to 0.12 off its cell's middle and up to 0.45 (grasses)
+    or 0.2 (others) shorter, by its place in the world, and is shaded to 0.65 at its roots;
+    crops stand in their rows at full height. Upstream's sway replaces ours: tips bend with the
+    square of their height, leaning with the wind and dipping as they lean, in the same slow
+    gusts as the leaves with a quicker flutter, roots still (`foliage.wesl`, one `swayed` for
+    leaves and plants). With `solid_leaves` plants still cut out their sprites, in both passes.
+  - **Determinism and cost:** the golden checksum changed. LODs are unchanged (bench vertex
+    counts identical); chunk generation is about 5% slower for the shade and the climate
+    sampled for more columns.
 - **Built (M1.8):** the `apple`, the first food: food items have a `fills` column in `items!`
   (`food(4)`), and leaves drop one a time in 20 when broken (`Drops::Chance(Item::Apple, 20)`
   in `blocks!`).
@@ -1757,6 +1785,8 @@ need the ground shaped low and wet, and plains were most of the gap savanna now 
   listed the more particular first: where two hold equally the earlier owns the column, so
   jungle and taiga take over from forest, and the climate biomes from foothills. On seeds 3 and
   42 savanna is 22% and 7% of land, jungle 5% and 11%, taiga 6% and 9%.
+- **Forest** (since the port of upstream #78): a floor of ferns, more under the crowns, with
+  thinner grass and fewer flowers than open country (§5.5a).
 - **Blending.** Heights blend as before. Tree density now moves towards each biome's own by its
   strength, the last listed first, rather than each adding its own, so a jungle over a forest
   is the jungle's density, not both piled up; `tree_bound` still bounds it for LODs ruling out
@@ -2463,6 +2493,6 @@ For agents and contributors:
 - **Sounds:** new or changed sounds with the `sounds` skill.
 - **Upstream ports:** work from rornic/rustcraft is ported onto this fork's code, merged with what
   we have rather than beside it, its author kept on the commit: so far #77's ambience (Aymen
-  Qader), §5.10.
+  Qader), §5.10, and #78's flora (Aymen Qader), §5.5a.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.

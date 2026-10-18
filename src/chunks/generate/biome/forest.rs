@@ -1,8 +1,16 @@
+use super::super::plants::Plants;
 use super::{smoothstep, Biome, Climate};
 
 // The wettest climates grow forest, whatever the temperature.
 const WET: (f64, f64) = (0.58, 0.7);
 const TREE_DENSITY: f64 = 0.55;
+// A floor of ferns, more of them under the crowns (`plants::SHADE_FERNS`), with thinner grass
+// than the open country's and fewer flowers.
+const PLANTS: Plants = Plants {
+    grass: 0.14,
+    ferns: 0.08,
+    flowers: 0.5,
+};
 
 // Dense trees over the lush, wet lowlands.
 pub struct Forest;
@@ -18,6 +26,10 @@ impl Biome for Forest {
 
     fn tree_density(&self) -> Option<f64> {
         Some(TREE_DENSITY)
+    }
+
+    fn plants(&self) -> Option<Plants> {
+        Some(PLANTS)
     }
 }
 

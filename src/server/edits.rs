@@ -583,6 +583,34 @@ mod tests {
     }
 
     #[test]
+    fn test_every_wild_plant_is_picked_or_pops_off_its_ground_leaving_itself() {
+        let plants = BlockType::ALL
+            .into_iter()
+            .filter(|plant| plant.is_plant() && !plant.is_crop());
+        for plant in plants {
+            let mut app = server(GameMode::Survival);
+            let (ground, above) = (FLOOR + I64Vec3::X, FLOOR + I64Vec3::new(1, 1, 0));
+            let picked = FLOOR + I64Vec3::new(-1, 1, 0);
+            put(&mut app, ground, BlockType::Grass);
+            put(&mut app, above, plant);
+            put(&mut app, picked, plant);
+            // picked by hand at a touch
+            let (changed, _) = request(&mut app, &[(picked, BlockType::Air)]);
+            assert_eq!(1, changed.len(), "{plant:?}");
+            // and gone with its ground
+            holding(&mut app, Item::WoodenPickaxe);
+            hold_and_break(&mut app, ground, 0.9);
+            assert_eq!(BlockType::Air, block_at(&app, above), "{plant:?}");
+            let left: Vec<_> = dropped(&mut app)
+                .into_iter()
+                .map(|(stack, _)| stack.item)
+                .filter(|&item| item == Item::Block(plant))
+                .collect();
+            assert_eq!(2, left.len(), "{plant:?}");
+        }
+    }
+
+    #[test]
     fn test_torches_stand_on_solid_ground_and_drop_when_it_goes() {
         let mut app = server(GameMode::Survival);
         let above = FLOOR + I64Vec3::Y;
@@ -758,15 +786,19 @@ mod tests {
             world.edit(FLOOR + I64Vec3::X, BlockType::Grass);
             world.edit(poppy, BlockType::Poppy);
         }
-        // stone leaves cobblestone, grass dirt, and the poppy on it nothing
+        // stone leaves cobblestone, grass dirt, and the poppy on it, popped off, itself
         holding(&mut app, Item::WoodenPickaxe);
         hold_and_break(&mut app, FLOOR, 1.9);
         hold_and_break(&mut app, FLOOR + I64Vec3::X, 0.9);
         let mut items: Vec<_> = dropped(&mut app);
-        items.sort_unstable_by(|a, b| a.1.x.total_cmp(&b.1.x));
+        items.sort_unstable_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.1.y.total_cmp(&b.1.y)));
         let one = |block| ItemStack::new(Item::Block(block), 1);
         assert_eq!(
-            vec![one(BlockType::Cobblestone), one(BlockType::Dirt)],
+            vec![
+                one(BlockType::Cobblestone),
+                one(BlockType::Dirt),
+                one(BlockType::Poppy)
+            ],
             items.iter().map(|(stack, _)| *stack).collect::<Vec<_>>()
         );
         // from where the block was
@@ -853,6 +885,7 @@ mod tests {
         // having broken the stone it wore out on, as it did the first
         let stones = dropped(&mut app)
             .iter()
+            .filter(|(stack, _)| stack.item == Item::Block(BlockType::Cobblestone))
             .map(|(stack, _)| stack.count)
             .sum::<u8>();
         assert_eq!(2, stones);

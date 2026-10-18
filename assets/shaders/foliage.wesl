@@ -3,8 +3,11 @@
 
 // How far, in blocks, leaves sway: little enough that they never pull far from their twigs.
 const SWAY: f32 = 0.08;
-// How far plants' tops sway, a little less, as they're small and rooted.
-const PLANT_SWAY: f32 = 0.06;
+// How far, in blocks, a plant's tip sways. Its roots stay put.
+const PLANT_SWAY: f32 = 0.16;
+// How far a plant leans with the wind on average, as a share of `PLANT_SWAY`, so a meadow
+// bends one way in a gust rather than wobbling about upright.
+const PLANT_LEAN: f32 = 0.35;
 
 // Whether a block mesh's vertex alpha, its atlas cell, is leaves'. `LEAF_CELL` comes from
 // `ChunkMaterial::specialize`.
@@ -28,33 +31,33 @@ fn is_glass(vertex_alpha: f32) -> bool {
     return abs(vertex_alpha - f32(constants::GLASS_CELL)) < 0.5;
 }
 
-// How far a block mesh's vertex sways, from its atlas cell, how its face draws and its uv's v,
-// which runs down a plant from its top: leaves all over, plants from their roots, which stay
-// put, up to their tops. Coarse LOD cells, whose faces span many blocks, stay still: their
-// corners would drift apart and tear.
-fn sway(vertex_alpha: f32, draws: f32, v: f32) -> f32 {
-    if is_plant(draws) {
-        return PLANT_SWAY * (1.0 - v);
-    }
-    if draws > 0.5 || !is_leaf(vertex_alpha) {
-        return 0.0;
-    }
-    return SWAY;
-}
-
-// Where a vertex at `world` swaying by `amount` blocks is by `time`. It depends on nothing else,
-// so corners shared by neighbouring leaves move together and leave no cracks.
-fn swayed(world: vec3<f32>, amount: f32, time: f32) -> vec3<f32> {
+// Where a block mesh's vertex at `world` sways to by `time`, from its atlas cell, how its face
+// draws and its uv's v, which runs down a plant from its tip: leaves all over, plants bending
+// from their roots, which stay put, most at their tips. It depends on nothing but where the
+// vertex is, so corners shared by neighbouring leaves move together and leave no cracks. Coarse
+// LOD cells, whose faces span many blocks, stay still: their corners would drift apart and tear.
+fn swayed(world: vec3<f32>, vertex_alpha: f32, draws: f32, v: f32, time: f32) -> vec3<f32> {
     // `DebugSettings::still_leaves`
 @if(STILL_LEAVES) {
     return world;
 }
-    if amount == 0.0 {
+    let plant = is_plant(draws);
+    if !plant && (draws > 0.5 || !is_leaf(vertex_alpha)) {
         return world;
     }
-    // slow gusts roll across the canopy, with a quicker flutter on top
+    // slow gusts roll across the land, the same for leaves and plants, so one crosses a meadow
+    // and the wood behind it alike
     let gust = sin(time * 1.3 + dot(world.xz, vec2<f32>(0.11, 0.07)));
+    if plant {
+        // bending most at the tip, as a stem does, and quicker than the boughs
+        let bend = 1.0 - clamp(v, 0.0, 1.0);
+        let flutter = sin(time * 3.3 + dot(world.xz, vec2<f32>(1.7, 1.1)));
+        let push = (PLANT_LEAN + gust * 0.45 + flutter * 0.25) * bend * bend * PLANT_SWAY;
+        // a leaning tip dips a little, as its stem doesn't stretch
+        return world + vec3<f32>(push, -abs(push) * 0.3, push * 0.6);
+    }
+    // with a quicker flutter on top
     let flutter = sin(time * 4.1 + dot(world, vec3<f32>(0.9, 0.7, 1.3)));
     let push = gust * 0.7 + flutter * 0.3;
-    return world + vec3<f32>(push, flutter * 0.4, push * 0.6) * amount;
+    return world + vec3<f32>(push, flutter * 0.4, push * 0.6) * SWAY;
 }

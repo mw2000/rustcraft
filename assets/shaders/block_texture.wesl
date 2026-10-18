@@ -7,7 +7,7 @@
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, see `Tile` in block.rs
-const ATLAS_CELLS: f32 = 82.0;
+const ATLAS_CELLS: f32 = 84.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
@@ -54,7 +54,7 @@ fn block_sample(uv: vec2<f32>, vertex_alpha: f32, footprint: BlockFootprint) -> 
 // order. `gen_atlas` prints these and the block-textures skill's `pack.py`
 // rewrites them, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 82>(
+    var means = array<vec3<f32>, 84>(
         vec3<f32>(0.1182, 0.1186, 0.1186), // stone
         vec3<f32>(0.5003, 0.5003, 0.5003), // grass top
         vec3<f32>(0.4776, 0.3611, 0.1822), // sand
@@ -80,10 +80,10 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.2778, 0.1663, 0.0667), // crafting table top
         vec3<f32>(0.2776, 0.1755, 0.0874), // crafting table side
         vec3<f32>(0.0981, 0.0981, 0.0981), // furnace front
-        vec3<f32>(0.4960, 0.4960, 0.4960), // tall grass
-        vec3<f32>(0.3511, 0.0999, 0.0184), // poppy
-        vec3<f32>(0.4152, 0.3750, 0.0280), // dandelion
-        vec3<f32>(0.0808, 0.1821, 0.3736), // cornflower
+        vec3<f32>(0.5186, 0.5186, 0.5186), // tall grass
+        vec3<f32>(0.2675, 0.0986, 0.0166), // poppy
+        vec3<f32>(0.3420, 0.3242, 0.0266), // dandelion
+        vec3<f32>(0.0896, 0.1934, 0.3060), // cornflower
         vec3<f32>(0.4400, 0.2406, 0.0737), // torch
         vec3<f32>(0.4146, 0.1724, 0.1339), // bed top
         vec3<f32>(0.3625, 0.1686, 0.1236), // bed side
@@ -100,7 +100,7 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.2456, 0.1474, 0.0674), // chest side
         vec3<f32>(0.1878, 0.6445, 1.0000), // structure void
         vec3<f32>(0.6570, 0.4062, 0.0420), // loot marker
-        vec3<f32>(0.4955, 0.4955, 0.4955), // fern
+        vec3<f32>(0.3112, 0.3112, 0.3112), // fern
         vec3<f32>(0.1791, 0.1559, 0.1158), // gold ore
         vec3<f32>(0.1391, 0.1787, 0.2149), // frost crystal ore
         vec3<f32>(0.1200, 0.1453, 0.1263), // jade ore
@@ -137,6 +137,8 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.0712, 0.0676, 0.0783), // basalt side
         vec3<f32>(0.0470, 0.0444, 0.0527), // basalt top
         vec3<f32>(0.6308, 0.2929, 0.0596), // magma
+        vec3<f32>(0.5175, 0.5175, 0.5175), // short grass
+        vec3<f32>(0.5246, 0.5246, 0.5246), // wild grass
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

@@ -46,8 +46,8 @@ TILES = [
     dict(name="CraftingTableTop", drawn=True),
     dict(name="CraftingTableSide", drawn=True),
     dict(name="FurnaceFront", drawn=True),
-    dict(name="TallGrass", drawn=True),  # greyscale, tinted per climate like GrassTop
-    dict(name="Poppy", drawn=True),
+    dict(name="TallGrass", drawn=True, grey=187),  # by flora.py, greyscale as bright as GrassTop, so it tints alike
+    dict(name="Poppy", drawn=True),  # by flora.py, as are all the plants
     dict(name="Dandelion", drawn=True),
     dict(name="Cornflower", drawn=True),
     dict(name="Torch", drawn=True),
@@ -60,7 +60,7 @@ TILES = [
     dict(name="ChestSide", drawn=True),
     dict(name="StructureVoid", drawn=True),  # for authoring structures: icons only, never drawn in the world
     dict(name="LootMarker", drawn=True),
-    dict(name="Fern", drawn=True),  # greyscale, tinted per climate like TallGrass
+    dict(name="Fern", drawn=True, grey=150),  # greyscale, tinted per climate like TallGrass, darker
     dict(name="GoldOre", drawn=True),
     dict(name="FrostCrystalOre", drawn=True),
     dict(name="JadeOre", drawn=True),
@@ -97,6 +97,8 @@ TILES = [
     dict(name="BasaltSide", drawn=True),
     dict(name="BasaltTop", drawn=True),
     dict(name="Magma", drawn=True),
+    dict(name="ShortGrass", drawn=True, grey=187),  # greyscale, tinted per climate like TallGrass
+    dict(name="WildGrass", drawn=True, grey=187),
 ]
 
 

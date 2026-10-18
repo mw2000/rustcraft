@@ -9,6 +9,7 @@ import argparse
 import numpy as np
 from PIL import Image
 
+import flora
 from generate import HERE, LUM, OUT, TILES
 
 ATLAS = HERE / "../../../assets/textures/blocks.png"
@@ -415,77 +416,11 @@ def paint(out, y, x, colour):
     out[y, x] = (*colour, 255)
 
 
-def tall_grass(rng):
-    """Greyscale blades, tinted per climate like the grass top, whose shades they take: a darker one
-    down each blade's middle, the lightest at its tips, and the darkest near the ground."""
-    grey = shades("GrassTop", 1.4)
-    out = clear()
-    for x0 in [1, 3, 5, 7, 8, 10, 12, 14]:
-        height = rng.integers(7, 15)
-        lean = rng.uniform(-0.35, 0.35)
-        for i in range(height):  # from the ground up
-            x = int(round(x0 + lean * i * i / height))
-            if not 0 <= x < 16:
-                break
-            shade = grey[0] if i < 2 else grey[-1] if i >= height - 2 else grey[1 + (i + x0) % (len(grey) - 2)]
-            paint(out, 15 - i, x, shade)
-    return out
-
-
-def fern(rng):
-    """Greyscale fronds fanning out from the ground, tinted like tall grass: each a darker midrib with
-    a leaflet off it at every step, alternately either side, the outer fronds lower and drooping."""
-    grey = shades("GrassTop", 1.5)
-    out = clear()
-    for x0, lean, length in [(6, -1.0, 9), (7, -0.45, 12), (8, 0.05, 14), (9, 0.5, 12), (9, 1.05, 9)]:
-        length += rng.integers(-1, 2)
-        points = [(x0 + 0.5 + lean * 7 * t, 15.5 - 14 * t + abs(lean) * 8 * t * t) for t in np.linspace(0, 1, length + 1)]
-        for i, ((x, y), (nx, ny)) in enumerate(zip(points, points[1:])):
-            tx, ty = nx - x, ny - y
-            norm = (tx * tx + ty * ty) ** 0.5
-            if not (0 <= x < 16 and 0 <= y < 16):
-                break
-            paint(out, int(y), int(x), grey[0] if i < 3 else grey[1])
-            if 2 <= i < length - 1:
-                side = 1 if i % 2 else -1
-                lx, ly = int(x - side * ty / norm * 1.2 + tx / norm * 0.5), int(y + side * tx / norm * 1.2 + ty / norm * 0.5)
-                if 0 <= lx < 16 and 0 <= ly < 16 and out[ly, lx, 3] == 0:
-                    paint(out, ly, lx, grey[-1] if i % 4 < 2 else grey[2])
-    return out
-
-
-STEM = [(58, 98, 30), (76, 124, 40), (98, 148, 52)]  # untinted green, darkest first
-
-
-def flower(rng, head, colours, stem_height=8, leaves=((11, -1), (13, 1))):
-    """A stem with a leaf or two, under a head drawn as a picture of `colours` keyed by its chars."""
-    out = clear()
-    x = 7 + rng.integers(0, 2)
-    for y in range(16 - stem_height, 16):
-        paint(out, y, x, STEM[1])
-    for y, side in leaves:  # a leaf sticking out from the stem, two texels long and rising
-        paint(out, y, x + side, STEM[2])
-        paint(out, y - 1, x + 2 * side, STEM[2])
-        paint(out, y + 1, x + side, STEM[0])
-    top = 16 - stem_height - len(head)
-    for dy, dx, c in sprite(head, colours):
-        paint(out, top + dy, x - len(head[0]) // 2 + dx, c)
-    return out
-
-
-def poppy(rng):
-    return flower(rng, [".rrr.", "rRrrr", "rrkrr", "rrrrd", ".ddd."],
-                  dict(R=(236, 84, 64), r=(204, 40, 32), d=(150, 24, 22), k=(40, 30, 28)))
-
-
-def dandelion(rng):
-    return flower(rng, [".y.y.", "yYyyy", ".yyy.", "..g.."], dict(Y=(255, 236, 110), y=(240, 200, 40), g=STEM[0]),
-                  stem_height=7, leaves=((13, -1), (14, 1)))
-
-
-def cornflower(rng):
-    return flower(rng, ["b.b.b", ".BbB.", "bbdbb", ".bbb.", "..g.."], dict(B=(130, 160, 255), b=(70, 100, 220), d=(40, 50, 140), g=STEM[0]),
-                  stem_height=7)
+def plant(name):
+    """A plant's tile, drawn by `flora.py` and greyscale ones levelled to their row's `grey` in TILES for the climate's
+    tint. It's drawn from the seed alone, not its place here, see `__main__`."""
+    grey = next(t for t in TILES if t["name"] == name).get("grey")
+    return lambda rng: flora.sprite(name, rng, grey)
 
 
 def torch(rng):
@@ -515,7 +450,7 @@ def farmland_top(rng):
     return out
 
 
-GREEN = np.array([(58, 98, 30), (76, 124, 40), (98, 148, 52)], float)  # untinted, as STEM, darkest first
+GREEN = np.array([(58, 98, 30), (76, 124, 40), (98, 148, 52)], float)  # untinted, darkest first
 GOLD = np.array([(164, 122, 40), (212, 170, 70), (240, 212, 124)], float)
 
 
@@ -846,10 +781,10 @@ def barrel_side(rng):
 
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceFront=furnace_front,
-            TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
+            TallGrass=plant("TallGrass"), Poppy=plant("Poppy"), Dandelion=plant("Dandelion"), Cornflower=plant("Cornflower"), Torch=torch, BedTop=bed_top,
             BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
             RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side, StructureVoid=structure_void,
-            LootMarker=loot_marker, Fern=fern, GoldOre=gold_ore, FrostCrystalOre=frost_crystal_ore, JadeOre=jade_ore,
+            LootMarker=loot_marker, Fern=plant("Fern"), GoldOre=gold_ore, FrostCrystalOre=frost_crystal_ore, JadeOre=jade_ore,
             EmberOre=ember_ore, GoldBlock=gold_block, FrostCrystalBlock=frost_crystal_block, PolishedJade=polished_jade,
             BrightSteelBlock=bright_steel_block, EmberLamp=ember_lamp,
             FurnaceSide=furnace_side, Glass=glass, Vines=vines, DoorBottom=door_bottom, DoorTop=door_top,
@@ -858,7 +793,8 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             Terracotta=terracotta((152, 94, 67)), RedTerracotta=terracotta((143, 61, 47)), YellowTerracotta=terracotta((186, 133, 35)),
             BlueTerracotta=terracotta((70, 62, 94)), GreenTerracotta=terracotta((76, 83, 42)), DarkPlanks=dark_planks,
             LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end,
-            Wool=wool, BasaltSide=basalt_side, BasaltTop=basalt_top, Magma=magma)
+            Wool=wool, BasaltSide=basalt_side, BasaltTop=basalt_top, Magma=magma,
+            ShortGrass=plant("ShortGrass"), WildGrass=plant("WildGrass"))
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":
@@ -868,7 +804,10 @@ if __name__ == "__main__":
     a = ap.parse_args()
     OUT.mkdir(exist_ok=True)
     for name in a.tiles or DRAW:
-        rgb = DRAW[name](np.random.default_rng([a.seed, list(DRAW).index(name)]))
+        # plants are drawn from the seed alone, as `flora.py` was before it joined this script, so the default draws
+        # the tiles in the atlas
+        rng = np.random.default_rng(a.seed if name in flora.DRAW else [a.seed, list(DRAW).index(name)])
+        rgb = DRAW[name](rng)
         # plants, the torch and the other cut-outs are drawn as RGBA, on transparency, and every other tile as RGB
         Image.fromarray(np.clip(np.asarray(rgb).round(), 0, 255).astype("uint8")).convert("RGBA").save(OUT / f"{name}.png")
         print("drew", name)

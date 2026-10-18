@@ -34,6 +34,19 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let world_y = origin.y;
     // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
     let mut cells = Vec::with_capacity((size * size * size) as usize);
+    // the trees reaching into the chunk, which are planted once its ground is, and whose crowns
+    // shade ferns in. Any ground in the chunk is in their reach.
+    let min = I64Vec2::new(origin.x, origin.z);
+    let giants = regions
+        .noise()
+        .landmarks()
+        .giant_trees_near(min, min + size - 1);
+    let mut trees = Vec::new();
+    let trees_reach = trees_may_reach(origin.y, origin.y + size, lowest, highest);
+    if trees_reach {
+        trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
+        clear_trees(&mut trees, &columns.structures, &giants);
+    }
 
     for x in 0..size {
         for z in 0..size {
@@ -69,7 +82,13 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                     temperature,
                 );
                 let (world_x, world_z) = (origin.x + x, origin.z + z);
-                if let Some(plant) = plant_on(regions.noise(), world_x, world_z, ground, gradient) {
+                let shaded = || {
+                    let (x, z) = (world_x as f64 + 0.5, world_z as f64 + 0.5);
+                    trees.iter().any(|tree| tree.shades(x, z))
+                };
+                if let Some(plant) =
+                    plant_on(regions.noise(), world_x, world_z, ground, gradient, shaded)
+                {
                     cells[start + over as usize] = plant;
                 }
             }
@@ -120,14 +139,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
         }
     }
 
-    let min = I64Vec2::new(origin.x, origin.z);
-    let giants = regions
-        .noise()
-        .landmarks()
-        .giant_trees_near(min, min + size - 1);
-    if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
-        let mut trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
-        clear_trees(&mut trees, &columns.structures, &giants);
+    if trees_reach {
         for tree in &trees {
             tree.plant(
                 origin,
@@ -192,6 +204,7 @@ pub fn generate_chunk_mesh(
             ambient_occlusion: true,
             textured: true,
             solid_leaves,
+            origin: coord.0 * CHUNK_SIZE as i64,
         },
         &tint,
         &light,

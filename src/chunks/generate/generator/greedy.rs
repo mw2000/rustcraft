@@ -164,6 +164,7 @@ pub(super) fn mesh_opaque_greedy(
         ambient_occlusion,
         textured,
         solid_leaves,
+        ..
     } = style;
     let size = CHUNK_SIZE as i32;
     let n = size as usize;

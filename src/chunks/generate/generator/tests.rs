@@ -27,6 +27,7 @@ fn style(ambient_occlusion: bool, textured: bool) -> MeshStyle {
         ambient_occlusion,
         textured,
         solid_leaves: true,
+        origin: I64Vec3::ZERO,
     }
 }
 
@@ -2298,6 +2299,27 @@ fn draws(mesh: &Mesh) -> Vec<f32> {
     modes.iter().map(|m| m[1]).collect()
 }
 
+// The positions of `mesh`'s vertices.
+fn positions(mesh: &Mesh) -> Vec<Vec3> {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("missing positions");
+    };
+    positions.iter().map(|&p| Vec3::from(p)).collect()
+}
+
+// Where the plant alone in `mesh` stands, the middle of its quads' feet, and how tall it is.
+fn plant_stands(mesh: &Mesh) -> (Vec3, f32) {
+    let positions = positions(mesh);
+    let feet: Vec<_> = positions.iter().filter(|p| p.y == 3.5).collect();
+    let top = positions.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+    (
+        feet.iter().copied().sum::<Vec3>() / feet.len() as f32,
+        top - 3.5,
+    )
+}
+
 #[test]
 fn test_a_plant_is_two_crossed_quads_seen_from_both_sides() {
     let mut chunk = ChunkData::default();
@@ -2305,20 +2327,18 @@ fn test_a_plant_is_two_crossed_quads_seen_from_both_sides() {
     let mesh = mesh_chunk(chunk).opaque;
     assert_eq!(8, mesh.count_vertices());
     assert_eq!(Some(24), mesh.indices().map(Indices::len));
-    let Some(VertexAttributeValues::Float32x3(positions)) =
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-    else {
-        panic!("missing positions");
-    };
-    for p in positions {
-        // on one diagonal of the cell or the other, from its floor to its ceiling
-        let (dx, dz) = (p[0] - 4.0, p[2] - 4.0);
+    let positions = positions(&mesh);
+    let (centre, _) = plant_stands(&mesh);
+    for p in &positions {
+        // on one diagonal or the other through where it stands, from the cell's floor up
+        let (dx, dz) = (p.x - centre.x, p.z - centre.z);
         assert!(
             (dx.abs() - dz.abs()).abs() < 1e-5 && dx.abs() < 0.5,
             "{p:?}"
         );
-        assert!(p[1] == 3.5 || p[1] == 4.5, "{p:?}");
+        assert!(p.y == 3.5 || (4.0..=4.5).contains(&p.y), "{p:?}");
     }
+    let positions: Vec<[f32; 3]> = positions.iter().map(|p| p.to_array()).collect();
     assert!(draws(&mesh).iter().all(|&d| d == super::buffers::PLANT));
     // each quad twice, wound both ways
     let Some(Indices::U32(indices)) = mesh.indices() else {
@@ -2346,16 +2366,67 @@ fn test_plants_hide_none_of_their_neighbours_faces() {
 }
 
 #[test]
-fn test_tall_grass_is_tinted_and_flowers_are_not() {
-    for (plant, tinted) in [(BlockType::TallGrass, true), (BlockType::Cornflower, false)] {
+fn test_grasses_and_ferns_are_tinted_and_flowers_are_not_but_all_are_darker_at_the_roots() {
+    for (plant, tinted) in [
+        (BlockType::TallGrass, true),
+        (BlockType::ShortGrass, true),
+        (BlockType::WildGrass, true),
+        (BlockType::Fern, true),
+        (BlockType::Cornflower, false),
+        (BlockType::Poppy, false),
+    ] {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(4, 4, 4), plant);
-        let colours = tints(&mesh_chunk(chunk).opaque);
-        assert!(
-            colours.iter().all(|&c| (c != Vec3::ONE) == tinted),
-            "{plant:?}"
+        let mesh = mesh_chunk(chunk).opaque;
+        let colours = tints(&mesh);
+        let positions = positions(&mesh);
+        for (colour, at) in colours.iter().zip(&positions) {
+            if at.y > 3.5 {
+                assert_eq!(tinted, *colour != Vec3::ONE, "{plant:?}");
+            } else {
+                let tip = colours[positions.iter().position(|p| p.y > 3.5).unwrap()];
+                assert!(colour.max_element() < tip.max_element(), "{plant:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_wild_plants_stand_off_the_middle_by_where_they_are_and_crops_in_their_rows() {
+    let mesh = |coord: ChunkCoordinate, plant: BlockType| {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), plant);
+        let meshes = generate_chunk_mesh(
+            Arc::new(chunk),
+            vec![None; 26],
+            coord,
+            &NoiseGenerator::new(3),
+            false,
+        );
+        plant_stands(&meshes.opaque)
+    };
+    let mut stands = Vec::new();
+    for x in 0..8 {
+        let coord = ChunkCoordinate(I64Vec3::new(x, 40, 0));
+        for plant in [BlockType::TallGrass, BlockType::Poppy] {
+            let (centre, height) = mesh(coord, plant);
+            let off = centre - Vec3::new(4.0, 3.5, 4.0);
+            assert!(off.abs().max_element() <= 0.125 && off.y == 0.0, "{off}");
+            assert!((0.5..=1.0).contains(&height), "{plant:?} {height}");
+            // the same every time it's meshed
+            assert_eq!((centre, height), mesh(coord, plant));
+            stands.push((off.x, off.z, height));
+        }
+        // a crop stands in the middle of its cell at its stage's height
+        assert_eq!(
+            (Vec3::new(4.0, 3.5, 4.0), 1.0),
+            mesh(coord, BlockType::RipeWheat)
         );
     }
+    // and the same plant in the same place in another chunk stands otherwise
+    stands.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    stands.dedup();
+    assert!(stands.len() > 12, "{stands:?}");
 }
 
 #[test]
@@ -3051,15 +3122,19 @@ fn test_ferns_grow_in_jungle_and_taiga_but_not_savanna() {
                     spot.y + z,
                     BlockType::Grass,
                     0.2,
+                    || false,
                 )
             })
             .collect();
         let ferns = plants.iter().filter(|&&p| p == BlockType::Fern).count();
         assert_eq!(biome != "savanna", ferns > 0, "{ferns} ferns in {biome}");
-        assert!(
-            plants.contains(&BlockType::TallGrass),
-            "no grass in {biome}"
-        );
+        for grass in [
+            BlockType::TallGrass,
+            BlockType::ShortGrass,
+            BlockType::WildGrass,
+        ] {
+            assert!(plants.contains(&grass), "no {grass:?} in {biome}");
+        }
     }
 }
 

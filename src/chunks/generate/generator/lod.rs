@@ -660,6 +660,8 @@ pub fn generate_lod_mesh(
             ambient_occlusion: true,
             textured,
             solid_leaves: !textured,
+            // LODs draw no plants
+            origin: I64Vec3::ZERO,
         },
         &tint,
         &light,

@@ -592,8 +592,9 @@ blocks! {
         top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
     },
     // Plants, standing on the block below and gone with it. They're broken at a touch, let light
-    // and the player through and are built over, so their faces hide nothing. Flowers and ferns
-    // drop nothing, and tall grass itself, to set down elsewhere, and a seed one time in eight.
+    // and the player through and are built over, so their faces hide nothing. Each is picked,
+    // dropping itself to set down elsewhere, and the grasses a seed now and then too: tall grass
+    // one time in eight, short tufts less often and wild grass gone to seed more.
     TallGrass {
         name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true,
@@ -601,21 +602,39 @@ blocks! {
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::TallGrass, side: Tile::TallGrass, bottom: Tile::TallGrass, lod: Tile::TallGrass,
     },
+    // A low tuft, tinted like tall grass.
+    ShortGrass {
+        name: "short_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Cross, replaceable: true,
+        drops: Drops::Both(&Drops::Itself, &Drops::Chance(Item::Seeds, 12)),
+        hardness: 0.0, tool: None, tier: 0,
+        top: Tile::ShortGrass, side: Tile::ShortGrass, bottom: Tile::ShortGrass,
+        lod: Tile::ShortGrass,
+    },
+    // Tall stalks gone to seed over a tuft, tinted like tall grass.
+    WildGrass {
+        name: "wild_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Cross, replaceable: true,
+        drops: Drops::Both(&Drops::Itself, &Drops::Chance(Item::Seeds, 4)),
+        hardness: 0.0, tool: None, tier: 0,
+        top: Tile::WildGrass, side: Tile::WildGrass, bottom: Tile::WildGrass,
+        lod: Tile::WildGrass,
+    },
     Poppy {
         name: "poppy", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
-        style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        style: RenderStyle::Cross, replaceable: true, drops: Drops::Itself,
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::Poppy, side: Tile::Poppy, bottom: Tile::Poppy, lod: Tile::Poppy,
     },
     Dandelion {
         name: "dandelion", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
-        style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        style: RenderStyle::Cross, replaceable: true, drops: Drops::Itself,
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::Dandelion, side: Tile::Dandelion, bottom: Tile::Dandelion, lod: Tile::Dandelion,
     },
     Cornflower {
         name: "cornflower", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
-        style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        style: RenderStyle::Cross, replaceable: true, drops: Drops::Itself,
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::Cornflower, side: Tile::Cornflower, bottom: Tile::Cornflower,
         lod: Tile::Cornflower,
@@ -623,7 +642,7 @@ blocks! {
     // In the shade of jungles and taiga, tinted like tall grass.
     Fern {
         name: "fern", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
-        style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        style: RenderStyle::Cross, replaceable: true, drops: Drops::Itself,
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::Fern, side: Tile::Fern, bottom: Tile::Fern, lod: Tile::Fern,
     },
@@ -1096,9 +1115,11 @@ pub enum Tile {
     BasaltSide,
     BasaltTop,
     Magma,
+    ShortGrass,
+    WildGrass,
 }
 
-pub const TILE_COUNT: usize = 82;
+pub const TILE_COUNT: usize = 84;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -1110,7 +1131,13 @@ impl Tile {
     pub fn tinted(self) -> bool {
         matches!(
             self,
-            Tile::GrassTop | Tile::Leaves | Tile::TallGrass | Tile::Fern | Tile::Vines
+            Tile::GrassTop
+                | Tile::Leaves
+                | Tile::TallGrass
+                | Tile::ShortGrass
+                | Tile::WildGrass
+                | Tile::Fern
+                | Tile::Vines
         )
     }
 }
@@ -1147,7 +1174,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Magma as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::WildGrass as usize + 1);
     }
 
     #[test]
@@ -1194,6 +1221,8 @@ mod tests {
         assert_eq!(
             vec![
                 BlockType::TallGrass,
+                BlockType::ShortGrass,
+                BlockType::WildGrass,
                 BlockType::Poppy,
                 BlockType::Dandelion,
                 BlockType::Cornflower,
