@@ -28,6 +28,13 @@ const OUTLINE_COLOUR: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
 // How long after breaking a block, in seconds, the next starts to break with the mouse still
 // held, as in Minecraft, so a held click doesn't mow through plants a block a frame.
 const BREAK_REST: f32 = 0.25;
+// In pixels. Bevy's default 2 reads as a faint hairline once TAA's softened it, so the
+// outline was easy to miss against grass or in shade.
+const OUTLINE_WIDTH: f32 = 3.0;
+
+/// The outline's own gizmo settings, so it's drawn a little thicker than other gizmos.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct OutlineGizmos;
 
 /// Looking at blocks, outlining the one looked at, and breaking, placing, picking and using
 /// blocks with the mouse (§5.1), breaking and placing as requests to the server. Creative breaks
@@ -57,6 +64,14 @@ impl Plugin for InteractionPlugin {
                     // a client joining a server has nothing to reach for until it's welcomed
                     .run_if(resource_exists::<World>),
             );
+        let outline = GizmoConfig {
+            line: GizmoLineConfig {
+                width: OUTLINE_WIDTH,
+                ..default()
+            },
+            ..default()
+        };
+        app.insert_gizmo_config(OutlineGizmos, outline);
     }
 }
 
@@ -240,7 +255,7 @@ fn target_block(
     target.0 = raycast(eye, look.forward(), REACH, stops);
 }
 
-fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {
+fn outline_target(target: Res<Target>, mut gizmos: Gizmos<OutlineGizmos>) {
     if let Some(hit) = target.0 {
         let centre = hit.block.as_vec3() + 0.5;
         gizmos.cube(
@@ -828,6 +843,65 @@ mod tests {
             app.update();
             assert!(!sand(&app));
             assert_eq!(None, app.world().resource::<Breaking>().cracks());
+        }
+    }
+
+    mod outline {
+        use std::any::TypeId;
+
+        use bevy::gizmos::{GizmoAsset, GizmoHandles};
+        use bevy::prelude::*;
+
+        use super::super::{outline_target, Hit, OutlineGizmos, Target, OUTLINE_SIZE};
+
+        // the lines the outline drew last frame
+        fn outline(target: Option<Hit>) -> Vec<Vec3> {
+            let mut app = App::new();
+            // just the gizmos' own parts of `GizmoPlugin`, which wants a renderer's worth more
+            app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+                .init_asset::<GizmoAsset>()
+                .init_resource::<GizmoHandles>()
+                .init_gizmo_group::<OutlineGizmos>()
+                .insert_resource(Target(target))
+                .add_systems(Update, outline_target);
+            app.update();
+            let handles = app.world().resource::<GizmoHandles>().handles();
+            let Some(Some(handle)) = handles.get(&TypeId::of::<OutlineGizmos>()) else {
+                return Vec::new();
+            };
+            let assets = app.world().resource::<Assets<GizmoAsset>>();
+            let buffer = assets.get(handle).unwrap().buffer();
+            let view = buffer.buffer();
+            [view.list_positions.clone(), view.strip_positions.clone()]
+                .concat()
+                .into_iter()
+                .filter(|position| position.is_finite())
+                .collect()
+        }
+
+        #[test]
+        fn test_outlines_the_block_looked_at_from_just_outside() {
+            let block = IVec3::new(3, -2, 7).as_i64vec3();
+            let lines = outline(Some(Hit {
+                block,
+                face: IVec3::Y.as_i64vec3(),
+            }));
+            assert!(!lines.is_empty());
+            let margin = (OUTLINE_SIZE - 1.0) / 2.0;
+            for corner in lines {
+                let offset = corner - block.as_vec3();
+                for d in offset.to_array() {
+                    assert!(
+                        (d + margin).abs() < 1e-4 || (d - 1.0 - margin).abs() < 1e-4,
+                        "{corner} isn't a corner of the outline"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn test_outlines_nothing_when_nothing_is_looked_at() {
+            assert!(outline(None).is_empty());
         }
     }
 }
