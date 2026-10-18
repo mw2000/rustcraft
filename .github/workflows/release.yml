@@ -1,10 +1,13 @@
 name: Release
 
-# A version tag publishes a GitHub release. Running it by hand (workflow_dispatch) builds the same
-# archives and keeps them as workflow artifacts, to try the packaging without cutting a release.
+# A version tag publishes a GitHub release. Changing this workflow on combined-prs, or running it by
+# hand (workflow_dispatch), builds the same archives and keeps them as workflow artifacts, to try
+# the packaging without cutting a release.
 on:
   push:
     tags: ['v*']
+    branches: [combined-prs]
+    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
 
 env:
