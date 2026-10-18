@@ -9,7 +9,7 @@ use bevy::ui_widgets::{SliderRange, SliderStep, SliderValue};
 
 use super::widgets::{
     choice, choice_text, column, first, gap, heading, label, list, note, on_off, relabel, slider,
-    stepped, text_button, ERROR_TEXT, WIDE,
+    stepped, tab, text_button, ERROR_TEXT, WIDE,
 };
 use super::{back, Menu, Page};
 use crate::controls::{Action, Binding, Bindings};
@@ -99,13 +99,11 @@ impl Setting {
         };
         match self {
             Setting::RenderDistance => range("Render Distance", 64.0..=2048.0, 64.0, |v| {
-                format!("{v} ({:.1} km)", v * 16.0 / 1000.0)
+                format!("{v} ({:.0} km)", v * 16.0 / 1000.0)
             }),
             Setting::FullDetail => range("Full Detail", 4.0..=32.0, 1.0, |v| format!("{v} chunks")),
-            Setting::FieldOfView => range("Field of View", 30.0..=110.0, 1.0, |v| {
-                format!("{v} degrees")
-            }),
-            Setting::UiScale => range("UI Scale", 0.5..=2.0, 0.05, |v| format!("{v:.2}x")),
+            Setting::FieldOfView => range("Field of View", 30.0..=110.0, 1.0, |v| format!("{v}°")),
+            Setting::UiScale => range("UI Scale", 0.5..=2.0, 0.05, |v| format!("{v:.2}×")),
             Setting::FrameCap => range("Frame Cap", 0.0..=240.0, 10.0, |v| {
                 if v == 0.0 {
                     "Unlimited".into()
@@ -114,7 +112,7 @@ impl Setting {
                 }
             }),
             Setting::Sensitivity => {
-                range("Mouse Sensitivity", 0.1..=3.0, 0.05, |v| format!("{v:.2}x"))
+                range("Mouse Sensitivity", 0.1..=3.0, 0.05, |v| format!("{v:.2}×"))
             }
             Setting::Master => range("Volume", 0.0..=1.0, 0.05, percent),
             Setting::Effects => range("Effects", 0.0..=1.0, 0.05, percent),
@@ -244,7 +242,7 @@ pub(super) fn spawn(
                 for tab_shown in SettingsTab::ALL {
                     let selected = tab_shown == shown;
                     tabs.spawn((
-                        text_button(tab_shown.name(), 180.0),
+                        tab(tab_shown.name()),
                         observe(move |_: On<Activate>, mut menu: ResMut<Menu>| {
                             if menu.top() != Some(&Page::Settings(tab_shown)) {
                                 menu.replace(Page::Settings(tab_shown));

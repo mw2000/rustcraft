@@ -113,8 +113,11 @@ fn spawn_hotbar(mut commands: Commands, icons: Res<ItemIcons>) {
         });
 }
 
+// The number keys choose a slot, and the wheel steps through them, but only while playing: over
+// the inventory or the block picker it's theirs, to scroll their lists.
 fn select_slot(
     controls: Controls,
+    state: Res<State<GameState>>,
     scroll: Res<AccumulatedMouseScroll>,
     mut hotbar: Query<&mut Hotbar, With<LocalPlayer>>,
     // how far the wheel's turned towards the next notch
@@ -128,6 +131,10 @@ fn select_slot(
         .position(|&slot| controls.just_pressed(slot))
     {
         hotbar.selected = slot;
+    }
+    if *state.get() != GameState::Playing {
+        *notches = 0.0;
+        return;
     }
     *notches += match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
@@ -340,6 +347,20 @@ mod tests {
         app.update();
         scroll(&mut app, -1.0, MouseScrollUnit::Line);
         assert_eq!(0, selected(&mut app));
+    }
+
+    #[test]
+    fn test_the_wheel_scrolls_the_inventory_not_the_hotbar() {
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Inventory);
+        app.update();
+        scroll(&mut app, -1.0, MouseScrollUnit::Line);
+        assert_eq!(0, selected(&mut app));
+        // and the number keys still choose the slot a picked block goes in
+        press(&mut app, KeyCode::Digit4);
+        assert_eq!(3, selected(&mut app));
     }
 
     #[test]

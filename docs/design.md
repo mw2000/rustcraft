@@ -2052,7 +2052,8 @@ Done when: **the world feels inhabited, and night is dangerous.**
       pages. Tab, Shift-Tab and Up/Down move
       the focus (`TabNavigationPlugin` and `move_focus_with_arrows`), Enter and Space press, and
       the focus lights up only once the keyboard's used. Text is sized in rem, so Larger Text is
-      `RemSize`; UI Scale is `UiScale`.
+      `RemSize`; UI Scale is `UiScale`. All of Fira Mono (OFL, `assets/fonts/`, 170 KB, built
+      in) takes the place of Bevy's subset of it as the default font, which lacked ° and ×.
     - **Pages** (`src/menu/`) are a stack in `Menu`, the top drawn afresh as it changes, each by
       a system of its own (`run_system_cached_with`). Escape and every Back button run `back`:
       a page down, out of the pause menu into the game, out of the loading screen to the title,

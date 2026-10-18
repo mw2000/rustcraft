@@ -41,7 +41,10 @@ pub const ERROR_TEXT: Color = Color::srgb(1.0, 0.4, 0.4);
 pub const WIDE: f32 = 400.0;
 pub const HALF: f32 = 196.0;
 const HEIGHT: f32 = 40.0;
-const THUMB_WIDTH: f32 = 12.0;
+const THUMB_WIDTH: f32 = 10.0;
+// A slider's track, and how far its thumb stands out over and under it, in pixels.
+const TRACK_HEIGHT: f32 = 6.0;
+const THUMB_OVERHANG: f32 = 4.0;
 // How soon a second click on a list's row makes a double click, in seconds.
 const DOUBLE_CLICK: f32 = 0.5;
 
@@ -50,7 +53,8 @@ pub struct WidgetsPlugin;
 
 impl Plugin for WidgetsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LastPicked>()
+        app.add_systems(Startup, use_the_game_font)
+            .init_resource::<LastPicked>()
             .add_observer(listbox_update_selection)
             .add_observer(select_active_row)
             .add_observer(note_picked)
@@ -73,7 +77,21 @@ impl Plugin for WidgetsPlugin {
 enum Look {
     Button,
     Field,
+    Slider,
     Row,
+}
+
+// All of Fira Mono, built in, in place of the subset of it Bevy has as its default font, which
+// lacks symbols the UI uses such as ° and ×. Every text that names no font is in it.
+const GAME_FONT: &[u8] = include_bytes!("../../assets/fonts/FiraMono-Regular.ttf");
+
+fn use_the_game_font(fonts: Option<ResMut<Assets<Font>>>) {
+    if let Some(mut fonts) = fonts {
+        let font = Font::from_bytes(GAME_FONT.to_vec());
+        if let Err(error) = fonts.insert(AssetId::default(), font) {
+            warn!("couldn't use the game's font: {error}");
+        }
+    }
 }
 
 /// Text sized relative to the root size, so the larger text setting makes it all bigger.
@@ -171,6 +189,28 @@ pub(crate) fn button_of(width: f32) -> impl Bundle {
     )
 }
 
+/// A tab along the top of a page, as wide as its name: a button, shown pressed as it's
+/// `Selected`.
+pub fn tab(name: &str) -> impl Bundle {
+    (
+        Button,
+        Look::Button,
+        Hovered::default(),
+        TabIndex(0),
+        Node {
+            height: Val::Px(HEIGHT),
+            padding: UiRect::horizontal(Val::Px(16.0)),
+            border: UiRect::all(Val::Px(2.0)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(BUTTON_COLOR),
+        BorderColor::all(BUTTON_BORDER_COLOR),
+        children![label(name)],
+    )
+}
+
 /// A labelled button `width` pixels wide.
 pub fn text_button(text: &str, width: f32) -> impl Bundle {
     (button_of(width), children![label(text)])
@@ -228,7 +268,7 @@ struct SliderText;
 
 /// A slider across `range` in steps of `step`, at `value`, showing "Name: value" with the value
 /// as `describe` puts it. The page's `ValueChange<f32>` observer changes the setting, and
-/// `set_slider` moves it.
+/// inserting a `SliderValue` moves it.
 pub fn slider(
     name: &'static str,
     range: RangeInclusive<f32>,
@@ -246,48 +286,67 @@ pub fn slider(
         SliderValue(value),
         SliderRange::from_range(range),
         SliderStep(step),
-        Look::Field,
+        Look::Slider,
         Hovered::default(),
         TabIndex(0),
+        // its name and value over a track the thumb runs along, so the thumb never hides the text
         Node {
             width: Val::Px(width),
             height: Val::Px(HEIGHT),
             border: UiRect::all(Val::Px(2.0)),
+            padding: UiRect::horizontal(Val::Px(4.0)),
+            flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
+            justify_content: JustifyContent::SpaceEvenly,
             ..default()
         },
-        BackgroundColor(FIELD_COLOR),
-        BorderColor::all(BUTTON_BORDER_COLOR),
+        BackgroundColor(Color::NONE),
+        BorderColor::all(Color::NONE),
         children![
-            // the thumb travels along the track but for its own width
+            (
+                SliderText,
+                Text::default(),
+                font(16.0),
+                TEXT_SHADOW,
+                Pickable::IGNORE
+            ),
             (
                 Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(0.0),
-                    right: Val::Px(THUMB_WIDTH),
-                    top: Val::Px(0.0),
-                    bottom: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Px(TRACK_HEIGHT),
+                    border: UiRect::all(Val::Px(1.0)),
                     ..default()
                 },
+                BackgroundColor(FIELD_COLOR),
+                BorderColor::all(FIELD_BORDER_COLOR),
                 Pickable::IGNORE,
+                // the thumb travels along the track but for its own width
                 children![(
-                    SliderThumb,
                     Node {
                         position_type: PositionType::Absolute,
-                        width: Val::Px(THUMB_WIDTH),
-                        top: Val::Px(0.0),
-                        bottom: Val::Px(0.0),
-                        border: UiRect::all(Val::Px(2.0)),
+                        left: Val::Px(0.0),
+                        right: Val::Px(THUMB_WIDTH),
+                        top: Val::Px(-THUMB_OVERHANG),
+                        bottom: Val::Px(-THUMB_OVERHANG),
                         ..default()
                     },
-                    BackgroundColor(BUTTON_COLOR),
-                    BorderColor::all(Color::WHITE),
                     Pickable::IGNORE,
+                    children![(
+                        SliderThumb,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: Val::Px(THUMB_WIDTH),
+                            top: Val::Px(0.0),
+                            bottom: Val::Px(0.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(BUTTON_COLOR),
+                        BorderColor::all(Color::WHITE),
+                        Pickable::IGNORE,
+                    )],
                 )],
             ),
-            // over the thumb
-            (SliderText, label(""), ZIndex(1)),
         ],
     )
 }
@@ -300,11 +359,6 @@ pub fn stepped(change: &ValueChange<f32>, sliders: &Query<(&SliderRange, &Slider
     };
     let steps = ((change.value - range.start()) / step.0).round();
     range.clamp(range.start() + steps * step.0)
-}
-
-/// Moves `slider` to `value`.
-pub fn set_slider(commands: &mut Commands, slider: Entity, value: f32) {
-    commands.entity(slider).insert(SliderValue(value));
 }
 
 // Puts each slider's thumb and text where its value is.
@@ -591,6 +645,8 @@ fn highlight(
             Look::Button => (BUTTON_COLOR, BUTTON_BORDER_COLOR),
             Look::Field if lit || focus.get() == Some(widget) => (FIELD_COLOR, Color::WHITE),
             Look::Field => (FIELD_COLOR, FIELD_BORDER_COLOR),
+            Look::Slider if lit || focus.get() == Some(widget) => (Color::NONE, FIELD_BORDER_COLOR),
+            Look::Slider => (Color::NONE, Color::NONE),
             Look::Row => (
                 if selected {
                     ROW_SELECTED_COLOR
