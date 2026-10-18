@@ -1572,6 +1572,12 @@ start.**
 - ☐ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☐ **M2.7 Landmarks.** (§5.7)
 - ☑ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2, §4.4).
+  - ☐ Follow-up: draw builds as boxes in coarse LODs, as structures are, so towers and houses
+    narrower than half a cell stay visible beyond ~1 km (§4.2, Built M2.8).
+  - ☐ Follow-up: edits clear what coarse nodes draw as boxes, so a demolished structure or a
+    felled forest disappears at a distance too.
+  - ☐ Follow-up: resend `EditReach` as the drawn distance grows when flying high, and a batch-edit
+    path for big pastes (`LodEdits::set` bottom-up).
 - ☑ **M2.9 Map.** (§5.7)
 
 ### Phase 3: life
