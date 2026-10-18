@@ -97,10 +97,11 @@ mod tests {
                 assert!(block.tool().is_some(), "{block:?}");
             }
             assert!(block.hardness() >= 0.0, "{block:?}");
-            // plants and torches go at a touch
+            // plants, torches and the blocks for authoring structures go at a touch
             assert_eq!(
-                block.needs_ground(),
-                block.is_tangible() && block.hardness() == 0.0
+                block.needs_ground() || block.is_for_authoring(),
+                block.is_tangible() && block.hardness() == 0.0,
+                "{block:?}"
             );
         }
         // and the best tier there is mines everything tiered

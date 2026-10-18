@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 use bevy::math::{I64Vec2, I64Vec3, Vec3Swizzles};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
 
@@ -21,7 +22,7 @@ pub const STRUCTURE_DEPTH: i64 = 4;
 
 /// A structure type, as its file in `assets/structures/` declares it: where it's placed, and the
 /// blocks it's built of.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Structure {
     pub name: String,
@@ -31,7 +32,7 @@ pub struct Structure {
 
 /// Where a structure type stands: on a grid of square cells `cell` blocks across, with one in a
 /// cell `chance` of the time where the ground suits it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Placement {
     pub cell: i64,
@@ -48,7 +49,7 @@ pub struct Placement {
 
 /// A structure's blocks: a box of cells, each a block, air cleared out of the ground, or left as
 /// the world has it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "TemplateFile")]
 pub struct Template {
     /// Across x, up and across z.
@@ -141,7 +142,112 @@ impl TryFrom<TemplateFile> for Template {
     }
 }
 
+impl Default for Placement {
+    /// Somewhere to start from for a structure saved in the game, to be edited afterwards: as
+    /// often as the watchtower, in forest on any ground fairly flat.
+    fn default() -> Self {
+        Self {
+            cell: 640,
+            chance: 0.5,
+            biomes: vec!["forest".into()],
+            min_above_sea: 2,
+            max_rise: 4,
+            hilltop: false,
+        }
+    }
+}
+
+impl Structure {
+    /// The structure as a file in `assets/structures/` has it, its layers as text grids, which
+    /// reads back as the same structure if it's one that loads. Blocks are keyed by the first
+    /// letter of their names that's free, so they read as what they are.
+    pub fn to_toml(&self) -> String {
+        let template = &self.template;
+        let size = template.size;
+        // a loot marker's chest is the marker's, so its cell is left for loading to put it in
+        let mut cells = template.cells.clone();
+        for (_, at) in template.markers.iter().filter(|(kind, _)| kind == LOOT) {
+            cells[((at.y * size.z + at.z) * size.x + at.x) as usize] = None;
+        }
+        let mut palette: Vec<(char, BlockType)> = Vec::new();
+        for block in cells.iter().flatten() {
+            if *block == BlockType::Air || palette.iter().any(|(_, b)| b == block) {
+                continue;
+            }
+            let spare = ('a'..='z').chain('A'..='Z').chain('0'..='9');
+            let key = block
+                .name()
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .chain(spare)
+                .find(|key| !palette.iter().any(|(k, _)| k == key))
+                .expect("fewer blocks than keys");
+            palette.push((key, *block));
+        }
+        palette.sort_unstable_by_key(|&(key, _)| key);
+        let key_of = |cell: Option<BlockType>| match cell {
+            None => LEAVE,
+            Some(BlockType::Air) => CLEAR,
+            Some(block) => palette.iter().find(|(_, b)| *b == block).unwrap().0,
+        };
+        let entries = |items: Vec<String>| format!("{{ {} }}", items.join(", "));
+
+        let placement = toml::to_string(&self.placement).expect("a placement is plain data");
+        let mut out = format!(
+            "name = {:?}\n\n[placement]\n{placement}\n[template]\n",
+            self.name
+        );
+        let _ = writeln!(out, "size = [{}, {}, {}]", size.x, size.y, size.z);
+        let _ = writeln!(out, "floor = {}", template.floor);
+        let _ = writeln!(out, "foundation = {:?}", template.foundation.name());
+        let keys = palette
+            .iter()
+            .map(|(key, block)| format!("{key} = {:?}", block.name()));
+        let _ = writeln!(out, "palette = {}", entries(keys.collect()));
+        let mut markers: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for (kind, at) in &template.markers {
+            let point = format!("[{}, {}, {}]", at.x, at.y, at.z);
+            markers.entry(kind).or_default().push(point);
+        }
+        if !markers.is_empty() {
+            let kinds = markers
+                .iter()
+                .map(|(kind, points)| format!("{kind} = [{}]", points.join(", ")));
+            let _ = writeln!(out, "markers = {}", entries(kinds.collect()));
+        }
+        out += "# bottom to top, each layer's rows running +z down the page and +x across\n";
+        out += "layers = [\n";
+        for (y, layer) in cells.chunks((size.x * size.z) as usize).enumerate() {
+            let _ = writeln!(out, "  # {y}\n  '''");
+            for row in layer.chunks(size.x as usize) {
+                out.extend(row.iter().map(|&cell| key_of(cell)));
+                out.push('\n');
+            }
+            out += "''',\n";
+        }
+        out + "]\n"
+    }
+}
+
 impl Template {
+    /// A template of `size` from its cells, x fastest, then z, then y, as `cell` reads them. It's
+    /// only checked once it's written and read back, see `Structure::to_toml`.
+    pub fn new(
+        size: I64Vec3,
+        floor: i64,
+        foundation: BlockType,
+        cells: Vec<Option<BlockType>>,
+        markers: Vec<(String, I64Vec3)>,
+    ) -> Self {
+        Self {
+            size,
+            floor,
+            foundation,
+            cells,
+            markers,
+        }
+    }
+
     /// Its footprint turned `rotation` quarter turns, across x and z.
     pub fn footprint(&self, rotation: u8) -> I64Vec2 {
         if rotation.is_multiple_of(2) {
@@ -224,6 +330,40 @@ mod tests {
         assert!(template("layers = ['''\ncs.\n''', '''\nccc\nc.c\n''']").is_err());
         assert!(template("layers = ['''\ncx.\n---\n''', '''\nccc\nc.c\n''']").is_err());
         assert!(template("layers = ['''\ncs.\n---\n''']").is_err());
+    }
+
+    #[test]
+    fn test_a_template_written_out_reads_back_the_same_with_its_blocks_keyed_by_name() {
+        let template = template("layers = ['''\ncs.\n---\n''', '''\nccc\nc.c\n''']").unwrap();
+        let structure = Structure {
+            name: "hut".into(),
+            placement: Placement::default(),
+            template,
+        };
+        let text = structure.to_toml();
+        assert!(text.contains("palette = { c = \"cobblestone\", s = \"stone_bricks\" }"));
+        assert!(text.contains("markers = { loot = [[2, 1, 0]] }"));
+        assert!(text.contains("'''\ncs.\n---\n'''"), "{text}");
+        assert_eq!(structure, toml::from_str::<Structure>(&text).unwrap());
+
+        // a block whose initial is taken takes the next free letter of its name
+        let blocks = [
+            BlockType::Stone,
+            BlockType::Sand,
+            BlockType::Snow,
+            BlockType::Water,
+        ];
+        let cells = blocks.into_iter().map(Some).collect();
+        let size = I64Vec3::new(4, 1, 1);
+        let template = Template::new(size, 0, BlockType::Stone, cells, Vec::new());
+        let structure = Structure {
+            name: "row".into(),
+            placement: Placement::default(),
+            template,
+        };
+        let text = structure.to_toml();
+        assert!(text.contains("'''\nsanw\n'''"), "{text}");
+        assert_eq!(structure, toml::from_str::<Structure>(&text).unwrap());
     }
 
     #[test]

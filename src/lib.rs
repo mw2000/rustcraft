@@ -1,3 +1,4 @@
+pub mod authoring;
 pub mod block;
 pub mod breaking;
 pub mod chunks;

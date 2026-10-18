@@ -207,6 +207,11 @@ impl WorldSave {
         self.save_soon();
     }
 
+    /// The world's directory.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// Saves what's changed at the next frame's autosave rather than waiting for its time.
     pub fn save_soon(&mut self) {
         self.next_autosave = Duration::ZERO;

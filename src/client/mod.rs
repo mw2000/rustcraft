@@ -1,6 +1,7 @@
 //! What a player's game does with what the server decides (§4.4): in singleplayer it runs in the
 //! same App as the server.
 
+pub mod authoring;
 pub mod clock;
 pub mod command_bar;
 pub mod cracks;
@@ -50,6 +51,7 @@ impl Plugin for ClientPlugin {
                         player::attach_camera,
                         join::follow_inventory,
                         join::follow_game_mode,
+                        join::follow_selection,
                         join::follow_teleports,
                         join::follow_vitals,
                     ),

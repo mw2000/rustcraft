@@ -19,6 +19,7 @@ use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::netcode::NETCODE_USER_DATA_BYTES;
 use serde::{Deserialize, Serialize};
 
+use crate::authoring::Selection;
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::containers::Container;
@@ -39,7 +40,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -102,7 +103,9 @@ impl Plugin for ProtocolPlugin {
             .add_server_message::<VitalsChanged>(Channel::Ordered)
             // in the order they're said
             .add_client_message::<Chat>(Channel::Ordered)
-            .add_server_message::<ChatLine>(Channel::Ordered);
+            .add_server_message::<ChatLine>(Channel::Ordered)
+            // in the order the commands changing it are run
+            .add_server_message::<SelectionChanged>(Channel::Ordered);
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -322,6 +325,11 @@ pub struct Teleport {
 /// A client's player's game mode, as the server has changed it. The host's needs no telling.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GameModeChanged(pub GameMode);
+
+/// A client's player's selection, as a command has changed it, to draw. The host's needs no
+/// telling.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionChanged(pub Selection);
 
 /// Where another player is, by their feet, and which way they look, at `at` milliseconds by
 /// their own clock, which only tells their poses apart and how far apart they are.

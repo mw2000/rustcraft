@@ -1274,10 +1274,10 @@ landmarks visible from far away (P1).
     of one character a block name, markers by kind (`loot` points, chests since M2.3), and the layers as
     text grids, bottom first. `.` leaves the world as it is and `-` clears it to air, carving
     interiors out of the ground. Text over a binary format with a dump tool, since a template a
-    few thousand blocks big reads and diffs as a picture of itself; M2.2's `/structure save` can
-    write the same. Templates are refused at load if they don't match their size or are taller
+    few thousand blocks big reads and diffs as a picture of itself; M2.2's `/structure save`
+    writes the same. Templates are refused at load if they don't match their size or are taller
     than `STRUCTURE_HEIGHT` (27, as tall as trees) over their floor, or sunk deeper than
-    `STRUCTURE_DEPTH` (4). They're authored by script for now, with the `structures` skill.
+    `STRUCTURE_DEPTH` (4). The watchtower was written by script (the `structures` skill).
   - **Placement** (INV-2, INV-3) is per type on a grid of square cells: a hash of the seed, the
     type's name and the cell decides whether the cell tries for one (`chance`), its spot in the
     cell and its rotation (0–270°). A hilltop type climbs from its spot to the top of its hill in
@@ -1330,6 +1330,44 @@ landmarks visible from far away (P1).
     structures; it changed only by those two chunks.
   - Later: blending the ground at the edges, several types competing for a spot, structures
     assembled from pieces (villages), lit windows, and bigger landmarks drawn further.
+- **Built (M2.2): authoring in creative** (`src/authoring.rs`, `src/server/structures.rs`,
+  `src/client/authoring.rs`).
+  - **Selecting:** `/pos1` and `/pos2` set the corners of a box at the block outlined, or else
+    the block the player stands in, or at coordinates typed (`~` as for `/tp`), and say its size.
+    Commands rather than a wand item, as every other authoring step is one and there's no item
+    to keep in the hotbar. The selection (`Selection`, required by `Player`) is the server's, as
+    it saves from it; a client from elsewhere is sent it as `SelectionChanged` (protocol 12) and
+    draws it as the host does, an orange box, its corners outlined, and the floor of the
+    structure placed in it as a fainter rectangle. It isn't saved with the world.
+  - **Structure voids and markers** are blocks (`structure_void`, `loot_marker`) found in the
+    creative picker, never generated nor dropped, walked and seen through, broken at a touch and,
+    as the world draws neither, shown only in creative, as small boxes drawn from the edit layer
+    round the player (`AuthoringPlugin`), so a structure looks as it will while it's built. A
+    void is built over as air is. Which block stands for which marker is one table,
+    `authoring::MARKERS`, so markers to come (spawners, M3) add a row.
+  - **`/structure save <name> [floor]`** writes the box as a template in the M2.1 format to
+    `structures/<name>.toml` in the world's directory, on the server, which has the world, and
+    says where; it can be committed to `assets/structures/` as it is. Air is `-`, voids `.` and
+    markers `.` with a marker at them; the palette keys each block by the first letter of its
+    name that's free. The floor is the layer given, or else that of the structure placed into the
+    box, or else its bottom; the foundation is the commonest block of its bottom layer; the
+    placement is that of the structure of the same name if there is one, so a reworked one keeps
+    it, or else a start to edit (`Placement::default`). The text is read back with the loader
+    before it's written, so a save that wouldn't load, such as a floor deeper than
+    `STRUCTURE_DEPTH`, is refused. Boxes are at most `MAX_SIZE`, 64 by 31 by 64: as tall as a
+    template can be and four chunks across, room for any one building as villages are made of
+    pieces, while placing one stays a burst of at most 127,000 edits. All of the box must be
+    loaded.
+  - **`/structure place <name> [0|90|180|270]`** builds the world's own template of that name,
+    or else the built-in one, as edits (sent as any are, a container overwritten leaving what was
+    in it) with its floor on the block outlined, centred as generation centres one, and selects
+    it with its floor. Cells it leaves as they are become voids and markers marker blocks, so
+    saving it again gives the template back: the watchtower round-trips exactly, turned or not.
+    `/structure list` lists both kinds. Templates are read and written as the command runs, a few
+    kilobytes as rarely as an operator types one, rather than on the I/O pool (INV-7).
+  - All of these are operators' commands (`USAGES`). Generation is untouched: the new blocks
+    never generate, and the golden checksum is as it was.
+  - Later: copying and pasting a box, and undo, if building in the game asks for them.
 
 ### 5.7 World and biomes
 
@@ -1461,7 +1499,7 @@ Done when: **there's something worth walking 5 km to see, and you can see it fro
 start.**
 
 - ☑ **M2.1 Structure system.** Placement, templates, terrain fit, LODs (§5.6).
-- ☐ **M2.2 Structure authoring.** `/structure save` and loading in creative mode (§5.6).
+- ☑ **M2.2 Structure authoring.** `/structure save` and loading in creative mode (§5.6).
 - ☑ **M2.3 Chests and loot tables.** Chests as containers, loot tables rolled from the seed for
   chests the world generates (§5.2, §5.6).
 - ☐ **M2.4 First structures.** Temple, ruin, outpost, watchtower, mineshaft, dungeon (§5.6).

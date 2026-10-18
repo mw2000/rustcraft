@@ -13,6 +13,7 @@ use bevy_replicon_renet2::RenetChannelsExt;
 
 use super::edits::{EditOrder, Predictions};
 use super::player::LocalPlayer;
+use crate::authoring::Selection;
 use crate::chunks::generate::checksum::world_checksum;
 use crate::edits::Edits;
 use crate::game_mode::GameMode;
@@ -22,8 +23,8 @@ use crate::player::name::PlayerName;
 use crate::player::{arriving, Player, PlayerLook};
 use crate::protocol::{
     name_to_user_data, CommandOutput, EditReach, GameModeChanged, InventoryChanged, PlayerPose,
-    Teleport, VitalsChanged, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID, POSE_INTERVAL,
-    PROTOCOL_VERSION,
+    SelectionChanged, Teleport, VitalsChanged, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID,
+    POSE_INTERVAL, PROTOCOL_VERSION,
 };
 use crate::settings::Settings;
 use crate::survival::{Asleep, Vitals};
@@ -193,6 +194,18 @@ pub(super) fn follow_game_mode(
         (changes.read().last(), player.single_mut())
     {
         *held = *mode;
+    }
+}
+
+/// Puts the selection the server says this client's player has on them.
+pub(super) fn follow_selection(
+    mut changes: MessageReader<SelectionChanged>,
+    mut player: Query<&mut Selection, With<LocalPlayer>>,
+) {
+    if let (Some(SelectionChanged(selection)), Ok(mut held)) =
+        (changes.read().last(), player.single_mut())
+    {
+        *held = *selection;
     }
 }
 

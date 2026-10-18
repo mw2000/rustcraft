@@ -352,6 +352,25 @@ blocks! {
         hardness: 3.0, tool: Some(Axe), tier: 0,
         top: Tile::ChestTop, side: Tile::ChestSide, bottom: Tile::Planks, lod: Tile::ChestSide,
     },
+    // Blocks for authoring structures in creative (§5.6, `authoring`), never generated nor
+    // dropped. The world draws neither: creative shows them as small boxes, so a structure looks
+    // as it will while it's built, and survival not at all. A structure void is a cell a
+    // template leaves as the world has it, and is built over as air is. A loot marker is where
+    // a template's `loot` marker goes.
+    StructureVoid {
+        name: "structure_void", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::None, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
+        top: Tile::StructureVoid, side: Tile::StructureVoid, bottom: Tile::StructureVoid,
+        lod: Tile::StructureVoid,
+    },
+    LootMarker {
+        name: "loot_marker", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::None, replaceable: false, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
+        top: Tile::LootMarker, side: Tile::LootMarker, bottom: Tile::LootMarker,
+        lod: Tile::LootMarker,
+    },
 }
 
 impl BlockType {
@@ -441,7 +460,12 @@ impl BlockType {
     /// Whether it's something there, rather than air or water: what's looked at, broken and
     /// placed.
     pub fn is_tangible(&self) -> bool {
-        self.is_solid() || self.needs_ground()
+        self.is_solid() || self.needs_ground() || self.is_for_authoring()
+    }
+
+    /// Whether it's only for authoring structures: a structure void or a marker.
+    pub fn is_for_authoring(&self) -> bool {
+        matches!(self, BlockType::StructureVoid | BlockType::LootMarker)
     }
 
     // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
@@ -545,9 +569,11 @@ pub enum Tile {
     RipeWheat,
     ChestTop,
     ChestSide,
+    StructureVoid,
+    LootMarker,
 }
 
-pub const TILE_COUNT: usize = 43;
+pub const TILE_COUNT: usize = 45;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -593,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::ChestSide as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::LootMarker as usize + 1);
     }
 
     #[test]
@@ -687,13 +713,27 @@ mod tests {
     }
 
     #[test]
-    fn test_only_air_water_and_plants_other_than_crops_are_replaceable() {
+    fn test_authoring_blocks_are_reached_for_but_walked_and_seen_through_and_never_drawn() {
+        for block in [BlockType::StructureVoid, BlockType::LootMarker] {
+            assert!(block.is_for_authoring() && block.is_tangible());
+            assert!(!block.is_solid() && !block.needs_ground());
+            assert_eq!(0, block.light_opacity());
+            assert_eq!(RenderStyle::None, block.style());
+            assert!(block.drops(&mut rand::rng()).is_empty());
+        }
+        assert!(!BlockType::Air.is_for_authoring() && !BlockType::Stone.is_for_authoring());
+    }
+
+    #[test]
+    fn test_only_air_water_plants_other_than_crops_and_structure_void_are_replaceable() {
         for block in BlockType::ALL {
-            let expected = matches!(block, BlockType::Air | BlockType::Water)
-                || (block.is_plant() && !block.is_crop());
+            let expected = matches!(
+                block,
+                BlockType::Air | BlockType::Water | BlockType::StructureVoid
+            ) || (block.is_plant() && !block.is_crop());
             assert_eq!(expected, block.is_replaceable(), "{block:?}");
             assert_eq!(
-                !expected || block.is_plant(),
+                !expected || block.is_plant() || block.is_for_authoring(),
                 block.is_tangible(),
                 "{block:?}"
             );

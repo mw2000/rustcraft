@@ -17,6 +17,7 @@ use bevy_replicon_renet2::netcode::{
 };
 use bevy_replicon_renet2::renet2::RenetClient;
 use bevy_replicon_renet2::RepliconRenetPlugins;
+use rustcraft::authoring::Selection;
 use rustcraft::block::BlockType;
 use rustcraft::breaking::break_time;
 use rustcraft::chunks::chunk::ChunkCoordinate;
@@ -1062,7 +1063,7 @@ fn test_a_pose_too_far_or_into_the_ground_is_refused_and_the_client_put_back() {
 }
 
 #[test]
-fn test_tp_and_gamemode_move_and_change_a_joiner_on_its_own_screen() {
+fn test_tp_gamemode_and_pos1_move_change_and_select_for_a_joiner_on_its_own_screen() {
     let dir = temp_dir("tp");
     let (mut server, mut client) = server_and_client(&dir, None);
     update_until(&mut server, &mut client, |_, client| joined(client));
@@ -1090,6 +1091,15 @@ fn test_tp_and_gamemode_move_and_change_a_joiner_on_its_own_screen() {
         .write_message(RunCommand("/gamemode creative".into()));
     update_until(&mut server, &mut client, |_, client| {
         mode(client) == GameMode::Creative
+    });
+
+    // and the box it selects is drawn where the server has it
+    client
+        .world_mut()
+        .write_message(RunCommand("/pos1 1 2 3".into()));
+    update_until(&mut server, &mut client, |_, client| {
+        let selection = client.world().get::<Selection>(me).unwrap();
+        selection.corners[0] == Some(I64Vec3::new(1, 2, 3))
     });
     std::fs::remove_dir_all(&dir).unwrap();
 }

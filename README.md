@@ -49,6 +49,14 @@ Press T or Enter, or / to start with the slash typed, to open the command bar, w
 - `/op <player>` and `/deop <player>` let a player run the commands that change things, or stop them (see below).
 - `/help` lists the commands you may run.
 
+### Building structures
+
+In creative, operators can build structures and save them as templates, the way the game's own are made:
+
+- `/pos1` and `/pos2` mark two opposite corners of a box, at the block you're looking at, where you stand, or at `<x> <y> <z>`. The box is drawn in orange.
+- `/structure save <name> [floor]` saves the box as `structures/<name>.toml` in the world's directory. `floor` is the layer, counting from 0 at the bottom, that stands at ground level. Air in the box is cleared where the structure's built; a structure void (in the block picker) leaves what's there, and a loot marker marks where a chest of loot goes. Both show only in creative.
+- `/structure place <name> [0|90|180|270]` builds a structure, turned, on the block you're looking at and selects it, to try it out or rework it, and `/structure list` lists those there are.
+
 ## Worlds
 
 Worlds are saved every 30 seconds and when you quit, in a directory each under your data directory: `~/.local/share/rustcraft/worlds` on Linux, `~/Library/Application Support/rustcraft/worlds` on macOS and `%APPDATA%\rustcraft\worlds` on Windows. Run with `RC_WORLD=<name>` to play another world, which is made if it doesn't exist yet; the one played otherwise is called `world`.
@@ -61,7 +69,7 @@ Everyone plays by a name, shown over their head to the others: `RC_NAME=<name>`,
 
 Anything typed into the command bar without a / is said to everyone, by your name; saying a lot at once is slowed to a line a second.
 
-Commands that change the world or other players, `/tp`, `/gamemode`, `/op` and `/deop`, and winding the clock with `[` and `]`, are for operators: the host, always, and whoever they make one with `/op <name>`. The world keeps its operators by name in `world.toml` (`ops = ["alex"]`), and `/deop <name>` takes it away again, except from the host. Anyone may `/seed`, `/list`, `/msg` and chat.
+Commands that change the world or other players, `/tp`, `/gamemode`, `/op`, `/deop` and those for building structures, and winding the clock with `[` and `]`, are for operators: the host, always, and whoever they make one with `/op <name>`. The world keeps its operators by name in `world.toml` (`ops = ["alex"]`), and `/deop <name>` takes it away again, except from the host. Anyone may `/seed`, `/list`, `/msg` and chat.
 
 It's early days: connections aren't encrypted nor players' names checked, so anyone who can reach your world can join under any name, an operator's included, and take their place. Only open your world to friends you trust.
 

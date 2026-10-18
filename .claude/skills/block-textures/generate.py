@@ -58,6 +58,8 @@ TILES = [
     dict(name="RipeWheat", drawn=True),
     dict(name="ChestTop", drawn=True),
     dict(name="ChestSide", drawn=True),
+    dict(name="StructureVoid", drawn=True),  # for authoring structures: icons only, never drawn in the world
+    dict(name="LootMarker", drawn=True),
 ]
 
 

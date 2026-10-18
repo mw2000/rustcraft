@@ -1,8 +1,76 @@
 use bevy::math::{BVec3, I64Vec3, Vec3};
 
+use crate::chunks::chunk::ChunkCoordinate;
+use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
+use crate::world::World;
+
 // Overlaps thinner than this don't count, so a box resting on a face, give or take rounding,
 // isn't taken to be inside the block under it and fall through.
 const EPSILON: f32 = 1e-3;
+
+/// A block a ray stopped at, and the face it came in through, as the direction out of that
+/// face. The face is zero if the ray started inside the block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hit {
+    pub block: I64Vec3,
+    pub face: I64Vec3,
+}
+
+/// The first block that `stops` the ray from `origin` along `direction` within `reach` blocks,
+/// stepping through the blocks it crosses in order (a DDA).
+pub fn raycast(
+    origin: Vec3,
+    direction: Vec3,
+    reach: f32,
+    stops: impl Fn(I64Vec3) -> bool,
+) -> Option<Hit> {
+    let direction = direction.normalize_or_zero();
+    let mut block = origin.floor().as_i64vec3();
+    let mut face = I64Vec3::ZERO;
+    let step = I64Vec3::from_array(direction.to_array().map(|d| {
+        if d > 0.0 {
+            1
+        } else if d < 0.0 {
+            -1
+        } else {
+            0
+        }
+    }));
+    // how far along the ray it crosses one block, and the next block boundary, on each axis
+    let across = direction.abs().recip();
+    let mut next = Vec3::from_array(std::array::from_fn(|axis| {
+        let to_boundary = match step[axis] {
+            1 => block[axis] as f32 + 1.0 - origin[axis],
+            -1 => origin[axis] - block[axis] as f32,
+            _ => return f32::INFINITY,
+        };
+        to_boundary * across[axis]
+    }));
+    loop {
+        if stops(block) {
+            return Some(Hit { block, face });
+        }
+        let axis = next.min_position();
+        if next[axis] > reach {
+            return None;
+        }
+        block[axis] += step[axis];
+        face = I64Vec3::ZERO;
+        face[axis] = -step[axis];
+        next[axis] += across[axis];
+    }
+}
+
+/// The block in reach that a player with their feet at `feet` looks at, if there's one.
+pub fn looked_at(world: &World, feet: Vec3, look: PlayerLook) -> Option<Hit> {
+    let eye = feet + Vec3::Y * EYE_HEIGHT;
+    // blocks not generated yet can't be reached, nor can air and water, which are looked through
+    let stops = |block: I64Vec3| {
+        world.is_chunk_generated(ChunkCoordinate::containing(block))
+            && world.get_block_at(block).is_tangible()
+    };
+    raycast(eye, look.forward(), REACH, stops)
+}
 
 /// An axis-aligned box, as offsets from the position it's moved by.
 #[derive(Debug, Clone, Copy)]

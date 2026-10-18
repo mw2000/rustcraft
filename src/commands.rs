@@ -8,7 +8,7 @@ use crate::game_mode::GameMode;
 // Each way to type a command as `/help` lists it, what it does, and whether only operators may
 // run it: those that change the world or other players. The clock's keys are listed too, as
 // they wind everyone's.
-const USAGES: [(&str, &str, bool); 12] = [
+const USAGES: [(&str, &str, bool); 17] = [
     (
         "/tp <x> <y> <z>",
         "teleport there; ~ means where you are, ~10 ten blocks on from it",
@@ -24,6 +24,27 @@ const USAGES: [(&str, &str, bool); 12] = [
     ),
     ("/op <player>", "let a player run these commands too", true),
     ("/deop <player>", "stop a player running them", true),
+    (
+        "/pos1 [<x> <y> <z>]",
+        "select a box from this corner: the block there, looked at or stood in",
+        true,
+    ),
+    ("/pos2 [<x> <y> <z>]", "select a box to this corner", true),
+    (
+        "/structure save <name> [floor]",
+        "save the box as a structure, the layer from its bottom at ground level its floor",
+        true,
+    ),
+    (
+        "/structure place <name> [0|90|180|270]",
+        "build a structure on the block looked at, turned, and select it",
+        true,
+    ),
+    (
+        "/structure list",
+        "list the structures there are to place",
+        true,
+    ),
     (
         "[ and ]",
         "wind the clock back and forward, for everyone",
@@ -86,6 +107,24 @@ pub(crate) enum Command {
     },
     Op(String),
     Deop(String),
+    /// Moves corner `corner`, 0 or 1, of the selection to the block at `at`, or else to the one
+    /// looked at or stood in.
+    Corner {
+        corner: usize,
+        at: Option<Vec3>,
+    },
+    /// Saves the selection as the structure `name`, with the layer `floor` from its bottom at
+    /// ground level, or else the floor of what was placed in it, or its bottom.
+    SaveStructure {
+        name: String,
+        floor: Option<i64>,
+    },
+    /// Builds the structure `name` turned `rotation` quarter turns.
+    PlaceStructure {
+        name: String,
+        rotation: u8,
+    },
+    ListStructures,
 }
 
 /// Where `/tp` goes.
@@ -186,10 +225,77 @@ pub(crate) fn parse(line: &str, from: Vec3, op: bool) -> Result<Command, String>
                 }),
             }
         }
+        "pos1" | "pos2" => {
+            let corner = usize::from(name == "pos2");
+            match args[..] {
+                [] => Ok(Command::Corner { corner, at: None }),
+                [x, y, z] => {
+                    let at = Vec3::new(
+                        coordinate(x, from.x)?,
+                        coordinate(y, from.y)?,
+                        coordinate(z, from.z)?,
+                    );
+                    Ok(Command::Corner {
+                        corner,
+                        at: Some(at),
+                    })
+                }
+                _ => Err(format!("Usage: /{name} [<x> <y> <z>]")),
+            }
+        }
+        "structure" => match args[..] {
+            ["save", name] => Ok(Command::SaveStructure {
+                name: structure_name(name)?,
+                floor: None,
+            }),
+            ["save", name, floor] => {
+                let floor = floor.parse().ok().filter(|&floor: &i64| floor >= 0);
+                Ok(Command::SaveStructure {
+                    name: structure_name(name)?,
+                    floor: Some(floor.ok_or("The floor is a layer, from 0 at the bottom")?),
+                })
+            }
+            ["place", name] => Ok(Command::PlaceStructure {
+                name: structure_name(name)?,
+                rotation: 0,
+            }),
+            ["place", name, turn] => {
+                let rotation = ["0", "90", "180", "270"].iter().position(|&t| t == turn);
+                Ok(Command::PlaceStructure {
+                    name: structure_name(name)?,
+                    rotation: rotation.ok_or("A structure turns 0, 90, 180 or 270 degrees")? as u8,
+                })
+            }
+            ["list"] => Ok(Command::ListStructures),
+            _ => Err(
+                "Usage: /structure save <name> [floor], /structure place <name> [0|90|180|270] \
+                 or /structure list"
+                    .into(),
+            ),
+        },
         "help" => Ok(Command::Help),
         "" => Err("Type a command after the /, try /help".into()),
         other => Err(format!("Unknown command /{other}, try /help")),
     }
+}
+
+// The longest a structure's name can be, which is plenty.
+const MAX_STRUCTURE_NAME: usize = 32;
+
+// A structure's name as typed, which names its file, so it's kept to what a block's name can be.
+fn structure_name(name: &str) -> Result<String, String> {
+    let fits = name.len() <= MAX_STRUCTURE_NAME
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !fits {
+        return Err(format!(
+            "A structure's name is up to {MAX_STRUCTURE_NAME} lower-case letters, digits and \
+             underscores, starting with a letter, not {name}"
+        ));
+    }
+    Ok(name.into())
 }
 
 // A number, or ~ for `here`, or ~n for n on from it.
@@ -337,10 +443,53 @@ mod tests {
     }
 
     #[test]
+    fn test_structure_authoring_commands() {
+        let corner = |corner, at| Ok(Command::Corner { corner, at });
+        assert_eq!(corner(0, None), parse("/pos1", HERE));
+        assert_eq!(
+            corner(1, Some(Vec3::new(1.0, 66.0, -20.0))),
+            parse("/pos2 1 ~2 ~", HERE)
+        );
+        assert!(parse("/pos1 1 2", HERE).is_err());
+        assert!(parse("/pos3", HERE).is_err());
+        let save = |name: &str, floor| {
+            let name = name.into();
+            Ok(Command::SaveStructure { name, floor })
+        };
+        assert_eq!(
+            save("tower_2", None),
+            parse("/structure save tower_2", HERE)
+        );
+        assert_eq!(save("hut", Some(1)), parse("/structure save hut 1", HERE));
+        assert!(parse("/structure save hut -1", HERE).is_err());
+        let place = |rotation| {
+            let name = "hut".into();
+            Ok(Command::PlaceStructure { name, rotation })
+        };
+        assert_eq!(place(0), parse("/structure place hut", HERE));
+        assert_eq!(place(3), parse("/structure place hut 270", HERE));
+        assert!(parse("/structure place hut 45", HERE).is_err());
+        assert_eq!(Ok(Command::ListStructures), parse("/structure list", HERE));
+        assert!(parse("/structure", HERE).is_err());
+        // names name files, so they're kept to what's safe in a path
+        for name in ["../hut", "Hut", "_hut", "h.t", &"a".repeat(33)] {
+            let line = format!("/structure save {name}");
+            assert!(parse(&line, HERE).is_err(), "{name}");
+        }
+    }
+
+    #[test]
     fn test_only_operators_may_change_things_and_are_told_of_them() {
         let refused = super::parse("/gamemode", HERE, false).unwrap_err();
         assert!(refused.contains("permission to use /gamemode"), "{refused}");
-        for line in ["/tp 1 2 3", "/teleport 1 2 3", "/op sam", "/deop sam"] {
+        for line in [
+            "/tp 1 2 3",
+            "/teleport 1 2 3",
+            "/op sam",
+            "/deop sam",
+            "/pos1",
+            "/structure list",
+        ] {
             assert!(super::parse(line, HERE, false).is_err(), "{line}");
         }
         for line in ["/seed", "/list", "/msg sam hi", "/help"] {

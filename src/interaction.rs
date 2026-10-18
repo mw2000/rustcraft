@@ -4,9 +4,9 @@ use bevy::prelude::*;
 
 use crate::block::BlockType;
 use crate::breaking::{break_time, crack_stage};
-use crate::chunks::chunk::ChunkCoordinate;
 use crate::client::command_bar::command_bar_closed;
 use crate::client::player::LocalPlayer;
+use crate::collision::{looked_at, Hit};
 use crate::containers::Container;
 use crate::crafting::Station;
 use crate::farming::tilled;
@@ -18,7 +18,7 @@ use crate::inventory::Inventory;
 use crate::items::{Item, ToolKind};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
-use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
+use crate::player::PlayerLook;
 use crate::protocol::{PickBlock, RequestEdit, StartBreaking, UseBlock};
 use crate::world::World;
 
@@ -79,14 +79,6 @@ impl Plugin for InteractionPlugin {
 /// The block looked at, if there's one in reach.
 #[derive(Resource, Default, Debug)]
 pub struct Target(pub Option<Hit>);
-
-/// A block a ray stopped at, and the face it came in through, as the direction out of that
-/// face. The face is zero if the ray started inside the block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Hit {
-    pub block: I64Vec3,
-    pub face: I64Vec3,
-}
 
 /// The block the player's holding the mouse on to break in survival, if any, and how it's
 /// getting on.
@@ -186,64 +178,13 @@ impl EditRequests<'_> {
     }
 }
 
-/// The first block that `stops` the ray from `origin` along `direction` within `reach` blocks,
-/// stepping through the blocks it crosses in order (a DDA).
-pub fn raycast(
-    origin: Vec3,
-    direction: Vec3,
-    reach: f32,
-    stops: impl Fn(I64Vec3) -> bool,
-) -> Option<Hit> {
-    let direction = direction.normalize_or_zero();
-    let mut block = origin.floor().as_i64vec3();
-    let mut face = I64Vec3::ZERO;
-    let step = I64Vec3::from_array(direction.to_array().map(|d| {
-        if d > 0.0 {
-            1
-        } else if d < 0.0 {
-            -1
-        } else {
-            0
-        }
-    }));
-    // how far along the ray it crosses one block, and the next block boundary, on each axis
-    let across = direction.abs().recip();
-    let mut next = Vec3::from_array(std::array::from_fn(|axis| {
-        let to_boundary = match step[axis] {
-            1 => block[axis] as f32 + 1.0 - origin[axis],
-            -1 => origin[axis] - block[axis] as f32,
-            _ => return f32::INFINITY,
-        };
-        to_boundary * across[axis]
-    }));
-    loop {
-        if stops(block) {
-            return Some(Hit { block, face });
-        }
-        let axis = next.min_position();
-        if next[axis] > reach {
-            return None;
-        }
-        block[axis] += step[axis];
-        face = I64Vec3::ZERO;
-        face[axis] = -step[axis];
-        next[axis] += across[axis];
-    }
-}
-
 fn target_block(
     world: Res<World>,
     mut target: ResMut<Target>,
     player: Query<(&Transform, &PlayerLook), With<LocalPlayer>>,
 ) {
     let (feet, look) = player.single().expect("player does not exist");
-    let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
-    // blocks not generated yet can't be reached, nor can air and water, which are looked through
-    let stops = |block: I64Vec3| {
-        world.is_chunk_generated(ChunkCoordinate::containing(block))
-            && world.get_block_at(block).is_tangible()
-    };
-    target.0 = raycast(eye, look.forward(), REACH, stops);
+    target.0 = looked_at(&world, feet.translation, *look);
 }
 
 fn outline_target(target: Res<Target>, mut gizmos: Gizmos<OutlineGizmos>) {
@@ -393,9 +334,10 @@ fn use_station(
 mod tests {
     use bevy::math::{I64Vec3, Vec3};
 
-    use super::{raycast, BreakStep, Breaking, Hit, BREAK_REST};
+    use super::{BreakStep, Breaking, Hit, BREAK_REST};
     use crate::breaking::CRACK_STAGES;
     use crate::collision::overlaps;
+    use crate::collision::raycast;
     use crate::player::BODY;
     use crate::player::REACH;
 

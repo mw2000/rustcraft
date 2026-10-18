@@ -366,11 +366,40 @@ def wheat(stage):
     return draw
 
 
+def frame(colour, dashed):
+    """A square outline round the tile's edge on transparency, dashed or not, for the blocks only seen as icons."""
+    out = clear()
+    for i in range(16):
+        if not dashed or i % 4 in (0, 3):  # dashes of two, a corner of one each end
+            for y, x in [(0, i), (15, i), (i, 0), (i, 15)]:
+                paint(out, y, x, colour)
+    return out
+
+
+def structure_void(rng):
+    """A dashed outline round nothing, as the cell a structure leaves as the world has it."""
+    out = frame((120, 210, 255), dashed=True)
+    for y, x, c in sprite(["ll", "ll"], dict(l=(120, 210, 255))):
+        paint(out, 7 + y, 7 + x, c)
+    return out
+
+
+def loot_marker(rng):
+    """A gold outline round a small chest, where a structure's loot goes."""
+    out = frame((240, 200, 60), dashed=False)
+    chest = sprite(["bbbbbbbb", "wwwwwwww", "kkkggkkk", "wwwggwww", "wwwwwwww", "dddddddd"],
+                   dict(b=(150, 100, 48), w=(186, 132, 66), k=(96, 62, 30), g=(240, 200, 60), d=(110, 72, 34)))
+    for y, x, c in chest:
+        paint(out, 5 + y, 4 + x, c)
+    return out
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
             TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
             BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
-            RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side)
+            RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side, StructureVoid=structure_void,
+            LootMarker=loot_marker)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

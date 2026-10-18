@@ -17,6 +17,7 @@ use rustcraft::chunks::{
     material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
+use rustcraft::client::authoring::AuthoringPlugin;
 use rustcraft::client::clock::{follow_clock, wind_clock};
 use rustcraft::client::command_bar::{command_bar_closed, CommandPlugin};
 use rustcraft::client::cracks::DrawCracksPlugin;
@@ -242,6 +243,7 @@ fn main() {
         DrawPlayersPlugin,
         DrawCracksPlugin,
         MapPlugin,
+        AuthoringPlugin,
     ))
     // the client, and the server unless joining one elsewhere: in singleplayer they're in one
     // App with no transport running, so replicon passes their messages straight across (§4.4)

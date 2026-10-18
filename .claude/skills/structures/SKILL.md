@@ -1,6 +1,6 @@
 ---
 name: structures
-description: Author or change rustcraft's structure templates (watchtowers, ruins, temples) in assets/structures/, by script until in-game authoring lands (M2.2), and tune where they're placed. Use when adding a structure type, changing one's blocks or placement, or checking how often and where they appear.
+description: Author or change rustcraft's structure templates (watchtowers, ruins, temples) in assets/structures/, in the game with /structure save or by script, and tune where they're placed. Use when adding a structure type, changing one's blocks or placement, or checking how often and where they appear.
 ---
 
 # Structures
@@ -50,9 +50,35 @@ ccccccc
 
 ## Authoring
 
-Templates are written by scripts here until `/structure save` exists, so the shape stays
-readable and a change is a small diff. `watchtower.py` writes `assets/structures/watchtower.toml`
-from a fixed seed: edit it and rerun.
+### In the game
+
+Most structures are best built in the game, in creative, as an operator (the host always is):
+
+1. Build it, or start from one there is: `/structure place <name> [0|90|180|270]` builds a
+   template (the world's own of that name, or else the built-in one) on the block you're
+   looking at and selects it. `/structure list` lists them.
+2. Mark what's not the structure's own: a **structure void** (in the picker, E) is a cell the
+   template leaves as the world has it (`.`), and a **loot marker** is a `loot` marker. Both
+   show only in creative, as small blue and gold boxes. Air in the box is saved as `-`, which
+   clears what's there.
+3. Select the box with `/pos1` and `/pos2` at two opposite corners: the block outlined, where
+   you stand, or `x y z`. Placing selects what it placed already. At most 64 by 31 by 64.
+4. `/structure save <name> [floor]`, the floor being the layer from the box's bottom that stands
+   at ground level (otherwise that of what you placed, or 0). It's written to
+   `structures/<name>.toml` in the world's directory (the message says where), with the
+   placement of the structure of that name if there is one, or else defaults to edit, and the
+   foundation the commonest block of its bottom layer. Saving under a built-in name reworks it:
+   `/structure place` takes the world's copy from then on.
+5. Copy the file into `assets/structures/`, add it to `FILES`, and edit `[placement]`.
+
+Placing and saving round-trip: the watchtower placed and saved again is the same file's
+structure.
+
+### By script
+
+A shape that's easier to describe than to build, or one drawn from a seed, can be written by a
+script here, so a change is a small diff. `watchtower.py` writes
+`assets/structures/watchtower.toml` from a fixed seed: edit it and rerun.
 
 ```
 python3 .claude/skills/structures/watchtower.py
@@ -60,8 +86,8 @@ python3 .claude/skills/structures/watchtower.py
 
 ## Checking
 
-- `cargo test --release --lib structures` checks loading, rotation, placement and terrain fit
-  (and LODs, in `generator/tests.rs`).
+- `cargo test --release --lib structures` checks loading, writing, rotation, placement, terrain
+  fit (and LODs, in `generator/tests.rs`) and the authoring commands.
 - Changing a template or placement changes generation, so the golden checksum
   (`src/chunks/generate/checksum.rs`) changes when the structure nearest seed 3's spawn does:
   update it deliberately (CLAUDE.md).

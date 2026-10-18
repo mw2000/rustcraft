@@ -4,6 +4,7 @@ use bevy_replicon::prelude::*;
 
 use super::chat::{tidy, ChatAllowances, TOO_QUICK};
 use super::players::PoseCheck;
+use super::structures::{list, Authoring};
 use crate::chunks::generate::WATER_LEVEL;
 use crate::commands::{help, parse, Command, Destination};
 use crate::game_mode::GameMode;
@@ -64,7 +65,7 @@ type Players<'w, 's> = Query<
 /// What running commands reads and changes.
 #[derive(SystemParam)]
 pub(super) struct Running<'w, 's> {
-    world: Res<'w, World>,
+    world: ResMut<'w, World>,
     operators: ResMut<'w, Operators>,
     // none in a test that builds its own world
     save: Option<ResMut<'w, WorldSave>>,
@@ -73,6 +74,7 @@ pub(super) struct Running<'w, 's> {
     players: Players<'w, 's>,
     output: MessageWriter<'w, ToClients<CommandOutput>>,
     teleports: MessageWriter<'w, ToClients<Teleport>>,
+    authoring: Authoring<'w, 's>,
 }
 
 /// A player here, as a command finds them.
@@ -118,6 +120,8 @@ impl Running<'_, '_> {
         let op = self.operators.allow(client, &name);
         // the sender's own player, for a command that names no other
         let own = || sender.ok_or_else(|| "Name a player, as the console has none".to_owned());
+        let author =
+            || player.ok_or("Structures are built in the game, as the console can't select");
         match parse(line, at, op)? {
             Command::Teleport { who, to } => {
                 let target = match who {
@@ -214,6 +218,23 @@ impl Running<'_, '_> {
                 }
                 Ok(format!("{who} is no longer an operator"))
             }
+            Command::Corner { corner, at: typed } => {
+                Ok(self
+                    .authoring
+                    .corner(&self.world, author()?, at, corner, typed))
+            }
+            Command::SaveStructure { name, floor } => {
+                let dir = self.save.as_ref().map(|save| save.dir());
+                self.authoring
+                    .save(&self.world, dir, author()?, &name, floor)
+            }
+            Command::PlaceStructure { name, rotation } => {
+                let dir = self.save.as_ref().map(|save| save.dir());
+                let world = &mut self.world;
+                self.authoring
+                    .place(world, dir, author()?, at, &name, rotation)
+            }
+            Command::ListStructures => Ok(list(self.save.as_ref().map(|save| save.dir()))),
         }
     }
 

@@ -15,6 +15,7 @@ use bevy::{
 use bevy_replicon::prelude::ClientId;
 
 use crate::{
+    authoring::Selection,
     collision::Aabb,
     game_mode::GameMode,
     inventory::{Hotbar, Inventory},
@@ -24,7 +25,9 @@ use crate::{
 
 /// The player's body, at its feet, and how it's moving.
 #[derive(Component, Default)]
-#[require(GameMode, Hotbar, Inventory, PlayerLook, SpawnBed, Transform, Vitals)]
+#[require(
+    GameMode, Hotbar, Inventory, PlayerLook, Selection, SpawnBed, Transform, Vitals
+)]
 pub struct Player {
     pub movement: Movement,
     velocity: Vec3,

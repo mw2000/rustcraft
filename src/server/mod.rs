@@ -16,6 +16,7 @@ mod farming;
 mod host;
 mod inventory;
 mod players;
+mod structures;
 mod survival;
 mod sync;
 
@@ -153,6 +154,7 @@ impl Plugin for ServerPlugin {
                 (
                     players::send_inventories,
                     players::send_game_modes,
+                    structures::send_selections,
                     players::hold_items,
                     containers::send_containers,
                 )
