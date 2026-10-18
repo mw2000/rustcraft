@@ -25,8 +25,8 @@ const COLUMNS: u16 = 2;
 // Over a recipe there aren't the ingredients for.
 const DIMMED: Color = Color::srgba(0.0, 0.0, 0.0, 0.65);
 
-/// The station the inventory screen is open at: by hand from E, or a crafting table
-/// right-clicked. It's back to hand once the screen closes.
+/// The station the inventory screen is open at: by hand from E, or a crafting table or a
+/// furnace right-clicked. It's back to hand once the screen closes.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CraftingStation(pub Station);
 
@@ -41,15 +41,22 @@ pub(super) struct Dimmed;
 #[derive(Component)]
 pub(super) struct Heading;
 
+// The whole list, which a furnace's panel takes the place of.
+#[derive(Component)]
+pub(super) struct RecipeList;
+
 /// The crafting list, headed by where it's made, as a column for the screen to put beside its
 /// slots.
 pub(super) fn spawn_recipes(screen: &mut ChildSpawnerCommands, icons: &ItemIcons) {
     screen
-        .spawn(Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(8.0),
-            ..default()
-        })
+        .spawn((
+            RecipeList,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                ..default()
+            },
+        ))
         .with_children(|list| {
             list.spawn((Heading, Text::new("Crafting"), font(18.0), TEXT_SHADOW));
             list.spawn(Node {
@@ -125,18 +132,29 @@ fn craft(
 }
 
 /// Shows the recipes made at the screen's station, dimming those there aren't the ingredients
-/// for. Run every frame the screen's open, changing only what's changed, as there are a handful.
+/// for, or none at a furnace, which smelts rather than crafts and shows its own panel instead.
+/// Run every frame the screen's open, changing only what's changed, as there are a handful.
 #[allow(clippy::type_complexity)]
 pub(super) fn show_recipes(
     station: Res<CraftingStation>,
     player: Query<&Inventory, With<LocalPlayer>>,
-    mut cards: Query<(&RecipeCard, &mut Node, &Children)>,
+    mut list: Query<&mut Node, With<RecipeList>>,
+    mut cards: Query<(&RecipeCard, &mut Node, &Children), Without<RecipeList>>,
     mut dims: Query<&mut Visibility, With<Dimmed>>,
     mut heading: Query<&mut Text, With<Heading>>,
 ) {
     let Ok(inventory) = player.single() else {
         return;
     };
+    let display = match station.0 {
+        Station::Furnace => Display::None,
+        _ => Display::Flex,
+    };
+    for mut node in &mut list {
+        if node.display != display {
+            node.display = display;
+        }
+    }
     for (card, mut node, children) in &mut cards {
         let shown = station.0.makes(card.0.station());
         let display = if shown { Display::Flex } else { Display::None };
@@ -154,8 +172,8 @@ pub(super) fn show_recipes(
         }
     }
     let title = match station.0 {
-        Station::Hand => "Crafting",
         Station::CraftingTable => "Crafting table",
+        _ => "Crafting",
     };
     for mut text in &mut heading {
         if text.0 != title {

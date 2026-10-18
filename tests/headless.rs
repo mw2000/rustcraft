@@ -136,7 +136,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
     app.world_mut().write_message(AppExit::Success);
     app.update();
     drop(app);
-    let (_, saved, saved_edits) = WorldSave::open(dir.clone(), None).unwrap();
+    let (_, saved, saved_edits, _) = WorldSave::open(dir.clone(), None).unwrap();
     let coord = ChunkCoordinate::containing(below);
     let local = ChunkCoordinate::local_block(below);
     let saved_edits: Vec<_> = saved_edits.in_chunk(coord).collect();

@@ -4,6 +4,8 @@
 //! `CloseInventory`, `DropItem`, `PickBlock` and `Craft`, and placing a block in survival takes
 //! it from the slot `RequestEdit` names. In one App the change is made in the frame it's asked
 //! for, to the same `Inventory`; from M0.6 the server replicates each player's to its owner.
+//! Containers too (§5.2): a player opens one with `UseBlock`, clicks on its slots are
+//! `InventoryClick`s naming it, and it's sent to them as `ContainerChanged` while it's open.
 //!
 //! Players are replicated to everyone but their owner, who moves its own (M0.6d): their name,
 //! game mode and what they hold, with where they are and look relayed as `PlayerMoved`.
@@ -19,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
+use crate::containers::Container;
 use crate::crafting::Recipe;
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
@@ -34,7 +37,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -76,6 +79,7 @@ impl Plugin for ProtocolPlugin {
             .add_client_message::<Craft>(Channel::Ordered)
             // before the edit that finishes it
             .add_client_message::<StartBreaking>(Channel::Ordered)
+            .add_server_message::<ContainerChanged>(Channel::Ordered)
             // to every client, which draw them where the server has them
             .replicate::<DroppedItem>()
             .replicate_filtered_as::<Transform, Position, With<DroppedItem>>()
@@ -149,9 +153,12 @@ pub struct TimeSync {
     pub rate: f32,
 }
 
-/// A click on inventory slot `slot` in the inventory screen, see `Inventory::click`.
+/// A click in the inventory screen on slot `slot` of the container at `container`, which the
+/// player has open, or of their inventory if it's none, see `Container::click` and
+/// `Inventory::click`.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InventoryClick {
+    pub container: Option<I64Vec3>,
     pub slot: u8,
     pub click: Click,
 }
@@ -334,8 +341,8 @@ impl From<Position> for Transform {
     }
 }
 
-/// A player using the block at `block` by right-clicking it, as opening a crafting table does,
-/// which stays open for them until they close the inventory screen.
+/// A player using the block at `block` by right-clicking it, as opening a crafting table or a
+/// furnace does, which stays open for them until they close the inventory screen.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UseBlock {
     pub block: I64Vec3,
@@ -346,6 +353,14 @@ pub struct UseBlock {
 pub struct Craft {
     pub recipe: Recipe,
     pub all: bool,
+}
+
+/// What the container at `at`, which the player has open, holds now, or none once it's gone or
+/// out of their reach, which closes it.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ContainerChanged {
+    pub at: I64Vec3,
+    pub container: Option<Container>,
 }
 
 /// A player in survival starting to break the block at `block`, which the server times, so it

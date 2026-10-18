@@ -69,8 +69,9 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
-| Items | Every placeable block as an item, sticks, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
-| Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
+| Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
+| Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
+| Containers | Blocks holding items of their own in the world, so far the furnace, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
 
@@ -81,7 +82,7 @@ cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, fu
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
-`src/client/`). Worlds are saved as their edits and the player (`src/save/`).
+`src/client/`). Worlds are saved as their edits, containers and the player (`src/save/`).
 
 Not there yet: health, structures, mobs, networking.
 
@@ -129,7 +130,8 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
   render style, and its tiles per face and for LODs. Properties are added to the row as the
   features that use them land.
   Since M1.1 a row says what the block `drops` when broken in survival: `Nothing`, `Itself`
-  (its own block item) or another block's item (§5.2). Since M1.2 it has a `hardness` (the
+  (its own block item), another block's item (§5.2) or, since M1.6, an item that isn't a block,
+  as coal ore leaves coal. Since M1.2 it has a `hardness` (the
   seconds it takes to break by hand), the `tool` that breaks it quicker, if any, and the `tier`
   of that tool it needs to drop anything (§5.1, §5.3).
 - Render styles (`RenderStyle`): `None` (air), `Cube` (faces, culled against opaque neighbours
@@ -194,7 +196,7 @@ The world's state beyond the seed (INV-1).
   `RC_WORLD` (default `world`). A missing world is made with `RC_SEED` or a random seed, and its
   `world.toml` written at once; an existing one keeps its seed, and a disagreeing `RC_SEED` is
   ignored with a log line.
-  - `world.toml` holds the format version (`FORMAT_VERSION`, now 2), the game version that wrote
+  - `world.toml` holds the format version (`FORMAT_VERSION`, now 3), the game version that wrote
     it, the seed, the time of day, and a `[player]` table with the one local player's position,
     look (yaw and pitch), movement, game mode, hotbar (the selected slot) and inventory (each
     stack's slot, item name and count, and the stack on the cursor if the inventory screen was
@@ -207,6 +209,15 @@ The world's state beyond the seed (INV-1).
     A palette name the game doesn't know, from a newer version, fails the load rather than
     turning into air. Nothing generated is written (INV-1), so a world never edited is just its
     `world.toml`.
+  - **Since format 3 (M1.6)** a region file starts with a 0 byte and its format, 3, and each
+    chunk has its containers after its edits: each as its block index and the container, its
+    block's name, its slots (by item name, with wear) and its fire's three floats (§5.2). A
+    format 2 file starts with its palette's length instead, never 0 as every file has an edit
+    to name, so both are read, and a format 2 region's written as format 3 the next time it
+    changes; nothing's rewritten until then. A newer region format fails the load. Containers
+    changing mark their chunk for saving as edits do, so a furnace burning has its region
+    written every 30 s while it does. `world.toml`'s format is 3 so an older game refuses the
+    world rather than misreading its region files; it reads format 2's `world.toml` as it was.
   - `Edits` remembers which chunks changed since the last save. Every 30 s, and only if
     something changed, the main thread copies `world.toml`'s contents and the edits of the
     regions with new ones, which is quick, and the IO pool writes them, one
@@ -265,7 +276,7 @@ The world's state beyond the seed (INV-1).
   `PlayerPose` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
   time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
-  `CommandOutput`, `ChatLine`. Players are replicated entities, and so are dropped items; a
+  `CommandOutput`, `ChatLine`, and since M1.6 `ContainerChanged` (§5.2). Players are replicated entities, and so are dropped items; a
   player's `Inventory` goes to their owner alone (as `InventoryChanged` since M0.6a); poses go out as unreliable messages
   to everyone but their owner, so the server never overwrites a player's own movement.
 - **Edits** become request, validate, broadcast: `use_target` sends `RequestEdit`; the server
@@ -758,6 +769,43 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     their material lit from the upper left and outlined. Dropped, they're an upright square of
     their sprite that spins, rather than a cube.
 
+- **Built (M1.6): containers** (`src/containers.rs`), made to be reused by chests (M2.3).
+  - **The model:** a `Container` is the block it's in (which says what kind it is: so far only
+    the furnace, `Container::new`), its slots, and a `Fire`, which only a furnace lights. The
+    server keeps every one in `Containers`, a resource beside the edit layer kept the way it
+    keeps edits, by chunk and block in the chunk, and remembering which chunks' containers
+    changed for saving. Clients never have it (INV-4). A container's made empty the first time
+    its block's used, so a furnace placed and never opened has none, and goes when its block
+    changes: breaking a furnace, in either mode, drops what was in it where it stood, as items
+    are never lost with their container.
+  - **Opening one:** right-clicking a furnace in survival sends `UseBlock` as a crafting
+    table's does, and the client opens the inventory screen at it (`Station::Furnace`); the
+    server, if it's in reach, makes it if need be and puts `OpenContainer` on the player until
+    `CloseInventory`. Several players can have one open at once.
+  - **Clicks:** `InventoryClick` names the container whose slot it's on, or none for the
+    player's own, so a click meant for one the server's since closed changes nothing.
+    `Container::click` works as an inventory's slot (the same `inventory::click_stack`), but a
+    furnace's fuel slot takes only fuel and its output is only taken, all of it at once onto
+    the cursor if there's room, and shift-click moves a stack into the inventory. Shift-click
+    on the player's own slot with a furnace open moves what smelts into its input and fuel onto
+    its fire, and anything else between the hotbar and the main inventory as before.
+  - **Sending:** `send_containers` sends each player the container they have open as
+    `ContainerChanged { at, container }` whenever its slots differ from what they were last
+    sent, and while only its fire changes at most every 100 ms, which is enough for the flame
+    and arrow to move smoothly at under a kilobyte a second. Once it's gone or out of their
+    reach it sends `container: None` and closes it, which closes their screen. The host is sent
+    it too, through replicon locally, so the client side has one path.
+  - **The screen** (`src/inventory/furnace.rs`): at a furnace the crafting list gives way to
+    its panel, the input over the flame over the fuel and an arrow to the output, drawn from
+    `ContainerView`, what the server last sent. The flame shows the fuel left against how long
+    it burns in all, and the arrow how far the item's got, each by showing that much of a lit
+    tile over an unlit one (`assets/textures/furnace.png`, drawn by the block-textures skill's
+    `ui.py`). Slots are the inventory's buttons and stack views (`StackView::Container`).
+  - **Not done:** a furnace looks the same lit or not. A lit tile is cheap, but swapping the
+    block for a lit furnace through the edit layer would rebuild meshes and send `BlockChanged`
+    each time it lights and goes out, and blocks have no facing to show it on the front; it
+    waits for block state beyond `BlockType` (and block light from a lit furnace with it).
+
 ### 5.3 Crafting and progression
 
 - Recipes are data (INV-6), and a recipe is a list of ingredients and an output, made at a
@@ -801,6 +849,29 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     at the player, and shift-crafting stops there, so a full inventory never becomes a heap.
     Stacks are sent with their wear always, as postcard can't skip a field, and saved without
     it when there's none. `PROTOCOL_VERSION` is 4.
+- **Built (M1.6): smelting.** The `recipes!` table's `Station::Furnace` rows are smelting,
+  one item into one: copper ore into a copper ingot, iron ore into an iron ingot, and
+  cobblestone into stone. `Station::makes` never crafts them, so they're neither listed nor
+  made by `Craft`; a furnace's `Container::run` makes them over time.
+  - **Rules:** an item takes 10 s (`SMELT_TIME`). Fuel is `FUELS`, in items smelted: coal 8,
+    logs and planks 1½, sticks ½. A furnace with nothing burning takes one fuel only if its
+    input smelts and its output has room for what it makes; once lit, a fuel burns to the end
+    whether there's anything to smelt or not, as in Minecraft. An item part smelted when the
+    fire goes out, the input's taken, or the output fills, starts again. `run` steps from event
+    to event (the time's up, the fuel's burnt, an item's done), so a long step ends as frame
+    by frame does (a test runs 1000 s both ways).
+  - **Where they run:** a furnace reads and writes only its own slots, so the server runs every
+    one that's burning each frame (`run_furnaces`, and `Containers` keeps the set that might
+    be), whether anyone's near and its chunk's held or not. One left behind smelts on as if
+    its player had stayed and needs no catching up when they're back; time doesn't pass for it
+    while the world's closed, as for anything else. When regions load lazily, with
+    containers coming and going with them, this needs to become catch-up from elapsed world
+    time as a region loads.
+  - **Coal:** the `items!` table has `Coal`, which coal ore drops (`Drops::Item`), and torches
+    are made from a coal and a stick, so coal ore no longer drops itself and torches no longer
+    take the ore. Coal ore still needs a wooden pickaxe to drop it. Charcoal and glass wait for logs and
+    sand to have something to smelt into.
+  - `PROTOCOL_VERSION` is 6.
 - **Progression needs travel (P3):** higher tiers need ores found only in certain climates (under
   glaciers, deep under deserts, in mountain cores), so moving up means going somewhere.
 
@@ -1027,7 +1098,7 @@ Done when: **you can start with nothing and make iron tools.**
 - ☑ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).
 - ☑ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,
   copper and iron tools (§5.3).
-- ☐ **M1.6 Furnace.** Smelting ores, with containers (§5.2).
+- ☑ **M1.6 Furnace.** Smelting ores, with containers (§5.2).
 - ☑ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
 - ☐ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
   (§5.5).

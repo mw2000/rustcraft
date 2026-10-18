@@ -27,14 +27,15 @@ use rustcraft::client::join::{connect, GenerationChecksum};
 use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
+use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
 use rustcraft::player::name::PlayerName;
 use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
-    BlockChanged, ChunkEdits, CommandOutput, EditRejected, PlayerMoved, PlayerPose, ProtocolPlugin,
-    RequestEdit, RunCommand, StartBreaking, Teleport,
+    BlockChanged, ChunkEdits, CommandOutput, ContainerChanged, EditRejected, PlayerMoved,
+    PlayerPose, ProtocolPlugin, RequestEdit, RunCommand, StartBreaking, Teleport, UseBlock,
 };
 use rustcraft::save::SavePlugin;
 use rustcraft::server::drops::DroppedItem;
@@ -402,6 +403,51 @@ fn test_a_client_joins_plays_and_leaves() {
         .disconnect();
     update_until(&mut server, &mut client, |server, _| {
         owners(server) == [ClientId::Server]
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_two_players_at_one_furnace_both_see_it_smelt() {
+    let dir = temp_dir("furnace");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    // beside them both, at the spawn
+    let spawn = server.world().resource::<World>().spawn();
+    let furnace = spawn.floor().as_i64vec3() + I64Vec3::X * 2;
+    update_until(&mut server, &mut client, |server, _| {
+        let world = server.world().resource::<World>();
+        world.is_chunk_generated(ChunkCoordinate::containing(furnace))
+    });
+    server
+        .world_mut()
+        .resource_mut::<World>()
+        .edit(furnace, BlockType::Furnace);
+    server
+        .world_mut()
+        .write_message(UseBlock { block: furnace });
+    client
+        .world_mut()
+        .write_message(UseBlock { block: furnace });
+    let mut hosts = MessageCursor::<ContainerChanged>::default();
+    let mut guests = MessageCursor::<ContainerChanged>::default();
+    update_until_sent(&mut server, &mut client, &mut guests, |changed| {
+        changed.at == furnace && changed.container.is_some()
+    });
+
+    // given ore and coal by someone, which both see smelt into an ingot
+    let mut containers = server.world_mut().resource_mut::<Containers>();
+    let open = containers.get_mut(furnace).unwrap();
+    open.slots[INPUT] = Some(ItemStack::new(Item::Block(BlockType::CopperOre), 2));
+    open.slots[FUEL] = Some(ItemStack::new(Item::Coal, 1));
+    let ingot = Some(ItemStack::new(Item::CopperIngot, 1));
+    let (mut host_saw, mut guest_saw) = (false, false);
+    update_until(&mut server, &mut client, |server, client| {
+        let smelted =
+            |changed: ContainerChanged| changed.container.is_some_and(|c| c.slots[OUTPUT] == ingot);
+        host_saw |= received(server, &mut hosts).into_iter().any(smelted);
+        guest_saw |= received(client, &mut guests).into_iter().any(smelted);
+        host_saw && guest_saw
     });
     std::fs::remove_dir_all(&dir).unwrap();
 }

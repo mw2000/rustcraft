@@ -3,6 +3,7 @@
 
 use bevy::prelude::*;
 
+use super::furnace::{container_stack, ContainerView};
 use super::Inventory;
 use crate::chunks::generate::biome::{grass_tint, Climate};
 use crate::chunks::material::block_atlas;
@@ -107,6 +108,8 @@ pub enum StackView {
     Slot(usize),
     /// The one on the cursor in the inventory screen.
     Cursor,
+    /// The one in a slot of the container the inventory screen's open at.
+    Container(usize),
 }
 
 /// The count in the corner of a stack's icon.
@@ -195,18 +198,15 @@ fn count_text(count: String) -> impl Bundle {
     )
 }
 
-/// Draws the local player's stacks in every view of them, when they change. Counts are shown
-/// in survival, for stacks of more than one, as creative never runs out, and so is wear.
+/// Draws the local player's stacks, and the open container's, in every view of them, when they
+/// change. Counts are shown in survival, for stacks of more than one, as creative never runs
+/// out, and so is wear.
 #[allow(clippy::type_complexity)]
 pub(crate) fn draw_stacks(
     icons: Res<ItemIcons>,
-    player: Query<
-        (&Inventory, &GameMode),
-        (
-            With<LocalPlayer>,
-            Or<(Changed<Inventory>, Changed<GameMode>)>,
-        ),
-    >,
+    player: Query<(Ref<Inventory>, Ref<GameMode>), With<LocalPlayer>>,
+    // not there without the inventory screen
+    container: Option<Res<ContainerView>>,
     mut views: Query<(&StackView, &mut ImageNode, &mut Visibility, &Children)>,
     mut counts: Query<&mut Text, With<StackCount>>,
     mut bars: Query<(&mut Node, &Children), With<WearBar>>,
@@ -215,11 +215,18 @@ pub(crate) fn draw_stacks(
     let Ok((inventory, mode)) = player.single() else {
         return;
     };
+    let container_changed = container.as_ref().is_some_and(|view| view.is_changed());
+    if !inventory.is_changed() && !mode.is_changed() && !container_changed {
+        return;
+    }
     let counted = !mode.has_every_block();
     for (shows, mut image, mut visibility, children) in &mut views {
         let stack = match *shows {
             StackView::Slot(slot) => inventory.slots[slot],
             StackView::Cursor => inventory.cursor,
+            StackView::Container(slot) => container
+                .as_ref()
+                .and_then(|view| container_stack(view, slot)),
         };
         *visibility = match stack {
             Some(stack) => {

@@ -6,6 +6,7 @@ pub mod clock;
 pub mod clouds;
 pub mod collision;
 pub mod commands;
+pub mod containers;
 pub mod crafting;
 pub mod curvature;
 pub mod debug;

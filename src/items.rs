@@ -108,10 +108,11 @@ macro_rules! items {
 
 use ToolKind::{Axe, Pickaxe, Shovel};
 
-// Ingots come from smelting (M1.6), and the tools are made from planks, cobblestone and ingots
-// at a crafting table (`crafting`). Swords wait for combat (M3.3).
+// Coal comes from coal ore, ingots from smelting ore in a furnace, and the tools are made from
+// planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
 items! {
     Stick { name: "stick" },
+    Coal { name: "coal" },
     CopperIngot { name: "copper_ingot" },
     IronIngot { name: "iron_ingot" },
     WoodenPickaxe { name: "wooden_pickaxe", tool(Pickaxe, 1) },
@@ -360,6 +361,7 @@ mod tests {
         assert_eq!(Some(BlockType::Dirt), drop(BlockType::Dirt));
         assert_eq!(Some(BlockType::Cobblestone), drop(BlockType::Stone));
         assert_eq!(Some(BlockType::IronOre), drop(BlockType::IronOre));
+        assert_eq!(Some(Item::Coal), BlockType::CoalOre.drops());
         assert_eq!(Some(BlockType::Log), drop(BlockType::Log));
         for nothing in [
             BlockType::Air,

@@ -11,8 +11,9 @@ use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
-/// Format 2 moved the hotbar's blocks into the player's inventory (M1.1).
-pub const FORMAT_VERSION: u32 = 2;
+/// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), and format 3 added
+/// containers to the region files (M1.6), which read format 2's as they were.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// A world's `world.toml`: everything about it but its edits.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

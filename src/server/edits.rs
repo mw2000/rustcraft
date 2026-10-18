@@ -10,6 +10,7 @@ use super::sync::BlockChanges;
 use crate::block::BlockType;
 use crate::breaking::{break_time, harvests};
 use crate::chunks::chunk::ChunkCoordinate;
+use crate::containers::Containers;
 use crate::game_mode::GameMode;
 use crate::interaction::{overlaps, REACH};
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
@@ -117,11 +118,13 @@ type Players<'w, 's> = Query<
 /// Makes the edits clients ask for that pass the checks, telling the clients near them, and
 /// tells the client asking for one that doesn't what's there instead. In survival a block placed
 /// is taken from the player's hotbar, and one broken leaves its item to pick up if it was broken
-/// with a tool of the tier it needs, and wears the tool held.
+/// with a tool of the tier it needs, and wears the tool held. A container broken in either mode
+/// leaves what was in it, as items are never lost with their container.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_edits(
     mut requests: MessageReader<FromClient<RequestEdit>>,
     mut world: ResMut<World>,
+    mut containers: ResMut<Containers>,
     mut allowances: ResMut<EditAllowances>,
     time: Res<Time>,
     mut players: Players,
@@ -182,6 +185,10 @@ pub(super) fn receive_edits(
         if to == BlockType::Air {
             // the time it was held for is spent, so a block put back there takes as long
             commands.entity(player).remove::<BreakingStarted>();
+        }
+        let held_in_it = containers.remove(block).into_iter().flat_map(|c| c.slots);
+        for stack in held_in_it.flatten() {
+            commands.spawn((DroppedItem::from_block(stack, block), Replicated));
         }
         let drops = mode.drops_broken_blocks();
         let mut leave = |broken: BlockType, at: I64Vec3| {

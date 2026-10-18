@@ -1,7 +1,8 @@
-//! Crafting (§5.3, D-4): a recipe turns a list of ingredients into an output, made at a station,
-//! by hand or at a crafting table. Every recipe is a row of the `recipes!` table (INV-6). The
-//! server crafts (`server::crafting`), as clients ask, and the inventory screen lists the
-//! recipes (`inventory::recipes`).
+//! Crafting (§5.3, D-4): a recipe turns a list of ingredients into an output, made at a station:
+//! by hand, at a crafting table, or smelted in a furnace. Every recipe is a row of the `recipes!`
+//! table (INV-6), and what burns in a furnace is `FUELS`. The server crafts
+//! (`server::crafting`), as clients ask, and smelts (`containers`), and the inventory screen
+//! lists the recipes (`inventory::recipes`).
 
 use serde::{Deserialize, Serialize};
 
@@ -17,18 +18,28 @@ pub enum Station {
     Hand,
     /// At a crafting table, opened by right-clicking it.
     CraftingTable,
+    /// In a furnace, which smelts its input over time with the fuel it's given.
+    Furnace,
 }
 
 impl Station {
     /// The station a block is, if it's one.
     pub fn of_block(block: BlockType) -> Option<Self> {
-        (block == BlockType::CraftingTable).then_some(Station::CraftingTable)
+        match block {
+            BlockType::CraftingTable => Some(Station::CraftingTable),
+            BlockType::Furnace => Some(Station::Furnace),
+            _ => None,
+        }
     }
 
-    /// Whether a recipe made at `station` can be made here: a crafting table makes what hands
-    /// can too.
+    /// Whether a recipe made at `station` can be crafted here, by clicking it: a crafting table
+    /// makes what hands can too, and a furnace crafts nothing, as it smelts on its own.
     pub fn makes(self, station: Station) -> bool {
-        self == station || self == Station::CraftingTable
+        match self {
+            Station::Hand => station == Station::Hand,
+            Station::CraftingTable => station != Station::Furnace,
+            Station::Furnace => false,
+        }
     }
 }
 
@@ -78,9 +89,8 @@ const PLANKS: Item = Item::Block(BlockType::Planks);
 const COBBLESTONE: Item = Item::Block(BlockType::Cobblestone);
 const SAND: Item = Item::Block(BlockType::Sand);
 
-// A tool takes three of its head's material and two sticks, or one and two for a shovel. Coal ore
-// drops itself for now, so torches are made from it until there's a coal item to make them from.
-// Smelting at a furnace comes with M1.6.
+// A tool takes three of its head's material and two sticks, or one and two for a shovel. A
+// furnace smelts one item into one, so its rows take a single ingredient.
 recipes! {
     Planks {
         name: "planks", station: Hand,
@@ -92,7 +102,7 @@ recipes! {
     },
     Torches {
         name: "torches", station: Hand,
-        ingredients: [(Item::Block(BlockType::CoalOre), 1), (Item::Stick, 1)],
+        ingredients: [(Item::Coal, 1), (Item::Stick, 1)],
         output: (Item::Block(BlockType::Torch), 4),
     },
     CraftingTable {
@@ -159,6 +169,35 @@ recipes! {
         name: "sandstone", station: CraftingTable,
         ingredients: [(SAND, 4)], output: (Item::Block(BlockType::Sandstone), 1),
     },
+    CopperIngot {
+        name: "copper_ingot", station: Furnace,
+        ingredients: [(Item::Block(BlockType::CopperOre), 1)], output: (Item::CopperIngot, 1),
+    },
+    IronIngot {
+        name: "iron_ingot", station: Furnace,
+        ingredients: [(Item::Block(BlockType::IronOre), 1)], output: (Item::IronIngot, 1),
+    },
+    Stone {
+        name: "stone", station: Furnace,
+        ingredients: [(COBBLESTONE, 1)], output: (Item::Block(BlockType::Stone), 1),
+    },
+}
+
+/// Seconds a furnace takes to smelt one item.
+pub const SMELT_TIME: f32 = 10.0;
+
+// What burns in a furnace, and how many items each smelts before it's burnt up.
+const FUELS: &[(Item, f32)] = &[
+    (Item::Coal, 8.0),
+    (LOG, 1.5),
+    (PLANKS, 1.5),
+    (Item::Stick, 0.5),
+];
+
+/// How many seconds `item` burns for in a furnace, if it burns.
+pub fn burn_time(item: Item) -> Option<f32> {
+    let (_, items) = FUELS.iter().find(|&&(fuel, _)| fuel == item)?;
+    Some(items * SMELT_TIME)
 }
 
 impl Recipe {
@@ -188,6 +227,13 @@ impl Recipe {
     pub fn output(self) -> ItemStack {
         let (item, count) = self.properties().output;
         ItemStack::new(item, count)
+    }
+
+    /// The furnace's recipe that smelts `item`, if it smelts.
+    pub fn smelting(item: Item) -> Option<Self> {
+        Self::ALL.iter().copied().find(|recipe| {
+            recipe.station() == Station::Furnace && recipe.ingredients() == [(item, 1)]
+        })
     }
 
     /// How many times it can be made from what's in `inventory`'s slots.
@@ -231,7 +277,7 @@ impl<'de> Deserialize<'de> for Recipe {
 mod tests {
     use std::collections::HashSet;
 
-    use super::{Recipe, Station};
+    use super::{burn_time, Recipe, Station, SMELT_TIME};
     use crate::block::BlockType;
     use crate::inventory::{Inventory, HOTBAR_SLOTS};
     use crate::items::{Item, ItemStack};
@@ -289,7 +335,16 @@ mod tests {
             Some(Station::CraftingTable),
             Station::of_block(BlockType::CraftingTable)
         );
-        assert_eq!(None, Station::of_block(BlockType::Furnace));
+        // smelting is the furnace's, over time, and never crafted
+        for station in [Station::Hand, Station::CraftingTable, Station::Furnace] {
+            assert!(!station.makes(Station::Furnace), "{station:?}");
+        }
+        assert!(!Station::Furnace.makes(Station::Hand));
+        assert_eq!(
+            Some(Station::Furnace),
+            Station::of_block(BlockType::Furnace)
+        );
+        assert_eq!(None, Station::of_block(BlockType::Stone));
         // a log can be made into a table and the table into a pickaxe
         assert_eq!(Station::Hand, Recipe::Planks.station());
         assert_eq!(Station::Hand, Recipe::CraftingTable.station());
@@ -299,6 +354,38 @@ mod tests {
             ItemStack::new(Item::Block(BlockType::Torch), 4),
             Recipe::Torches.output()
         );
+        // from the coal coal ore drops
+        assert_eq!(
+            &[(Item::Coal, 1), (Item::Stick, 1)],
+            Recipe::Torches.ingredients()
+        );
+        assert_eq!(Some(Item::Coal), BlockType::CoalOre.drops());
+    }
+
+    #[test]
+    fn test_furnaces_smelt_ore_into_ingots_and_burn_coal_and_wood() {
+        let smelted = |block| Recipe::smelting(Item::Block(block)).map(|r| r.output().item);
+        assert_eq!(Some(Item::CopperIngot), smelted(BlockType::CopperOre));
+        assert_eq!(Some(Item::IronIngot), smelted(BlockType::IronOre));
+        assert_eq!(
+            Some(Item::Block(BlockType::Stone)),
+            smelted(BlockType::Cobblestone)
+        );
+        assert_eq!(None, smelted(BlockType::Dirt));
+        // a furnace's rows smelt one item into one
+        for &recipe in Recipe::ALL {
+            if recipe.station() == Station::Furnace {
+                let [(input, 1)] = recipe.ingredients() else {
+                    panic!("{recipe:?} smelts more than one item");
+                };
+                assert_eq!(Some(recipe), Recipe::smelting(*input));
+                assert_eq!(1, recipe.output().count);
+            }
+        }
+        assert_eq!(Some(8.0 * SMELT_TIME), burn_time(Item::Coal));
+        assert_eq!(Some(1.5 * SMELT_TIME), burn_time(LOG));
+        assert_eq!(Some(0.5 * SMELT_TIME), burn_time(Item::Stick));
+        assert_eq!(None, burn_time(Item::Block(BlockType::CoalOre)));
     }
 
     #[test]

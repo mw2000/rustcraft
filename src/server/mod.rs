@@ -4,6 +4,7 @@
 mod chunks;
 mod clock;
 mod commands;
+mod containers;
 mod crafting;
 pub mod drops;
 mod edits;
@@ -24,6 +25,7 @@ use bevy::time::common_conditions::on_timer;
 use bevy_replicon::prelude::{ClientId, ClientState, ClientSystems, ServerSystems};
 
 use crate::clock::TimeOfDay;
+use crate::containers::Containers;
 use crate::player::name::PlayerName;
 use crate::protocol::POSE_INTERVAL;
 use crate::save::{PlayerState, WorldSave};
@@ -38,6 +40,7 @@ impl Plugin for ServerPlugin {
             .init_resource::<TimeOfDay>()
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
+            .init_resource::<Containers>()
             .add_observer(players::welcome)
             .add_observer(players::see_off)
             .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
@@ -45,6 +48,7 @@ impl Plugin for ServerPlugin {
                 Update,
                 (
                     run_clock,
+                    containers::run_furnaces,
                     (drops::fall, drops::merge, drops::pick_up).chain(),
                 )
                     .run_if(is_authority),
@@ -67,7 +71,12 @@ impl Plugin for ServerPlugin {
                 // asked for
                 (
                     (edits::receive_break_starts, edits::receive_edits).chain(),
-                    inventory::receive_inventory_requests,
+                    // opened before it's clicked on
+                    (
+                        containers::open_containers,
+                        inventory::receive_inventory_requests,
+                    )
+                        .chain(),
                     crafting::receive_crafts,
                     commands::run_commands,
                     (clock::wind_clock, clock::sync_clock).chain(),
@@ -96,6 +105,7 @@ impl Plugin for ServerPlugin {
                     players::send_inventories,
                     players::send_game_modes,
                     players::hold_items,
+                    containers::send_containers,
                 )
                     .after(edits::receive_edits)
                     .after(inventory::receive_inventory_requests)
@@ -138,7 +148,7 @@ pub struct WorldToOpen {
 /// world's spawn if they're new.
 pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     let dir = &open.dir;
-    let (save, saved, edits) = WorldSave::open(dir.clone(), open.seed)
+    let (save, saved, edits, containers) = WorldSave::open(dir.clone(), open.seed)
         .unwrap_or_else(|error| panic!("couldn't open the world in {}: {error}", dir.display()));
     let world = World::from_save(saved.seed, edits, open.region_distance);
     info!(
@@ -160,6 +170,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
+    commands.insert_resource(containers);
     commands.insert_resource(save);
     commands.remove_resource::<WorldToOpen>();
 }

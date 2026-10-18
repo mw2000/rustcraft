@@ -11,6 +11,7 @@ use crate::commands::command_bar_closed;
 use crate::crafting::Station;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
+use crate::inventory::furnace::ContainerView;
 use crate::inventory::recipes::CraftingStation;
 use crate::inventory::Inventory;
 use crate::menu::GameState;
@@ -46,6 +47,7 @@ impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Target>()
             .init_resource::<CraftingStation>()
+            .init_resource::<ContainerView>()
             .init_resource::<Breaking>()
             .init_resource::<EditSeq>()
             .add_systems(OnExit(GameState::Playing), stop_breaking)
@@ -321,7 +323,7 @@ fn use_target(
     let (mode, mut hotbar, inventory) = player.single_mut().expect("player does not exist");
     let slot = hotbar.selected as u8;
     let replaceable = world.get_block_at(hit.block).is_replaceable();
-    // and right click on a crafting table opens it instead, see `use_station`
+    // and right click on a crafting table or a furnace opens it instead, see `use_station`
     let places =
         (replaceable || hit.face != I64Vec3::ZERO) && station_used(&world, hit, *mode).is_none();
     if mouse.just_pressed(MouseButton::Right) && places {
@@ -343,19 +345,21 @@ fn use_target(
 }
 
 // The station right-clicking `hit` opens, if it's one, in survival: in creative, where there's
-// no crafting, it's built against like any other block.
+// no crafting or smelting, it's built against like any other block.
 fn station_used(world: &World, hit: Hit, mode: GameMode) -> Option<Station> {
     Station::of_block(world.get_block_at(hit.block)).filter(|_| !mode.has_every_block())
 }
 
-// Right click on a crafting table opens the inventory screen at it, as the server's told, so
-// what's made there is checked against it.
+// Right click on a crafting table or a furnace opens the inventory screen at it, as the
+// server's told, so what's made there is checked against it, and a furnace's sent.
+#[allow(clippy::too_many_arguments)]
 fn use_station(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
     player: Query<&GameMode, With<LocalPlayer>>,
     mut station: ResMut<CraftingStation>,
+    mut view: ResMut<ContainerView>,
     mut state: ResMut<NextState<GameState>>,
     mut uses: MessageWriter<UseBlock>,
 ) {
@@ -368,6 +372,7 @@ fn use_station(
     if let Some(at) = station_used(&world, hit, mode) {
         uses.write(UseBlock { block: hit.block });
         *station = CraftingStation(at);
+        *view = ContainerView::opening(world.get_block_at(hit.block), hit.block);
         state.set(GameState::Inventory);
     }
 }
@@ -559,6 +564,7 @@ mod tests {
         use crate::crafting::Station;
         use crate::game_mode::GameMode;
         use crate::hotbar::Hotbar;
+        use crate::inventory::furnace::ContainerView;
         use crate::inventory::recipes::CraftingStation;
         use crate::inventory::Inventory;
         use crate::items::{Item, ItemStack};
@@ -583,6 +589,7 @@ mod tests {
                 .add_message::<StartBreaking>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .init_resource::<CraftingStation>()
+                .init_resource::<ContainerView>()
                 .init_resource::<Breaking>()
                 .init_resource::<EditSeq>()
                 .insert_resource(world)

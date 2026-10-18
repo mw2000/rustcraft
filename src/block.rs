@@ -59,6 +59,8 @@ pub enum Drops {
     Itself,
     /// Another block's item, as stone leaves cobblestone.
     Block(BlockType),
+    /// An item that isn't a block, as coal ore leaves coal.
+    Item(Item),
 }
 
 // Declares `BlockType` and its table of `Properties` together, so each block's properties sit
@@ -187,7 +189,7 @@ blocks! {
     },
     CoalOre {
         name: "coal_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
-        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Item(Item::Coal),
         hardness: 9.0, tool: Some(Pickaxe), tier: 1,
         top: Tile::CoalOre, side: Tile::CoalOre, bottom: Tile::CoalOre, lod: Tile::CoalOre,
     },
@@ -297,6 +299,7 @@ impl BlockType {
             Drops::Nothing => None,
             Drops::Itself => Some(Item::Block(self)),
             Drops::Block(block) => Some(Item::Block(block)),
+            Drops::Item(item) => Some(item),
         }
     }
 

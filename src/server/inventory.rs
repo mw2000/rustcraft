@@ -1,9 +1,11 @@
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
+use super::containers::OpenContainer;
 use super::drops::DroppedItem;
+use crate::containers::{Container, Containers};
 use crate::game_mode::GameMode;
-use crate::inventory::{Inventory, HOTBAR_SLOTS};
+use crate::inventory::{Click, Inventory, HOTBAR_SLOTS};
 use crate::items::{Item, ItemStack};
 use crate::player::{PlayerLook, PlayerOwner};
 use crate::protocol::{CloseInventory, DropItem, InventoryClick, PickBlock};
@@ -17,13 +19,15 @@ type Players<'w, 's> = Query<
         &'static PlayerLook,
         &'static GameMode,
         &'static mut Inventory,
+        Option<&'static OpenContainer>,
     ),
 >;
 
-/// Changes players' inventories as they ask: clicks in the inventory screen, closing it, and
-/// dropping and picking items. A request from a client with no player, or for a slot there
-/// isn't, changes nothing.
+/// Changes players' inventories and the containers they have open as they ask: clicks in the
+/// inventory screen, closing it, and dropping and picking items. A request from a client with no
+/// player, or for a slot there isn't, or a container they don't have open, changes nothing.
 pub(super) fn receive_inventory_requests(
+    mut containers: ResMut<Containers>,
     mut clicks: MessageReader<FromClient<InventoryClick>>,
     mut closes: MessageReader<FromClient<CloseInventory>>,
     mut drops: MessageReader<FromClient<DropItem>>,
@@ -33,15 +37,33 @@ pub(super) fn receive_inventory_requests(
 ) {
     for &FromClient {
         client_id,
-        message: InventoryClick { slot, click },
+        message:
+            InventoryClick {
+                container,
+                slot,
+                click,
+            },
     } in clicks.read()
     {
-        if let Some((.., mut inventory)) = player_of(&mut players, client_id) {
-            inventory.click(slot.into(), click);
+        let Some((.., mut inventory, open)) = player_of(&mut players, client_id) else {
+            continue;
+        };
+        let (slot, open) = (usize::from(slot), open.map(|open| open.at));
+        match container {
+            Some(at) if open == Some(at) => {
+                if let Some(container) = containers.get_mut(at) {
+                    container.click(slot, click, &mut inventory);
+                }
+            }
+            Some(_) => {}
+            None => match open.filter(|_| click == Click::Shift) {
+                Some(at) => shift_into(containers.get_mut(at), &mut inventory, slot),
+                None => inventory.click(slot, click),
+            },
         }
     }
     for &FromClient { client_id, .. } in closes.read() {
-        if let Some((body, look, _, mut inventory)) = player_of(&mut players, client_id) {
+        if let Some((body, look, _, mut inventory, _)) = player_of(&mut players, client_id) {
             // what there's no room for is dropped, as Minecraft does
             if let Some(left) = inventory.put_back_cursor() {
                 commands.spawn((
@@ -56,7 +78,7 @@ pub(super) fn receive_inventory_requests(
         message: DropItem { slot, all },
     } in drops.read()
     {
-        if let Some((body, look, _, mut inventory)) = player_of(&mut players, client_id) {
+        if let Some((body, look, _, mut inventory, _)) = player_of(&mut players, client_id) {
             if let Some(stack) = inventory.drop_from(slot.into(), all) {
                 commands.spawn((
                     DroppedItem::thrown(stack, body.translation, look.forward()),
@@ -70,7 +92,7 @@ pub(super) fn receive_inventory_requests(
         message: PickBlock { slot, block },
     } in picks.read()
     {
-        let Some((_, _, mode, mut inventory)) = player_of(&mut players, client_id) else {
+        let Some((_, _, mode, mut inventory, _)) = player_of(&mut players, client_id) else {
             continue;
         };
         let slot = usize::from(slot);
@@ -80,16 +102,34 @@ pub(super) fn receive_inventory_requests(
     }
 }
 
-// The player `client` plays as: where they are, which way they look, their mode and their
-// inventory to change.
-fn player_of<'a>(
-    players: &'a mut Players,
-    client: ClientId,
-) -> Option<(Transform, PlayerLook, GameMode, Mut<'a, Inventory>)> {
+// Shift-clicking a stack in the inventory with a container open moves it into the container,
+// if it goes there, and otherwise between the hotbar and the main inventory as ever.
+fn shift_into(container: Option<&mut Container>, inventory: &mut Inventory, slot: usize) {
+    let Some(stack) = inventory.slots.get_mut(slot).and_then(Option::take) else {
+        return;
+    };
+    let left = container.map_or(Some(stack), |container| container.add(stack));
+    inventory.slots[slot] = left;
+    if left == Some(stack) {
+        inventory.click(slot, Click::Shift);
+    }
+}
+
+// The player `client` plays as: where they are, which way they look, their mode, their
+// inventory to change and the container they have open.
+type PlayerOf<'a> = (
+    Transform,
+    PlayerLook,
+    GameMode,
+    Mut<'a, Inventory>,
+    Option<&'a OpenContainer>,
+);
+
+fn player_of<'a>(players: &'a mut Players, client: ClientId) -> Option<PlayerOf<'a>> {
     players
         .iter_mut()
         .find(|(owner, ..)| owner.0 == client)
-        .map(|(_, body, look, mode, inventory)| (*body, *look, *mode, inventory))
+        .map(|(_, body, look, mode, inventory, open)| (*body, *look, *mode, inventory, open))
 }
 
 #[cfg(test)]
@@ -146,7 +186,11 @@ mod tests {
     #[test]
     fn test_clicks_change_the_inventory_in_the_frame_theyre_made() {
         let mut app = server(GameMode::Survival);
-        let click = |slot, click| InventoryClick { slot, click };
+        let click = |slot, click| InventoryClick {
+            container: None,
+            slot,
+            click,
+        };
         app.world_mut().write_message(click(0, Click::Right));
         app.world_mut().write_message(click(4, Click::Left));
         app.world_mut().write_message(click(0, Click::Shift));
@@ -161,6 +205,7 @@ mod tests {
     fn test_closing_the_screen_puts_the_cursors_stack_back_or_drops_it() {
         let mut app = server(GameMode::Survival);
         app.world_mut().write_message(InventoryClick {
+            container: None,
             slot: 0,
             click: Click::Left,
         });
@@ -171,6 +216,7 @@ mod tests {
 
         // with no room for it, it's dropped
         app.world_mut().write_message(InventoryClick {
+            container: None,
             slot: 0,
             click: Click::Left,
         });

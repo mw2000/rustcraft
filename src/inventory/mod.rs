@@ -2,6 +2,7 @@
 //! player's inventory (INV-4), as clients ask it to (`InventoryClick` and the rest in
 //! `protocol.rs`); the screen showing it is `screen`.
 
+pub mod furnace;
 pub mod icons;
 pub mod recipes;
 pub mod screen;
@@ -154,37 +155,15 @@ impl Inventory {
         if slot >= SLOTS {
             return;
         }
-        let held = &mut self.slots[slot];
-        match click {
-            Click::Left => match (held.as_mut(), self.cursor) {
-                (Some(stack), Some(carried)) if stack.stacks_with(carried) => {
-                    self.cursor = stack.merge(carried);
-                }
-                _ => std::mem::swap(held, &mut self.cursor),
-            },
-            Click::Right => match (held.as_mut(), self.cursor) {
-                (Some(stack), None) => {
-                    // half, rounding up, so a single item can be picked up
-                    let half = stack.count.div_ceil(2);
-                    self.cursor = take(held, half);
-                }
-                (None, Some(_)) => *held = take(&mut self.cursor, 1),
-                (Some(stack), Some(carried)) if stack.stacks_with(carried) => {
-                    if stack.room() > 0 {
-                        stack.count += 1;
-                        take(&mut self.cursor, 1);
-                    }
-                }
-                _ => std::mem::swap(held, &mut self.cursor),
-            },
-            Click::Shift => {
-                let Some(stack) = held.take() else {
-                    return;
-                };
-                let to = if HOTBAR.contains(&slot) { MAIN } else { HOTBAR };
-                self.slots[slot] = self.add_within(stack, to);
-            }
+        if click != Click::Shift {
+            click_stack(&mut self.slots[slot], &mut self.cursor, click);
+            return;
         }
+        let Some(stack) = self.slots[slot].take() else {
+            return;
+        };
+        let to = if HOTBAR.contains(&slot) { MAIN } else { HOTBAR };
+        self.slots[slot] = self.add_within(stack, to);
     }
 
     /// Puts the stack on the cursor back in the inventory, as closing the screen does, and
@@ -192,6 +171,31 @@ impl Inventory {
     pub fn put_back_cursor(&mut self) -> Option<ItemStack> {
         let stack = self.cursor.take()?;
         self.add(stack)
+    }
+}
+
+/// Does what a left or right click does to the stack `held` in a slot, with the stack `cursor` on
+/// the cursor, in an inventory or a container. Shift-clicks move stacks between slots, which is
+/// for whoever has them to do.
+pub fn click_stack(held: &mut Option<ItemStack>, cursor: &mut Option<ItemStack>, click: Click) {
+    match (click, held.as_mut(), *cursor) {
+        (Click::Left, Some(stack), Some(carried)) if stack.stacks_with(carried) => {
+            *cursor = stack.merge(carried);
+        }
+        (Click::Right, Some(stack), None) => {
+            // half, rounding up, so a single item can be picked up
+            let half = stack.count.div_ceil(2);
+            *cursor = take(held, half);
+        }
+        (Click::Right, None, Some(_)) => *held = take(cursor, 1),
+        (Click::Right, Some(stack), Some(carried)) if stack.stacks_with(carried) => {
+            if stack.room() > 0 {
+                stack.count += 1;
+                take(cursor, 1);
+            }
+        }
+        (Click::Shift, ..) => {}
+        _ => std::mem::swap(held, cursor),
     }
 }
 

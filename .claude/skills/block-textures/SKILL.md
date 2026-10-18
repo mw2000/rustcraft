@@ -46,10 +46,16 @@ Each tile is a function that paints a few shades by index, like the 4-colour qua
 
 ## Item sprites
 
-Items that aren't blocks (sticks, ingots, tools) are pictures on transparency in their own strip, `assets/textures/items.png`, one 16px tile per row of the `items!` table in `src/items.rs`, in its order. `items.py` draws them all from shapes in a frame along the diagonal (tools have the handle bottom left and the head top right), lit from the upper left and outlined, with wood and stone shades from the block atlas, and writes `out/items_contact.png` on a slot's grey. Adding an item: add its row, then a sprite to `SPRITES` in `items.py` at the same place, which it checks against the table, and run it.
+Items that aren't blocks (sticks, coal, ingots, tools) are pictures on transparency in their own strip, `assets/textures/items.png`, one 16px tile per row of the `items!` table in `src/items.rs`, in its order. `items.py` draws them all from shapes in a frame along the diagonal (tools have the handle bottom left and the head top right), lit from the upper left and outlined, with wood and stone shades from the block atlas, and writes `out/items_contact.png` on a slot's grey. Adding an item: add its row, then a sprite to `SPRITES` in `items.py` at the same place, which it checks against the table, and run it.
 
 ```
 python items.py
+```
+
+`ui.py` draws the furnace screen's flame and arrow, `assets/textures/furnace.png`: four tiles, the flame out and lit and the arrow empty and full, in the order of `FLAME_OUT`.. in `src/inventory/furnace.rs`. Each pair shares its shape, as the screen shows as much of the lit one over the other as the fire and smelting have got, and `out/furnace_contact.png` shows them on a slot's grey.
+
+```
+python ui.py
 ```
 
 `cracks.py` draws the cracks a block shows as it's broken, `assets/textures/cracks.png`, a tile per stage (`CRACK_STAGES` in `src/breaking.rs`, which it reads): one network grown from the middle, each stage showing more of it in the order it grew, dark on transparency with a faint lip. `out/cracks_contact.png` shows each stage over stone. Its default seed is the one picked.

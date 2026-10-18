@@ -5,6 +5,9 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Button;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
+use super::furnace::{
+    container_stack, follow_container, show_furnace, spawn_furnace, ContainerSlot, ContainerView,
+};
 use super::icons::{load_icons, stack_view, ItemIcons, StackView};
 use super::recipes::{describe, show_recipes, spawn_recipes, CraftingStation, RecipeCard};
 use super::{Click, Inventory, HOTBAR_SLOTS, SLOTS};
@@ -29,19 +32,29 @@ const HINT: &str = "Right click takes half a stack or puts down one, and shift-c
 
 /// In survival, the inventory (E) is the inventory screen: the main inventory's 27 slots over
 /// the hotbar's 9, as in Minecraft, beside the recipes that can be made by hand, or at the
-/// crafting table it was opened at. Clicks on the slots ask the server to move stacks about, and
-/// the stack picked up follows the mouse until it's put down. The game carries on behind it, as
-/// behind the block picker, and closing it puts the stack carried back.
+/// crafting table it was opened at, or beside the furnace's slots if it was opened at one.
+/// Clicks on the slots ask the server to move stacks about, and the stack picked up follows the
+/// mouse until it's put down. The game carries on behind it, as behind the block picker, and
+/// closing it puts the stack carried back.
 pub struct InventoryScreenPlugin;
 
 impl Plugin for InventoryScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CraftingStation>()
+            .init_resource::<ContainerView>()
             .add_systems(Startup, spawn_screen.after(load_icons))
             .add_systems(
                 Update,
-                (carry_to_mouse, name_hovered_item, show_recipes)
-                    .run_if(in_state(GameState::Inventory)),
+                (
+                    follow_container,
+                    (
+                        carry_to_mouse,
+                        name_hovered_item,
+                        show_recipes,
+                        show_furnace,
+                    )
+                        .run_if(in_state(GameState::Inventory)),
+                ),
             )
             .add_systems(OnEnter(GameState::Inventory), open)
             .add_systems(OnExit(GameState::Inventory), close);
@@ -61,7 +74,12 @@ struct Carried;
 #[derive(Component)]
 struct ItemName;
 
-fn spawn_screen(mut commands: Commands, icons: Res<ItemIcons>) {
+fn spawn_screen(
+    mut commands: Commands,
+    icons: Res<ItemIcons>,
+    mut images: ResMut<Assets<Image>>,
+    mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
     commands
         .spawn((
             Screen,
@@ -106,6 +124,7 @@ fn spawn_screen(mut commands: Commands, icons: Res<ItemIcons>) {
                         spawn_slots(slots, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP);
                     });
                     spawn_recipes(row, &icons);
+                    spawn_furnace(row, &icons, &mut images, &mut layouts);
                 });
             screen.spawn((
                 ItemName,
@@ -149,25 +168,29 @@ fn spawn_slots(
         })
         .with_children(|grid| {
             for slot in slots {
-                grid.spawn((
-                    Slot(slot),
-                    Button,
-                    Hovered::default(),
-                    Node {
-                        width: Val::Px(SLOT_SIZE),
-                        height: Val::Px(SLOT_SIZE),
-                        border: UiRect::all(Val::Px(SLOT_BORDER)),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    },
-                    BackgroundColor(BUTTON_COLOR),
-                    BorderColor::all(BUTTON_BORDER_COLOR),
-                ))
-                .with_child(stack_view(icons, StackView::Slot(slot)))
-                .observe(click_slot);
+                grid.spawn((Slot(slot), slot_button()))
+                    .with_child(stack_view(icons, StackView::Slot(slot)))
+                    .observe(click_slot);
             }
         });
+}
+
+/// A slot's button, for an inventory's slot or a container's.
+pub(super) fn slot_button() -> impl Bundle {
+    (
+        Button,
+        Hovered::default(),
+        Node {
+            width: Val::Px(SLOT_SIZE),
+            height: Val::Px(SLOT_SIZE),
+            border: UiRect::all(Val::Px(SLOT_BORDER)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(BUTTON_COLOR),
+        BorderColor::all(BUTTON_BORDER_COLOR),
+    )
 }
 
 // The server makes the change, as it does all changes to inventories (INV-4), in this frame in
@@ -184,13 +207,14 @@ fn click_slot(
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     if let Some(click) = click_of(press.button, shift) {
         clicks.write(InventoryClick {
+            container: None,
             slot: slot.0 as u8,
             click,
         });
     }
 }
 
-fn click_of(button: PointerButton, shift: bool) -> Option<Click> {
+pub(super) fn click_of(button: PointerButton, shift: bool) -> Option<Click> {
     match button {
         PointerButton::Primary if shift => Some(Click::Shift),
         PointerButton::Primary => Some(Click::Left),
@@ -222,20 +246,31 @@ fn carry_to_mouse(
 // The hovered stack's name, or what the hovered recipe makes and from what.
 #[allow(clippy::type_complexity)]
 fn name_hovered_item(
-    changed: Query<(), (Or<(With<Slot>, With<RecipeCard>)>, Changed<Hovered>)>,
+    changed: Query<
+        (),
+        (
+            Or<(With<Slot>, With<ContainerSlot>, With<RecipeCard>)>,
+            Changed<Hovered>,
+        ),
+    >,
     player: Query<Ref<Inventory>, With<LocalPlayer>>,
+    view: Res<ContainerView>,
     slots: Query<(&Slot, &Hovered)>,
+    container_slots: Query<(&ContainerSlot, &Hovered)>,
     recipes: Query<(&RecipeCard, &Hovered)>,
     mut name: Query<&mut Text, With<ItemName>>,
 ) {
     let Ok(inventory) = player.single() else {
         return;
     };
-    if changed.is_empty() && !inventory.is_changed() {
+    if changed.is_empty() && !inventory.is_changed() && !view.is_changed() {
         return;
     }
     let slot = slots.iter().find(|(_, hovered)| hovered.get());
-    let stack = slot.and_then(|(slot, _)| inventory.slots[slot.0]);
+    let in_container = container_slots.iter().find(|(_, hovered)| hovered.get());
+    let stack = slot
+        .and_then(|(slot, _)| inventory.slots[slot.0])
+        .or_else(|| in_container.and_then(|(slot, _)| container_stack(&view, slot.0)));
     let recipe = recipes.iter().find(|(_, hovered)| hovered.get());
     let text = match (stack, recipe) {
         (Some(stack), _) => stack.item.display_name(),
@@ -262,13 +297,15 @@ fn open(
 }
 
 // The menu holds the cursor again as play resumes. The next time it opens, it's by hand,
-// unless it's at a crafting table again.
+// unless it's at a crafting table or a furnace again.
 fn close(
     mut screen: Query<&mut Node, With<Screen>>,
     mut closes: MessageWriter<CloseInventory>,
     mut station: ResMut<CraftingStation>,
+    mut view: ResMut<ContainerView>,
 ) {
     *station = CraftingStation::default();
+    *view = ContainerView::default();
     for mut node in &mut screen {
         if node.display == Display::Flex {
             node.display = Display::None;
@@ -397,6 +434,7 @@ mod tests {
         let mut app = app(GameMode::Survival);
         press(&mut app, KeyCode::KeyE);
         app.world_mut().write_message(InventoryClick {
+            container: None,
             slot: 0,
             click: Click::Left,
         });
@@ -449,10 +487,13 @@ mod tests {
         assert!(listed(&mut app).contains(&(Recipe::Planks, true)));
         press(&mut app, KeyCode::KeyE);
 
-        // at a crafting table, everything
+        // at a crafting table, everything but smelting
         app.insert_resource(CraftingStation(Station::CraftingTable));
         press(&mut app, KeyCode::KeyE);
-        assert_eq!(Recipe::ALL.len(), listed(&mut app).len());
+        let crafted = Recipe::ALL
+            .iter()
+            .filter(|r| r.station() != Station::Furnace);
+        assert_eq!(crafted.count(), listed(&mut app).len());
         // and closing it goes back to hand
         press(&mut app, KeyCode::KeyE);
         assert_eq!(

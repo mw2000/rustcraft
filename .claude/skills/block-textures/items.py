@@ -2,7 +2,7 @@
 """Draw the item sprites into assets/textures/items.png, one 16px tile per row of the `items!` table in src/items.rs, in
 its order, and write out/items_contact.png to check them. Usage: items.py
 
-Items aren't blocks, so they're small pictures on transparency rather than seamless tiles: a stick, ingots, and tools
+Items aren't blocks, so they're small pictures on transparency rather than seamless tiles: a stick, coal, ingots, and tools
 lying on the diagonal, handle at the bottom left and head at the top right, each lit from the upper left and outlined
 so it reads on a slot's grey. Wood and stone take their shades from the block atlas, as draw.py's tiles do."""
 import numpy as np
@@ -21,6 +21,8 @@ MATERIALS = dict(
     copper=np.array([(150, 76, 44), (204, 112, 62), (236, 160, 104)], float),
     iron=np.array([(140, 140, 148), (196, 196, 202), (236, 236, 240)], float),
 )
+# Coal's black, a little blue where it catches the light, as coal ore's flecks are.
+COAL = np.array([(24, 24, 28), (44, 44, 50), (78, 80, 90)], float)
 
 y, x = np.mgrid[:16, :16]
 # Along the diagonal from the bottom left (u) and across it, positive to the bottom right (v), in texels, through
@@ -51,6 +53,12 @@ def shovel():
 
 def stick():
     return (np.abs(V) < 0.6) & (U > 2.5) & (U < 19.0)
+
+
+def lump():
+    # a knobbly lump, a few rounded chunks run together
+    chunks = [(8.5, 8.0, 4.6), (5.5, 9.5, 3.2), (10.5, 5.5, 3.0), (11.0, 10.5, 2.8)]
+    return np.any([(x - cx) ** 2 + (y - cy) ** 2 < r * r for cx, cy, r in chunks], 0)
 
 
 def ingot():
@@ -114,7 +122,15 @@ def single(shape, colours):
 
 HEADS = dict(pickaxe=pickaxe, axe=axe, shovel=shovel)
 # In the order of the `items!` table.
-SPRITES = dict(stick=lambda: single(stick(), HANDLE), copper_ingot=lambda: bar(MATERIALS["copper"]), iron_ingot=lambda: bar(MATERIALS["iron"]))
+def coal():
+    out = single(lump(), COAL)
+    # glints where its facets catch the light
+    for gy, gx in [(5, 6), (6, 7), (8, 4), (4, 10)]:
+        out[gy, gx, :3] = (120, 124, 138)
+    return out
+
+
+SPRITES = dict(stick=lambda: single(stick(), HANDLE), coal=coal, copper_ingot=lambda: bar(MATERIALS["copper"]), iron_ingot=lambda: bar(MATERIALS["iron"]))
 for material in ["wooden", "stone", "copper", "iron"]:
     for kind, head in HEADS.items():
         SPRITES[f"{material}_{kind}"] = lambda head=head, material=material: tool(head, MATERIALS[material])
