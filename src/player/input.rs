@@ -18,7 +18,9 @@ use super::{Movement, Player, PlayerLook};
 use crate::{chunks::chunk::ChunkCoordinate, game_mode::GameMode, world::World};
 
 const FLY_TOGGLE_KEY: KeyCode = KeyCode::KeyF;
-const LOOK_SENSITIVITY: f32 = 0.1;
+// How far the mouse turns the view, per pixel it moves. Mouse motion is already a distance, so
+// it isn't scaled by the frame's length, which would turn the view less the higher the frame rate.
+const LOOK_SENSITIVITY: f32 = 0.1_f32.to_radians();
 
 /// Moves the player by the keys held: WASD across, Space and Ctrl up and down or jumping,
 /// Shift sprinting, and F between flying and walking where the game mode allows.
@@ -77,14 +79,15 @@ fn move_input(keys: &ButtonInput<KeyCode>) -> MoveInput {
 
 /// Turns the player's look with the mouse.
 pub fn player_look(
-    time: Res<Time>,
     mut looks: Query<&mut PlayerLook, With<Player>>,
     mut motion: MessageReader<MouseMotion>,
 ) {
     let mut look = looks.single_mut().expect("player does not exist");
-    let turn = LOOK_SENSITIVITY * time.delta_secs();
     for ev in motion.read() {
-        look.turn(-ev.delta.x * turn, -ev.delta.y * turn);
+        look.turn(
+            -ev.delta.x * LOOK_SENSITIVITY,
+            -ev.delta.y * LOOK_SENSITIVITY,
+        );
     }
 }
 
