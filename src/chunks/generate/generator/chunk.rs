@@ -11,6 +11,7 @@ use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::ores::place_ores;
 use crate::chunks::generate::plants::plant_on;
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::structures::{clear_trees, STRUCTURE_DEPTH, STRUCTURE_HEIGHT};
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::TreeTints;
@@ -83,6 +84,18 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
         ground_top(highest),
         &mut cells,
     );
+    for placed in &columns.structures {
+        placed.build(
+            origin,
+            1,
+            (IVec3::ZERO, IVec3::splat(size as i32 - 1)),
+            |x, z| columns.height(x - origin.x, z - origin.z),
+            |coord, block| {
+                let coord = coord.as_i64vec3();
+                cells[((coord.x * size + coord.z) * size + coord.y) as usize] = block;
+            },
+        );
+    }
     let mut chunk_data = ChunkData::from_cells(cells);
 
     // the sky's light is kept out of the chunks below wherever it can't reach down past this one
@@ -96,7 +109,8 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
 
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);
-        let trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
+        let mut trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
+        clear_trees(&mut trees, &columns.structures);
         for tree in &trees {
             tree.plant(
                 origin,
@@ -116,12 +130,23 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     chunk_data
 }
 
+// Ground just outside an area is near in height to the ground in it, where trees and structures
+// stand: they need gentle ground.
+const NEARBY_GROUND: i64 = 4;
+
 // Whether trees on ground between `lowest` and `highest` could reach into blocks `bottom..top`.
-// Trees stand on gentle ground, so neighbouring ground just outside is close in height.
 pub(super) fn trees_may_reach(bottom: i64, top: i64, lowest: i64, highest: i64) -> bool {
-    const NEARBY_GROUND: i64 = 4;
     top > lowest - NEARBY_GROUND && bottom < highest + NEARBY_GROUND + TREE_HEIGHT
 }
+
+// Whether structures on ground between `lowest` and `highest` could reach into blocks
+// `bottom..top`. Wherever trees could reach too, so the structures they keep clear of are known.
+pub(super) fn structures_may_reach(bottom: i64, top: i64, lowest: i64, highest: i64) -> bool {
+    top > lowest - NEARBY_GROUND - STRUCTURE_DEPTH
+        && bottom < highest + NEARBY_GROUND + STRUCTURE_HEIGHT
+}
+
+const _: () = assert!(STRUCTURE_HEIGHT >= TREE_HEIGHT);
 
 pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,

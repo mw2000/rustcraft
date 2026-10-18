@@ -64,6 +64,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Biomes | Climate-driven desert, forest, foothills, glacier; tinted grass and leaves | `src/chunks/generate/biome/` |
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Plants | Tall grass and flowers on the grass, by climate, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
+| Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); so far a ruined watchtower on hilltops | `src/chunks/generate/structures/`, `assets/structures/` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
@@ -74,7 +75,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Containers | Blocks holding items of their own in the world, so far the furnace, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
-| Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
+| Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures` and `structures` skills | `examples/`, `.claude/skills/` |
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
@@ -86,7 +87,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits, containers, crops and the player (`src/save/`).
 
-Not there yet: structures, mobs.
+Not there yet: mobs.
 
 ---
 
@@ -1152,6 +1153,70 @@ landmarks visible from far away (P1).
 - **First structures, proposed:** desert temple, forest ruin, glacier outpost, mountain
   watchtower, mineshaft, dungeon, then villages.
 - New biomes come with the structures that need them, such as a jungle for jungle temples.
+- **Built (M2.1): the system, with one structure** (`src/chunks/generate/structures/`).
+  - **Templates** are TOML files in `assets/structures/`, one a type, read once into
+    `STRUCTURES` from files built in with `include_str!`, so generation reads nothing from disk,
+    on a server as on a client. A file names the type, its placement, and its template: a size,
+    the layer standing at ground level (those under it are sunk), a foundation block, a palette
+    of one character a block name, markers by kind (`loot` points for M2.3), and the layers as
+    text grids, bottom first. `.` leaves the world as it is and `-` clears it to air, carving
+    interiors out of the ground. Text over a binary format with a dump tool, since a template a
+    few thousand blocks big reads and diffs as a picture of itself; M2.2's `/structure save` can
+    write the same. Templates are refused at load if they don't match their size or are taller
+    than `STRUCTURE_HEIGHT` (27, as tall as trees) over their floor, or sunk deeper than
+    `STRUCTURE_DEPTH` (4). They're authored by script for now, with the `structures` skill.
+  - **Placement** (INV-2, INV-3) is per type on a grid of square cells: a hash of the seed, the
+    type's name and the cell decides whether the cell tries for one (`chance`), its spot in the
+    cell and its rotation (0–270°). A hilltop type climbs from its spot to the top of its hill in
+    12-block steps, giving up if it would leave its cell or come within an eighth of a cell of its
+    edge, so those in cells side by side stay apart. It then stands if the ground suits it,
+    judged from the noise alone (the same heights the regions hold), so every level of detail
+    places the same ones: its biome, its floor's height over the sea, and the ground under its
+    footprint rising and falling no more than `max_rise`, none of it under water. A chunk or LOD
+    node asks `RegionStore::structures_near` for those whose footprints overlap it or the trees
+    near it, from its own cell and those its footprint can reach from. Placements are remembered
+    by cell (`Placements`), since deciding one takes up to a hundred or so noise samples (about
+    150 µs) and every chunk and node near it asks; most cells are ruled out by their hash
+    without waiting on the others.
+  - **Terrain fit:** a structure's floor is the middle height of the ground under its footprint,
+    so it cuts in as much as it stands over. In its footprint the ground above the floor is
+    cleared down to it, with whatever grew on it, and the ground below filled up to its lowest
+    layer with its foundation block; then its own blocks go in. Trees whose crowns would come
+    within 2 blocks of its footprint don't grow (`Tree::overhangs`, the same at every level), so
+    it stands in a small clearing. Caves under the footprint stay 5 blocks under its floor or the
+    ground, whichever is lower, as under ground with no mouth, so they never carve its floor away
+    and its columns' roofs are as they were. Edges aren't blended: on the gentle hilltops it
+    needs, its walls meet the ground within a few blocks.
+  - **Level of detail (INV-5):** cells up to two blocks wide take the structure by coverage: a
+    cell is the commonest of its blocks where at least half the cell is them, or air where at
+    least half is them and the air it clears, so level 0 is exactly full detail. Coarser cells,
+    out to 32 blocks wide (about 8 km), draw it as boxes of its commonest block, one for each
+    cell's height of it, each as wide as its blocks there, over a foundation box down to the
+    ground the node draws, from the node holding its corner, as trees' crowns are drawn. They
+    take its exact floor height, so it doesn't shift between levels; a coarse node's ground can
+    bury its foot by a few blocks. `known_empty` counts `STRUCTURE_HEIGHT` over the ground. A
+    7×7 watchtower is a few pixels wide at 1.5 km and a pixel at 8 km; landmarks meant to be
+    seen across the map come with M2.7.
+  - **The watchtower** (`watchtower.toml`, written by `.claude/skills/structures/watchtower.py`):
+    7×7 and 20 layers, a cobblestone footing sunk a layer, cobblestone rising into stone brick,
+    a doorway, arrow slits, a stair of single blocks climbing once round the inside to a floor
+    under a crenellated parapet, and a corner fallen away from halfway up, with a `loot` marker
+    on the top floor. One cell in 640 blocks square in forest and foothills, on hilltops 12 or
+    more blocks over the sea, with ground under it rising no more than 4: about 3 per 10 km²
+    round seed 3's spawn, the nearest 220 m from it.
+  - **Cost** (INV-7): a chunk or node with no structure near pays a lookup of a few cells by
+    hash, 0.2 µs. Building one into a chunk it touches costs about 5 µs (2–4% of generating
+    it), into a level-1 node about 35 µs (3% of meshing it), and its boxes 6 µs. With the
+    bench's code in one codegen unit, so the layout of unrelated code holds still, generation,
+    chunk meshing and LOD meshing are within 1% of before, with and without a structure in the
+    benched area; in the default build, chunk meshing shifts by up to 5% from functions
+    inlining differently into other codegen units (perf shows `vertex_light` no longer
+    inlined), though nothing on that path changed. `lod_sim` shows no holes.
+  - **Determinism:** the golden checksum (§4.4) now samples the chunk with the floor of the
+    structure nearest the spawn and the chunk over it. Its other samples hash as they did before
+    structures; it changed only by those two chunks.
+  - Later: blending the ground at the edges, several types competing for a spot, structures
+    assembled from pieces (villages), lit windows, and bigger landmarks drawn further.
 
 ### 5.7 World and biomes
 
@@ -1259,7 +1324,7 @@ Done when: **you can start with nothing and make iron tools.**
 Done when: **there's something worth walking 5 km to see, and you can see it from where you
 start.**
 
-- ☐ **M2.1 Structure system.** Placement, templates, terrain fit, LODs (§5.6).
+- ☑ **M2.1 Structure system.** Placement, templates, terrain fit, LODs (§5.6).
 - ☐ **M2.2 Structure authoring.** `/structure save` and loading in creative mode (§5.6).
 - ☐ **M2.3 Chests and loot tables.** (§5.6)
 - ☐ **M2.4 First structures.** Temple, ruin, outpost, watchtower, mineshaft, dungeon (§5.6).

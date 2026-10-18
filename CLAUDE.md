@@ -11,5 +11,5 @@ plan.
 - Build and run: `cargo run --release`. Test: `cargo test`. Keep `cargo fmt` and `cargo clippy` clean.
 - CI runs `cargo fmt --check`, clippy with `-D warnings` and the tests on every push and PR, so all three must pass.
 - Changing what terrain generates fails the golden checksum test (`src/chunks/generate/checksum.rs`); update its value deliberately and say so in the PR (§8).
-- Performance work: use the `profile` skill. Block textures: use the `block-textures` skill.
+- Performance work: use the `profile` skill. Block textures: use the `block-textures` skill. Structure templates: use the `structures` skill.
 - Match the surrounding code's style: plain-prose comments that explain why, British spelling.

@@ -3,9 +3,9 @@ use super::canopy::{
     crown_layers, Canopy, BOX_CROWN_CELL, CANOPY_CELL, CANOPY_SHADE, CANOPY_SHADE_SPAN,
     FOREST_COVER, FOREST_DARKEN, TREE_MAX_CELL, TRUNK_MAX_CELL,
 };
-use super::chunk::{sky_above, trees_may_reach};
+use super::chunk::{sky_above, structures_may_reach, trees_may_reach};
 use super::mesh::mesh_blocks;
-use super::source::{water_depth, BlockSource, BoxFaces, TreeBox};
+use super::source::{water_depth, BlockSource, BoxFaces, LodBox};
 use super::terrain::{column_block, freeze_cell, ground_top, is_solid, under_surface, underwater};
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -15,6 +15,7 @@ use crate::chunks::generate::columns::COARSE_CELL;
 use crate::chunks::generate::light::{Light, SkyLight};
 use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::structures::{clear_trees, Placed, STRUCTURE_REACH};
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::Tree;
@@ -27,10 +28,15 @@ use bevy::math::I64Vec2;
 use bevy::math::I64Vec3;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
+use bevy::math::Vec3Swizzles;
 use std::cell::LazyCell;
 use std::sync::Arc;
 
 pub(super) const SKIRT_CELLS: i32 = 2;
+
+// Structures are drawn in cells up to this wide, out to about 8 km, where a watchtower is a
+// pixel across.
+pub(super) const STRUCTURE_MAX_CELL: i64 = 32;
 
 pub(super) struct LodBlocks {
     pub(super) size: i32,
@@ -49,7 +55,7 @@ pub(super) struct LodBlocks {
     pub(super) ground_heights: Vec<f32>,
     // how much of each padded column's ground forest covers, 0..1, or empty where trees are real
     pub(super) forest: Vec<f32>,
-    pub(super) boxes: Vec<TreeBox>,
+    pub(super) boxes: Vec<LodBox>,
     // the trees whose leaves are among the cells
     pub(super) trees: TreeTints,
 }
@@ -188,10 +194,22 @@ impl LodBlocks {
                 );
             }
         }
+        let span = (size + 1) as i64 * cell;
+        let min = I64Vec2::new(base.x, base.z) - cell;
+        let structures = if (real_trees || cell <= STRUCTURE_MAX_CELL)
+            && structures_may_reach(base.y - cell, base.y + span, lowest, highest)
+        {
+            regions.structures_near(min - STRUCTURE_REACH, min + span + cell + STRUCTURE_REACH)
+        } else {
+            Vec::new()
+        };
+        if cell <= STRUCTURE_MAX_CELL {
+            for placed in &structures {
+                boxes.extend(structure_boxes(placed, &grid, base, cell, size));
+            }
+        }
         if real_trees {
-            let span = (size + 1) as i64 * cell;
             if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
-                let min = I64Vec2::new(base.x, base.z) - cell;
                 let mut ground = GridGround {
                     grid: &grid,
                     noise,
@@ -200,11 +218,12 @@ impl LodBlocks {
                     size,
                     last: None,
                 };
-                let trees = trees_near(noise, &mut ground, min, min + span + cell);
+                let mut trees = trees_near(noise, &mut ground, min, min + span + cell);
+                clear_trees(&mut trees, &structures);
                 let canopy = (cell >= CANOPY_CELL).then(|| Canopy::new(&trees, base, cell, size));
                 if let Some(canopy) = &canopy {
                     forest = canopy.cover.clone();
-                    boxes = canopy.boxes(&ground_heights, base, cell, size);
+                    boxes.extend(canopy.boxes(&ground_heights, base, cell, size));
                 }
                 // trees in a canopy are drawn as part of it
                 let in_canopy = |tree: &Tree| {
@@ -224,7 +243,7 @@ impl LodBlocks {
                                 tree.base.as_vec3(),
                                 (tree.base + I64Vec3::new(width, tree.trunk, width)).as_vec3(),
                             );
-                            boxes.push(TreeBox {
+                            boxes.push(LodBox {
                                 min: mesh_at(min),
                                 max: mesh_at(max),
                                 block: BlockType::Log,
@@ -234,7 +253,7 @@ impl LodBlocks {
                         }
                         if cell >= BOX_CROWN_CELL {
                             for (min, max) in tree.crown_boxes(crown_layers(cell)) {
-                                boxes.push(TreeBox {
+                                boxes.push(LodBox {
                                     min: mesh_at(min.as_vec3()),
                                     max: mesh_at(max.as_vec3()),
                                     block: BlockType::Leaves,
@@ -320,10 +339,25 @@ impl LodBlocks {
         }
 
         let span = (size + 1) as i64 * cell;
+        let min = I64Vec2::new(base.x, base.z) - cell;
+        let mut structures = Vec::new();
+        if structures_may_reach(base.y - cell, base.y + span, lowest, highest) {
+            structures =
+                regions.structures_near(min - STRUCTURE_REACH, min + span + cell + STRUCTURE_REACH);
+            for placed in &structures {
+                placed.build(
+                    base,
+                    cell,
+                    (IVec3::splat(-1), IVec3::splat(size)),
+                    |x, z| heights.height(x, z).round() as i64,
+                    |coord, block| cells[Self::index(size, coord)] = block,
+                );
+            }
+        }
         let mut trees = Vec::new();
         if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
-            let min = I64Vec2::new(base.x, base.z) - cell;
             trees = trees_near(regions.noise(), &mut heights, min, min + span + cell);
+            clear_trees(&mut trees, &structures);
             for tree in &trees {
                 tree.plant(
                     base,
@@ -449,7 +483,7 @@ impl BlockSource for LodBlocks {
         self.trees.at(coord)
     }
 
-    fn tree_boxes(&self) -> &[TreeBox] {
+    fn lod_boxes(&self) -> &[LodBox] {
         &self.boxes
     }
 
@@ -588,6 +622,46 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
         &light,
     );
     meshes.has_geometry().then_some(meshes)
+}
+
+// The boxes `placed` is drawn as in a coarse node with its lowest block and cell size at `base`,
+// standing on the ground of `grid`, if its footprint's corner is in the node: one node draws
+// each structure, as each tree.
+fn structure_boxes(
+    placed: &Placed,
+    grid: &ColumnGrid,
+    base: I64Vec3,
+    cell: i64,
+    size: i32,
+) -> Vec<LodBox> {
+    let at = (placed.min - base).div_euclid(I64Vec3::splat(cell));
+    if at.cmplt(I64Vec3::ZERO).any() || at.cmpge(I64Vec3::splat(size as i64)).any() {
+        return Vec::new();
+    }
+    // the ground the node draws under its footprint's corners, which its foundation reaches down to
+    let column = |x: i64, base: i64| ((x - base).div_euclid(cell) as i32).clamp(-1, size);
+    let (min, max) = (placed.min.xz(), placed.min.xz() + placed.footprint() - 1);
+    let ground = [
+        (min.x, min.y),
+        (min.x, max.y),
+        (max.x, min.y),
+        (max.x, max.y),
+    ]
+    .map(|(x, z)| grid.height(column(x, base.x), column(z, base.z)))
+    .into_iter()
+    .fold(f64::MAX, f64::min);
+    let mesh_at = |block: I64Vec3| (block - base).as_vec3() / cell as f32 - 0.5;
+    placed
+        .boxes(cell, ground.round() as i64)
+        .into_iter()
+        .map(|(min, max, block)| LodBox {
+            min: mesh_at(min),
+            max: mesh_at(max),
+            block,
+            tint: Vec3::ONE,
+            faces: BoxFaces::NoBottom,
+        })
+        .collect()
 }
 
 // Fills the cells up column (`cx`, `cz`) of the node with its lowest block and cell size at

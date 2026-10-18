@@ -1,0 +1,220 @@
+# A ruined stone watchtower on a hilltop, written by .claude/skills/structures/watchtower.py.
+name = "watchtower"
+
+[placement]
+cell = 640
+chance = 0.6
+biomes = ["forest", "foothills"]
+min_above_sea = 12
+max_rise = 4
+hilltop = true
+
+[template]
+size = [7, 20, 7]
+floor = 1
+foundation = "cobblestone"
+palette = { c = "cobblestone", s = "stone_bricks", g = "gravel" }
+markers = { loot = [[3, 18, 3]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+ccccccc
+ccccccc
+ccccccc
+ccccccc
+ccccccc
+ccccccc
+ccccccc
+''',
+  # 1
+  '''
+ccc-ccc
+c---c-c
+c-----c
+c-cg--c
+c--g--c
+c-----c
+ccccccc
+''',
+  # 2
+  '''
+ccc-ccc
+c----cc
+c-----c
+c-----c
+c-----c
+c-----c
+ccccccc
+''',
+  # 3
+  '''
+ccccccc
+c-----c
+c----cc
+c-----c
+c-----c
+c-----c
+ccccccc
+''',
+  # 4
+  '''
+sssssss
+c-----s
+s-----s
+c----cs
+s-----s
+s-----s
+scsssss
+''',
+  # 5
+  '''
+scscscs
+s-----s
+s-----s
+s-----c
+s----cc
+s-----c
+sssssss
+''',
+  # 6
+  '''
+scs-css
+c-----s
+s-----c
+-------
+s-----s
+s----cc
+ssc-sss
+''',
+  # 7
+  '''
+sss-sss
+s-----s
+s-----s
+-------
+s-----s
+s---c-s
+sss-sss
+''',
+  # 8
+  '''
+cssssss
+s-----s
+s-----s
+s-----c
+s-----s
+s--c--s
+ssssssc
+''',
+  # 9
+  '''
+sssscss
+s-----s
+s-----s
+s-----s
+c-----s
+s-c---s
+ssssss.
+''',
+  # 10
+  '''
+cscssss
+s-----s
+s-----s
+s-----s
+s-----s
+cc----s
+ssssss.
+''',
+  # 11
+  '''
+ssssscc
+s-----c
+s-----s
+c-----s
+cc----c
+s-----s
+ssssc..
+''',
+  # 12
+  '''
+ssc-css
+s-----s
+s-----s
+-c-----
+s-----s
+s-----.
+sss-c..
+''',
+  # 13
+  '''
+scs-sss
+s-----s
+sc----s
+-------
+c-----.
+s-----.
+sss-...
+''',
+  # 14
+  '''
+scss.sc
+sc----s
+s-----.
+.-----s
+s-----.
+s-----.
+s.cc...
+''',
+  # 15
+  '''
+s.sssss
+s-c---s
+s-----.
+s-----s
+s-----.
+s-----.
+.s.c...
+''',
+  # 16
+  '''
+s.c..ss
+s--c--.
+.-----s
+s-----.
+s-----.
+s-----.
+sss....
+''',
+  # 17
+  '''
+ssscsss
+ss..sss
+csssss.
+ssssss.
+csss...
+sss....
+s.s....
+''',
+  # 18
+  '''
+ss.s.ss
+......s
+c......
+s......
+c......
+s......
+ss.....
+''',
+  # 19
+  '''
+....s.s
+.......
+c......
+.......
+c......
+.......
+s......
+''',
+]

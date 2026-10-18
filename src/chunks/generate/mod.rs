@@ -10,6 +10,7 @@ pub mod ores;
 pub mod plants;
 pub mod region;
 pub mod region_store;
+pub mod structures;
 pub mod trees;
 
 /// Height of the world in blocks.

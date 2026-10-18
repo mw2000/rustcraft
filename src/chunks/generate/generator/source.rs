@@ -39,8 +39,9 @@ pub(super) trait BlockSource {
         Vec3::ONE
     }
 
-    /// Trunks and crowns too small for the cells they stand in, drawn as boxes of their own.
-    fn tree_boxes(&self) -> &[TreeBox] {
+    /// Trunks, crowns and structures too small for the cells they stand in, drawn as boxes of
+    /// their own.
+    fn lod_boxes(&self) -> &[LodBox] {
         &[]
     }
 
@@ -58,9 +59,10 @@ pub(super) trait BlockSource {
     }
 }
 
-/// Part of a tree as a box of leaves or logs, in mesh units, for cells too wide to hold it.
+/// Part of a tree or a structure as a box of one block, in mesh units, for cells too wide to
+/// hold it.
 #[derive(Debug, Copy, Clone)]
-pub(super) struct TreeBox {
+pub(super) struct LodBox {
     pub(super) min: Vec3,
     pub(super) max: Vec3,
     pub(super) block: BlockType,
@@ -69,7 +71,7 @@ pub(super) struct TreeBox {
     pub(super) faces: BoxFaces,
 }
 
-// Which of a tree box's faces can be seen.
+// Which of a box's faces can be seen.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(super) enum BoxFaces {
     All,
@@ -259,8 +261,8 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
         self.source.leaf_tint(coord)
     }
 
-    fn tree_boxes(&self) -> &[TreeBox] {
-        self.source.tree_boxes()
+    fn lod_boxes(&self) -> &[LodBox] {
+        self.source.lod_boxes()
     }
 
     fn has_skirts(&self) -> bool {

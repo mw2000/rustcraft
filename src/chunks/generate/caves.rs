@@ -157,6 +157,12 @@ impl Caves {
         caves.0.iter().any(|&bits| bits != 0).then_some(caves)
     }
 
+    /// The highest caves reach under ground topping out at `ground` with no mouth in it, as
+    /// they do under a structure, so its floor is never carved away.
+    pub fn top_under(ground: i64) -> i64 {
+        ground - ROOF
+    }
+
     /// How high caves can reach in each column of the chunks at chunk `x`, `z`, in
     /// `ChunkColumns` order: a few blocks under the ground, well under any sea near it, and up
     /// through the surface at a cave mouth.

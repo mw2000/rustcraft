@@ -3,9 +3,11 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
+use super::caves::Caves;
 use super::generator::ground_top;
 use super::noise::NoiseGenerator;
 use super::region_store::HeightSampler;
+use super::structures::Placed;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
 
@@ -131,13 +133,30 @@ pub struct ChunkColumns {
     pub highest: i64,
     /// The highest any cave under the chunks reaches, see `cave_top`.
     pub cave_highest: i64,
+    /// The structures that could change the chunks, see `structures::STRUCTURE_REACH`.
+    pub structures: Vec<Placed>,
 }
 
 impl ChunkColumns {
-    fn sample(noise: &NoiseGenerator, heights: &mut HeightSampler, x: i64, z: i64) -> Self {
+    fn sample(
+        noise: &NoiseGenerator,
+        heights: &mut HeightSampler,
+        structures: Vec<Placed>,
+        x: i64,
+        z: i64,
+    ) -> Self {
         let size = CHUNK_SIZE as i64;
         let cells = (size * size) as usize;
-        let cave_tops = noise.caves().column_tops(heights, x, z);
+        let mut cave_tops = noise.caves().column_tops(heights, x, z);
+        // caves stay under the ground below a structure, as if there were no mouth there
+        for placed in &structures {
+            for cx in 0..size {
+                for cz in (0..size).filter(|&cz| placed.covers(x * size + cx, z * size + cz)) {
+                    let top = &mut cave_tops[Self::index(cx, cz)];
+                    *top = (*top).min(Caves::top_under(placed.lowest.min(placed.min.y)));
+                }
+            }
+        }
         let mut columns = Self {
             heights: Vec::with_capacity(cells),
             gradients: Vec::with_capacity(cells),
@@ -145,6 +164,7 @@ impl ChunkColumns {
             temperatures: Vec::with_capacity(cells),
             cave_highest: *cave_tops.iter().max().unwrap(),
             cave_tops,
+            structures,
             sky_reaches: Vec::with_capacity(cells),
             lowest: i64::MAX,
             highest: i64::MIN,
@@ -212,13 +232,13 @@ type Slot<V> = Arc<OnceLock<Arc<V>>>;
 type Slots<K, V> = HashMap<K, (Slot<V>, u64)>;
 
 // The most recently used values by key, each worked out once however many threads ask for it.
-struct Recent<K, V> {
+pub(super) struct Recent<K, V> {
     kept: usize,
     slots: Mutex<(u64, Slots<K, V>)>,
 }
 
 impl<K: Hash + Eq, V> Recent<K, V> {
-    fn new(kept: usize) -> Self {
+    pub(super) fn new(kept: usize) -> Self {
         Self {
             kept,
             slots: Mutex::new((0, HashMap::new())),
@@ -226,7 +246,7 @@ impl<K: Hash + Eq, V> Recent<K, V> {
     }
 
     // Blocks while another thread works it out, so only call from a task, never a system.
-    fn get(&self, key: K, make: impl FnOnce() -> V) -> Arc<V> {
+    pub(super) fn get(&self, key: K, make: impl FnOnce() -> V) -> Arc<V> {
         let slot = {
             let mut guard = self.slots.lock().unwrap();
             let (tick, slots) = &mut *guard;
@@ -268,16 +288,19 @@ impl Default for ColumnCache {
 
 impl ColumnCache {
     /// The columns under full-detail chunks at chunk `x`, `z`, sampling them if no chunk over
-    /// them has yet. Blocks while another thread samples them, so only call from a task.
+    /// them has yet, with the `structures` that could change them. Blocks while another thread
+    /// samples them, so only call from a task.
     pub fn chunk_columns(
         &self,
         noise: &NoiseGenerator,
         heights: &mut HeightSampler,
+        structures: impl FnOnce() -> Vec<Placed>,
         x: i64,
         z: i64,
     ) -> Arc<ChunkColumns> {
-        self.chunk_columns
-            .get((x, z), || ChunkColumns::sample(noise, heights, x, z))
+        self.chunk_columns.get((x, z), || {
+            ChunkColumns::sample(noise, heights, structures(), x, z)
+        })
     }
 
     /// The grid under `key`, sampling it if no node over the same column has yet. Blocks

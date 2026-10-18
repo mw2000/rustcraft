@@ -1630,7 +1630,7 @@ fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
             .iter()
             .filter(|b| b.faces == super::source::BoxFaces::NoBottom)
             .collect();
-        let area = |b: &&super::source::TreeBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
+        let area = |b: &&super::source::LodBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
         let drawn: f32 = canopy.iter().map(area).sum();
         // what's under crowns over the ground this node draws
         let (min, span) = (key.min_block().y as f32, 16.0 * key.cell_size() as f32);
@@ -2522,4 +2522,221 @@ fn test_plants_grow_on_the_grass_at_full_detail_and_never_in_lods() {
         }
     }
     assert!(plants > 20, "{plants} plants");
+}
+
+// The `count` structures nearest seed 3's spawn.
+fn structures_near_spawn(
+    regions: &RegionStore,
+    count: usize,
+) -> Vec<crate::chunks::generate::structures::Placed> {
+    use bevy::math::{I64Vec2, Vec3Swizzles};
+    let (x, z, _) = regions.noise().find_spawn();
+    let spawn = I64Vec2::new(x, z);
+    let mut found = regions.structures_near(spawn - 3000, spawn + 3000);
+    found.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
+    found.truncate(count);
+    assert_eq!(count, found.len());
+    found
+}
+
+// Every chunk holding any of the blocks `min..max`.
+fn chunks_over(min: I64Vec3, max: I64Vec3) -> Vec<I64Vec3> {
+    let (first, last) = (
+        min.div_euclid(I64Vec3::splat(16)),
+        (max - 1).div_euclid(I64Vec3::splat(16)),
+    );
+    (first.x..=last.x)
+        .flat_map(|x| {
+            (first.y..=last.y)
+                .flat_map(move |y| (first.z..=last.z).map(move |z| I64Vec3::new(x, y, z)))
+        })
+        .collect()
+}
+
+#[test]
+fn test_structures_stand_on_their_foundations_cleared_inside_with_no_trees_or_plants() {
+    let mut world = Generated::new(3);
+    let regions = world.regions.clone();
+    let mut filled = 0;
+    for placed in structures_near_spawn(&regions, 6) {
+        let template = &placed.structure().template;
+        let corner = placed.min - I64Vec3::Y * template.floor;
+        let footprint = placed.footprint();
+        let top = placed.bounds().1.y;
+        for x in 0..footprint.x {
+            for z in 0..footprint.y {
+                let column = corner + I64Vec3::new(x, 0, z);
+                let (cx, cz) = (column.x.div_euclid(16), column.z.div_euclid(16));
+                let ground = world.ground(cx, cz)(column.x.rem_euclid(16), column.z.rem_euclid(16));
+                let wanted =
+                    |y: i64| template.cell(placed.rotation, I64Vec3::new(x, y - corner.y, z));
+                // filled from the ground up to its floor
+                for y in ground.min(corner.y)..placed.min.y {
+                    let block = world.block(column.with_y(y));
+                    match wanted(y) {
+                        Some(cell) => assert_eq!(cell, block, "{column} at {y}"),
+                        None if y >= ground => {
+                            assert_eq!(template.foundation, block, "{column} at {y}");
+                            filled += 1;
+                        }
+                        None => {}
+                    }
+                }
+                // and over it, its own blocks with nothing else among them: the ground and what
+                // grew on it cleared away, and no tree reaching in
+                for y in placed.min.y..top + 8 {
+                    let block = world.block(column.with_y(y));
+                    assert_eq!(
+                        wanted(y).unwrap_or(BlockType::Air),
+                        block,
+                        "{column} at {y}"
+                    );
+                }
+            }
+        }
+        // the clearing round it has no trees reaching into it
+        for x in -2..footprint.x + 2 {
+            for z in -2..footprint.y + 2 {
+                for y in placed.min.y..top + 8 {
+                    let block = world.block(corner + I64Vec3::new(x, y - corner.y, z));
+                    assert!(
+                        !matches!(block, BlockType::Leaves | BlockType::Log),
+                        "{block:?}"
+                    );
+                }
+            }
+        }
+    }
+    // some stand where the ground falls away under their footing, and fill it
+    assert!(filled > 0);
+}
+
+#[test]
+fn test_structures_are_the_same_whichever_order_chunks_come_in() {
+    let (mut forwards, mut backwards) = (Generated::new(3), Generated::new(3));
+    let placed = structures_near_spawn(&forwards.regions, 1)[0];
+    let (low, high) = placed.bounds();
+    let coords = chunks_over(low - 16, high + 16);
+    for &coord in &coords {
+        forwards.chunk(coord);
+    }
+    for &coord in coords.iter().rev() {
+        let (a, b) = (forwards.chunk(coord), backwards.chunk(coord));
+        assert!(a.iter_non_air().eq(b.iter_non_air()), "chunk {coord}");
+        assert_eq!(a.roofed, b.roofed);
+    }
+}
+
+#[test]
+fn test_lods_draw_structures_as_full_detail_has_them() {
+    use super::lod::STRUCTURE_MAX_CELL;
+    use super::terrain::is_solid;
+    let mut world = Generated::new(3);
+    let regions = world.regions.clone();
+    for placed in structures_near_spawn(&regions, 4) {
+        let (low, high) = placed.bounds();
+        // level 0 is full detail itself, caves aside, and they keep under structures
+        for coord in chunks_over(low, high) {
+            let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+            for x in 0..16 {
+                for z in 0..16 {
+                    for y in 0..16 {
+                        let at = coord * 16 + I64Vec3::new(x, y, z);
+                        if placed.covers(at.x, at.z) && at.y >= low.y {
+                            let cell = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
+                            assert_eq!(world.block(at), cell, "{at}");
+                        }
+                    }
+                }
+            }
+        }
+        // in cells two blocks wide, solid where at least half the blocks are, over the ground
+        let above = placed.highest + 4;
+        let mut solid_cells = 0;
+        for coord in chunks_over(low, high)
+            .into_iter()
+            .map(|c| c.div_euclid(I64Vec3::splat(2)))
+        {
+            let key = LodKey { level: 1, coord };
+            let lod = LodBlocks::sample(&regions, key);
+            let base = key.min_block();
+            for x in 0..16 {
+                for z in 0..16 {
+                    for y in 0..16 {
+                        let min = base + I64Vec3::new(x, y, z) * 2;
+                        let over = |c: i64, from: i64, to: i64| c + 2 > from && c < to;
+                        if !(over(min.x, low.x, high.x) && over(min.z, low.z, high.z))
+                            || min.y < above
+                            || min.y >= high.y
+                        {
+                            continue;
+                        }
+                        let solid = (0..8)
+                            .map(|i| min + I64Vec3::new(i & 1, (i >> 1) & 1, i >> 2))
+                            .filter(|&b| is_solid(world.block(b)))
+                            .count();
+                        let cell = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
+                        assert_eq!(solid >= 4, is_solid(cell), "cell at {min} has {solid} of 8");
+                        solid_cells += is_solid(cell) as usize;
+                    }
+                }
+            }
+        }
+        assert!(solid_cells > 20, "only {solid_cells} solid cells");
+        // and from cells four wide, as boxes as tall and as wide as it is
+        let template = &placed.structure().template;
+        let corner = placed.min - I64Vec3::Y * template.floor;
+        let tallest = (0..template.size.y)
+            .filter(|&y| {
+                (0..template.size.x).any(|x| {
+                    (0..template.size.z).any(|z| {
+                        template
+                            .cell(0, I64Vec3::new(x, y, z))
+                            .is_some_and(|b| b != BlockType::Air)
+                    })
+                })
+            })
+            .max()
+            .unwrap();
+        let chunk = ChunkCoordinate::containing(placed.min);
+        for level in 2..=6 {
+            let key = LodKey::containing(chunk, level);
+            let (base, cell) = (key.min_block().as_vec3(), key.cell_size() as f32);
+            let lod = LodBlocks::sample(&regions, key);
+            let boxes: Vec<_> = lod
+                .boxes
+                .iter()
+                .filter(|b| matches!(b.block, BlockType::Cobblestone | BlockType::StoneBricks))
+                .map(|b| ((b.min + 0.5) * cell + base, (b.max + 0.5) * cell + base))
+                .collect();
+            if key.cell_size() > STRUCTURE_MAX_CELL {
+                assert!(boxes.is_empty(), "level {level}");
+                continue;
+            }
+            let (min, max) = boxes
+                .iter()
+                .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), (a, b)| {
+                    (lo.min(*a), hi.max(*b))
+                });
+            let footprint = placed.footprint();
+            let wanted_max = Vec3::new(
+                (placed.min.x + footprint.x) as f32,
+                (corner.y + tallest + 1) as f32,
+                (placed.min.z + footprint.y) as f32,
+            );
+            assert!(
+                (max - wanted_max).abs().max_element() < 1e-3,
+                "level {level}: {max} not {wanted_max}"
+            );
+            assert!(
+                (min.x - placed.min.x as f32).abs() < 1e-3
+                    && (min.z - placed.min.z as f32).abs() < 1e-3
+            );
+            assert!(
+                min.y <= corner.y as f32,
+                "level {level} stands at {}",
+                min.y
+            );
+        }
+    }
 }

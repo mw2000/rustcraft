@@ -26,7 +26,7 @@ pub(super) struct MeshBuffers {
     pub(super) grass_sides: Vec<(usize, f32)>,
     // the plants' vertices, which sway by their tops, see `foliage.wesl`
     pub(super) plants: Range<usize>,
-    // where tree boxes start and how they draw, which is on their own terms
+    // where the boxes of trees and structures start and how they draw, which is on their own terms
     pub(super) boxes: Option<(usize, f32)>,
 }
 

@@ -132,23 +132,20 @@ pub(super) fn mesh_blocks(
         opaque.vertices.len(),
         if box_holes { TEXTURED } else { TEXTURED_SOLID },
     ));
-    for tree_box in source.tree_boxes() {
-        let (centre, extent) = (
-            (tree_box.min + tree_box.max) / 2.0,
-            tree_box.max - tree_box.min,
-        );
-        let tint = if tree_box.block.lod_tile().tinted() {
-            grass_tint.at(centre) * tree_box.tint
+    for lod_box in source.lod_boxes() {
+        let (centre, extent) = ((lod_box.min + lod_box.max) / 2.0, lod_box.max - lod_box.min);
+        let tint = if lod_box.block.lod_tile().tinted() {
+            grass_tint.at(centre) * lod_box.tint
         } else {
             Vec3::ONE
         };
-        let faces = match tree_box.faces {
+        let faces = match lod_box.faces {
             BoxFaces::All => &CUBE[..],
             BoxFaces::NoBottom => &CUBE[..5],
             BoxFaces::Sides => &CUBE[..4],
         };
         for face in faces {
-            let tile = tree_box.block.tile(Face::of_normal_y(face[0].normal[1]));
+            let tile = lod_box.block.tile(Face::of_normal_y(face[0].normal[1]));
             let positions = std::array::from_fn(|j| {
                 (centre + Vec3::from(face[j].position) * extent).to_array()
             });

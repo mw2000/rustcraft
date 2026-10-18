@@ -1,5 +1,5 @@
 use super::lod::LodBlocks;
-use super::source::{BoxFaces, TreeBox};
+use super::source::{BoxFaces, LodBox};
 use crate::block::BlockType;
 use crate::chunks::generate::trees::Tree;
 use crate::chunks::generate::trees::TREE_REACH;
@@ -122,7 +122,7 @@ impl Canopy {
         base: I64Vec3,
         cell: i64,
         size: i32,
-    ) -> Vec<TreeBox> {
+    ) -> Vec<LodBox> {
         let n = size as usize;
         let step = (cell / CANOPY_STEPS) as f64;
         let ceiling = base.y + size as i64 * cell;
@@ -179,7 +179,7 @@ impl Canopy {
                 );
                 // from a little under the ground, so no gap shows on slopes
                 let bottom = mesh_y(lowest as f64 - 2.0);
-                boxes.push(TreeBox {
+                boxes.push(LodBox {
                     min: Vec3::new(near.x, bottom, near.y),
                     max: Vec3::new(far.x, mesh_y(steps as f64 * step).max(bottom + 0.1), far.y),
                     block: BlockType::Leaves,

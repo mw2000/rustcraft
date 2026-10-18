@@ -7,7 +7,9 @@ use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use super::structures::{Placed, Placements, STRUCTURE_REACH};
 use super::trees::TreeGround;
+use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
 
 // The fewest regions kept, about 400KB each.
@@ -66,6 +68,7 @@ pub struct RegionStore {
     // which slots exist, held only briefly: never while a region is computed
     lru: RwLock<RegionLru>,
     columns: ColumnCache,
+    placements: Placements,
 }
 
 impl RegionStore {
@@ -74,6 +77,7 @@ impl RegionStore {
             noise,
             lru: RwLock::new(RegionLru::new(RESIDENT_REGION_CAP)),
             columns: ColumnCache::default(),
+            placements: Placements::default(),
         }
     }
 
@@ -90,7 +94,21 @@ impl RegionStore {
     /// What full-detail chunks at chunk `x`, `z` take from each of their columns, shared by all
     /// the chunks stacked there. Blocks while it's sampled, so only call from a task.
     pub fn chunk_columns(&self, heights: &mut HeightSampler, x: i64, z: i64) -> Arc<ChunkColumns> {
-        self.columns.chunk_columns(&self.noise, heights, x, z)
+        let structures = || {
+            let min = I64Vec2::new(x, z) * CHUNK_SIZE as i64;
+            self.structures_near(
+                min - STRUCTURE_REACH,
+                min + CHUNK_SIZE as i64 - 1 + STRUCTURE_REACH,
+            )
+        };
+        self.columns
+            .chunk_columns(&self.noise, heights, structures, x, z)
+    }
+
+    /// Every structure whose footprint overlaps the columns `min..=max` (x, z), see
+    /// `Placements::near`. Blocks while another thread places one, so only call from a task.
+    pub fn structures_near(&self, min: I64Vec2, max: I64Vec2) -> Vec<Placed> {
+        self.placements.near(&self.noise, min, max)
     }
 
     /// The lowest and highest ground under a coarse LOD node, if a node over the same

@@ -1,4 +1,4 @@
-use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3, Vec2, Vec3};
+use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3, Vec2, Vec3, Vec3Swizzles};
 
 use super::biome::BiomeId;
 use super::generator::column_block;
@@ -68,7 +68,7 @@ const THICK_TRUNK: i64 = 12;
 const COVERAGE_CELL: i64 = 4;
 const COVERAGE_POINTS: usize = 7;
 /// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
-/// is. Meshing draws it as a thin box instead, see `generator::TreeBox`.
+/// is. Meshing draws it as a thin box instead, see `generator::LodBox`.
 pub const THIN_TRUNK_CELL: i64 = 4;
 // How far in leaves are nibbled from the edge of a crown.
 const NIBBLE: f64 = 0.9;
@@ -303,6 +303,16 @@ impl Tree {
                 )
             })
             .collect()
+    }
+
+    /// Whether any of the tree is over the columns `min..max` (x, z), seen from above: the same
+    /// at every level of detail, as only the height of a tree's base differs between them.
+    pub fn overhangs(&self, min: I64Vec2, max: I64Vec2) -> bool {
+        let (low, high) = self.leaf_bounds();
+        let base = self.base.xz();
+        let low = base + low.xz().min(I64Vec2::ZERO);
+        let high = base + high.xz().max(I64Vec2::splat(self.width() - 1));
+        low.cmplt(max).all() && high.cmpge(min).all()
     }
 
     // Whole-block offsets from the trunk's base that every point `in_leaves` lies within.

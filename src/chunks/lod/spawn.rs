@@ -6,6 +6,7 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::columns::COARSE_CELL;
 use crate::chunks::generate::generator::generate_lod_mesh;
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::structures::STRUCTURE_HEIGHT;
 use crate::chunks::generate::trees::TREE_HEIGHT;
 use crate::chunks::generate::trees::TREE_REACH;
 use crate::chunks::generate::WATER_LEVEL;
@@ -104,8 +105,9 @@ pub fn spawn_lods(
 // Whether `key` is known to have nothing to draw, going by regions or coarse columns
 // already sampled - never samples one, so it can run on the main thread. That's when the terrain its mesh
 // would sample is all below it with only air or only water above, or all above it so it's
-// buried in rock. Only knows about generated terrain, since LOD meshes are built from it
-// alone - if they ever show player edits or caves, those must stop counting as empty here.
+// buried in rock. Only knows about generated terrain, with the trees and structures standing on
+// it, since LOD meshes are built from them alone - if they ever show player edits or caves,
+// those must stop counting as empty here.
 pub(super) fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
     let min = key.min_block();
     let cell = key.cell_size();
@@ -125,7 +127,8 @@ pub(super) fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
     };
     let (bottom, top) = (min.y - cell, min.y + width + cell);
     // coarse nodes' canopies stand at least a cell tall
-    let above_terrain = bottom > highest.round() as i64 + 1 + TREE_HEIGHT.max(cell);
+    let standing = TREE_HEIGHT.max(STRUCTURE_HEIGHT).max(cell);
+    let above_terrain = bottom > highest.round() as i64 + 1 + standing;
     let in_air = bottom > WATER_LEVEL;
     let under_water = top < WATER_LEVEL - 1;
     let buried = top < lowest.round() as i64 - 1;

@@ -460,6 +460,37 @@ fn test_known_empty_nodes_have_nothing_to_mesh() {
 }
 
 #[test]
+fn test_nodes_drawing_a_structure_are_not_known_empty() {
+    use crate::chunks::generate::{
+        generator::generate_lod_mesh, noise::NoiseGenerator, region_store::RegionStore,
+    };
+    use bevy::math::{I64Vec2, Vec3Swizzles};
+    use std::sync::Arc;
+
+    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))));
+    let (x, z, _) = regions.noise().find_spawn();
+    let spawn = I64Vec2::new(x, z);
+    let mut structures = regions.structures_near(spawn - 3000, spawn + 3000);
+    structures.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
+    for placed in structures.iter().take(4) {
+        let top = placed.bounds().1 - 1;
+        for level in 1..=5 {
+            // the node holding its floor draws it, and those over it may draw some of it
+            let floor = LodKey::containing(ChunkCoordinate::containing(placed.min), level);
+            let over = LodKey::containing(ChunkCoordinate::containing(top), level);
+            assert!(generate_lod_mesh(regions.clone(), floor).is_some());
+            for key in [floor, over] {
+                let meshed = generate_lod_mesh(regions.clone(), key).is_some();
+                assert!(
+                    !(meshed && super::spawn::known_empty(key, &regions)),
+                    "{key:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn test_empty_loaded_chunks_neither_cover_nor_get_replaced() {
     let anchor = chunk(0, 4, 0);
     let layout = layout(2);
