@@ -3,15 +3,14 @@ use bevy::prelude::*;
 
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
-use crate::chunks::chunk_loader::apply_edits;
 use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
-use crate::edits::EditBlock;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
-use crate::player::{Player, PlayerLook, BODY, EYE_HEIGHT};
+use crate::player::{Player, PlayerLook, EYE_HEIGHT};
+use crate::protocol::RequestEdit;
 use crate::world::World;
 
 /// How far from the eye a block can be reached, in blocks.
@@ -22,8 +21,8 @@ const OUTLINE_SIZE: f32 = 1.004;
 const OUTLINE_COLOUR: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
 
 /// Looking at blocks, outlining the one looked at, and breaking, placing and picking blocks
-/// with the mouse (§5.1). None of it happens while the game's paused, the block picker's up or
-/// the command bar's open.
+/// with the mouse (§5.1), breaking and placing as requests to the server. None of it happens
+/// while the game's paused, the block picker's up or the command bar's open.
 pub struct InteractionPlugin;
 
 impl Plugin for InteractionPlugin {
@@ -32,10 +31,9 @@ impl Plugin for InteractionPlugin {
             Update,
             (target_block, (outline_target, use_target))
                 .chain()
-                // from where the player is this frame, and edits are made the same frame
+                // from where the player is this frame
                 .after(player_move)
                 .after(player_look)
-                .before(apply_edits)
                 .run_if(in_state(GameState::Playing))
                 .run_if(command_bar_closed),
         );
@@ -135,33 +133,37 @@ fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {
 }
 
 // Left click breaks the block looked at, right click places the selected block in the hotbar
-// against the face looked at, and middle click picks the block looked at into the hotbar.
+// against the face looked at, and middle click picks the block looked at into the hotbar. The
+// server decides whether a block can go where it's placed: into air or water, which it
+// replaces, and never into a player.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut player: Query<(&Transform, &GameMode, &mut Hotbar), With<Player>>,
-    mut edits: MessageWriter<EditBlock>,
+    mut player: Query<(&GameMode, &mut Hotbar), With<Player>>,
+    mut requests: MessageWriter<RequestEdit>,
+    mut seq: Local<u32>,
 ) {
     let Some(hit) = target.0 else {
         return;
     };
-    let (feet, mode, mut hotbar) = player.single_mut().expect("player does not exist");
+    let (mode, mut hotbar) = player.single_mut().expect("player does not exist");
+    let mut request = |block, to| {
+        *seq = seq.wrapping_add(1);
+        requests.write(RequestEdit {
+            block,
+            to,
+            seq: *seq,
+        });
+    };
     // at once in either mode, until M1.2 gives survival breaking times and drops
     if mouse.just_pressed(MouseButton::Left) {
-        edits.write(EditBlock {
-            block: hit.block,
-            to: BlockType::Air,
-        });
+        request(hit.block, BlockType::Air);
     }
     if mouse.just_pressed(MouseButton::Right) && hit.face != I64Vec3::ZERO {
-        let block = hit.block + hit.face;
-        // into air or water, which it replaces, and never into the player
-        if !world.get_block_at(block).is_solid() && !overlaps(BODY, feet.translation, block) {
-            // never used up, until M1.1 has survival take it from the slot
-            if let Some(held) = hotbar.held() {
-                edits.write(EditBlock { block, to: held });
-            }
+        // never used up, until M1.1 has survival take it from the slot
+        if let Some(held) = hotbar.held() {
+            request(hit.block + hit.face, held);
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
@@ -254,17 +256,25 @@ mod tests {
     }
 
     mod clicks {
+        use bevy::asset::Handle;
         use bevy::ecs::message::Messages;
         use bevy::math::I64Vec3;
         use bevy::prelude::*;
+        use bevy::state::app::StatesPlugin;
+        use bevy_replicon::RepliconPlugins;
 
         use super::super::{use_target, Hit, Target};
         use crate::block::BlockType;
         use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
-        use crate::edits::EditBlock;
+        use crate::chunks::chunk_loader::ChunkLoader;
+        use crate::chunks::group::BuildChunkGroup;
+        use crate::chunks::lod::{LodKey, LodLayout};
+        use crate::client::ClientPlugin;
         use crate::game_mode::GameMode;
         use crate::hotbar::Hotbar;
         use crate::player::Player;
+        use crate::protocol::{EditRejected, ProtocolPlugin, RequestEdit};
+        use crate::server::ServerPlugin;
 
         // Looking down at the top of a block of sand at the origin, from `feet`.
         fn app(feet: Vec3, mode: GameMode) -> App {
@@ -273,7 +283,7 @@ mod tests {
             world.edit(I64Vec3::ZERO, BlockType::Sand);
             let mut app = App::new();
             app.add_plugins(MinimalPlugins)
-                .add_message::<EditBlock>()
+                .add_message::<RequestEdit>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .insert_resource(world)
                 .insert_resource(Target(Some(Hit {
@@ -286,15 +296,46 @@ mod tests {
             app
         }
 
+        // The same, played in singleplayer, with the server and client in the App and the
+        // group of chunks at the origin drawn.
+        fn played(feet: Vec3) -> App {
+            let mut app = app(feet, GameMode::Creative);
+            app.add_plugins((
+                StatesPlugin,
+                RepliconPlugins,
+                ProtocolPlugin,
+                ServerPlugin,
+                ClientPlugin,
+            ));
+            let height = app.world().resource::<crate::world::World>().height;
+            let mut loader = ChunkLoader::new(
+                LodLayout::new(32, 128, 2),
+                height,
+                false,
+                Handle::default(),
+                Handle::default(),
+            );
+            // all of them, as a group is only rebuilt once every chunk in it has loaded
+            for chunk in LodKey::containing(ChunkCoordinate(I64Vec3::ZERO), 1).chunks() {
+                loader.track(chunk, app.world_mut().spawn_empty().id());
+            }
+            app.insert_resource(loader).finish();
+            app
+        }
+
         const AWAY: Vec3 = Vec3::new(3.5, 1.0, 0.5);
 
-        fn click(app: &mut App, button: MouseButton) -> Vec<EditBlock> {
+        fn press(app: &mut App, button: MouseButton) {
             let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
             mouse.release_all();
             mouse.clear();
             mouse.press(button);
+        }
+
+        fn click(app: &mut App, button: MouseButton) -> Vec<RequestEdit> {
+            press(app, button);
             app.update();
-            let mut messages = app.world_mut().resource_mut::<Messages<EditBlock>>();
+            let mut messages = app.world_mut().resource_mut::<Messages<RequestEdit>>();
             messages.drain().collect()
         }
 
@@ -306,15 +347,15 @@ mod tests {
         }
 
         #[test]
-        fn test_left_click_breaks_and_right_click_places_against_the_face() {
+        fn test_left_click_asks_to_break_and_right_click_to_place_against_the_face() {
             let mut app = app(AWAY, GameMode::Creative);
-            let at = |block, to| vec![EditBlock { block, to }];
+            let at = |block, to, seq| vec![RequestEdit { block, to, seq }];
             assert_eq!(
-                at(I64Vec3::ZERO, BlockType::Air),
+                at(I64Vec3::ZERO, BlockType::Air, 1),
                 click(&mut app, MouseButton::Left)
             );
             assert_eq!(
-                at(I64Vec3::Y, BlockType::Stone),
+                at(I64Vec3::Y, BlockType::Stone, 2),
                 click(&mut app, MouseButton::Right)
             );
         }
@@ -323,7 +364,7 @@ mod tests {
         fn test_placing_takes_the_selected_slots_block() {
             let mut app = app(AWAY, GameMode::Creative);
             hotbar(&mut app).selected = 3;
-            let to = |edits: Vec<EditBlock>| edits.iter().map(|edit| edit.to).collect::<Vec<_>>();
+            let to = |requests: Vec<RequestEdit>| requests.iter().map(|r| r.to).collect::<Vec<_>>();
             assert_eq!(
                 vec![BlockType::Bricks],
                 to(click(&mut app, MouseButton::Right))
@@ -334,9 +375,33 @@ mod tests {
         }
 
         #[test]
+        fn test_a_click_changes_the_world_and_queues_its_redraw_in_the_same_frame() {
+            let mut app = played(AWAY);
+            press(&mut app, MouseButton::Right);
+            // the request, the server's checks and the start of rebuilding the meshes all
+            // happen in the click's frame
+            app.update();
+            let world = app.world().resource::<crate::world::World>();
+            assert_eq!(BlockType::Stone, world.get_block_at(I64Vec3::Y));
+            let drawn = LodKey::containing(ChunkCoordinate(I64Vec3::ZERO), 1);
+            let loader = app.world().resource::<ChunkLoader>();
+            assert!(loader.rebuilding.is_empty());
+            let group = loader
+                .group_entity(drawn)
+                .expect("the group isn't being built");
+            assert!(app.world().entity(group).contains::<BuildChunkGroup>());
+        }
+
+        #[test]
         fn test_nothing_is_placed_where_the_player_stands() {
-            let mut app = app(Vec3::new(0.5, 1.0, 0.5), GameMode::Creative);
-            assert!(click(&mut app, MouseButton::Right).is_empty());
+            let mut app = played(Vec3::new(0.5, 1.0, 0.5));
+            press(&mut app, MouseButton::Right);
+            app.update();
+            let world = app.world().resource::<crate::world::World>();
+            assert_eq!(BlockType::Air, world.get_block_at(I64Vec3::Y));
+            assert!(app.world().resource::<ChunkLoader>().rebuilding.is_empty());
+            let rejected = app.world().resource::<Messages<EditRejected>>();
+            assert_eq!(1, rejected.len());
         }
 
         #[test]

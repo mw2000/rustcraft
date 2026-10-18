@@ -178,6 +178,21 @@ impl BlockType {
     }
 }
 
+// By name, so a block means the same to every save and every game version that knows it.
+impl serde::Serialize for BlockType {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Self::from_name(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("there's no block called {name}")))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum Face {
     Top,
@@ -258,6 +273,15 @@ mod tests {
             assert_eq!(Some(block), BlockType::from_name(name));
         }
         assert_eq!(None, BlockType::from_name("Stone"));
+    }
+
+    #[test]
+    fn test_blocks_are_sent_and_saved_by_name() {
+        let bytes = postcard::to_stdvec(&BlockType::IronOre).unwrap();
+        assert_eq!(b"\x08iron_ore", bytes.as_slice());
+        assert_eq!(BlockType::IronOre, postcard::from_bytes(&bytes).unwrap());
+        let unknown = postcard::to_stdvec("mithril").unwrap();
+        assert!(postcard::from_bytes::<BlockType>(&unknown).is_err());
     }
 
     #[test]

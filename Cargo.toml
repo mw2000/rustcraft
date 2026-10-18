@@ -21,6 +21,8 @@ bevy = { version = "0.20", default-features = false, features = [
     "std", "bevy_gilrs", "bevy_winit", "bevy_clipboard", "default_font", "multi_threaded", "x11", "custom_cursor",
     "common_api", "3d_bevy_render", "ui_api", "ui_bevy_render", "bevy_ui_widgets", "ui_picking",
 ] }
+# client/server messages and replication (D-1), with no transport until M0.6
+bevy_replicon = { version = "=0.45.2", default-features = false, features = ["client", "server"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
 
 [dev-dependencies]

@@ -1,20 +1,10 @@
 use bevy::{
-    ecs::message::Message,
     math::{I64Vec3, U16Vec3},
     platform::collections::{HashMap, HashSet},
 };
 
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
-
-/// A request to change the block at `block` to `to`, air to break it. Every change to the world
-/// goes through one of these, so whatever owns the world, now `apply_edits` and later the
-/// server (INV-4), decides what happens.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EditBlock {
-    pub block: I64Vec3,
-    pub to: BlockType,
-}
 
 /// The edit layer (§4.2): every block players have changed, air included, kept by chunk apart
 /// from the generated world. The world is its generated blocks with these on top, and nothing

@@ -13,11 +13,10 @@ use bevy::{
     ecs::{schedule::IntoScheduleConfigs, system::Commands},
 };
 
-use crate::edits::EditBlock;
 use crate::settings::{DebugSettings, RendererSettings};
 use chunk_loader::{
-    apply_edits, gather_chunks, generate_chunks, load_chunks, mark_chunks,
-    mesh_nearing_sealed_chunks, unload_chunks, ChunkLoader,
+    gather_chunks, generate_chunks, load_chunks, mark_chunks, mesh_nearing_sealed_chunks,
+    unload_chunks, ChunkLoader,
 };
 use fade::{apply_fades, FadeMaterials};
 use group::{build_groups, load_groups, rebuild_groups};
@@ -26,18 +25,18 @@ use lod::{
 };
 use material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 
-/// Loads, meshes and unloads full-detail chunks and LOD terrain around the camera, and makes
-/// the edits asked for with `EditBlock`.
+/// Loads, meshes and unloads full-detail chunks and LOD terrain around the camera, and
+/// rebuilds the meshes edits change.
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<EditBlock>().add_systems(
+        app.add_systems(
             Update,
             (
                 // ahead of merging groups as they load, which would only merge what an edit
                 // has made out of date
-                (apply_edits, mesh_nearing_sealed_chunks, rebuild_groups)
+                (mesh_nearing_sealed_chunks, rebuild_groups)
                     .chain()
                     .before(build_groups),
                 (

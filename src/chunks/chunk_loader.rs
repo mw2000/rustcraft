@@ -8,7 +8,6 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        message::MessageReader,
         query::{Or, With, Without},
         system::{Commands, Query, Res, ResMut},
     },
@@ -26,7 +25,6 @@ use super::{
     lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
     material::{ChunkMaterial, WaterMaterial},
 };
-use crate::edits::EditBlock;
 use crate::world::{Reroofed, World};
 
 #[derive(Component)]
@@ -74,7 +72,7 @@ pub struct ChunkLoader {
     // groups with a held mesh, not yet being merged
     pub(super) waiting: HashSet<LodKey>,
     // groups with an edit in them since they were meshed, see `group::rebuild_groups`
-    pub(super) rebuilding: HashSet<LodKey>,
+    pub(crate) rebuilding: HashSet<LodKey>,
     // groups to rebuild for the sealed chunks the camera has come near, see
     // `mesh_nearing_sealed_chunks`
     pub(super) revealing: HashSet<LodKey>,
@@ -157,27 +155,19 @@ impl ChunkLoader {
     }
 
     #[cfg(test)]
-    pub(super) fn track(&mut self, coord: ChunkCoordinate, entity: Entity) {
+    pub(crate) fn track(&mut self, coord: ChunkCoordinate, entity: Entity) {
         self.chunk_to_entity.insert(coord, entity);
     }
 }
 
-/// Makes the edits asked for, and has every loaded group whose mesh they change rebuilt.
-pub fn apply_edits(
-    mut edits: MessageReader<EditBlock>,
-    mut world: ResMut<World>,
-    mut chunk_loader: ResMut<ChunkLoader>,
-) {
-    for edit in edits.read() {
-        if !world.edit(edit.block, edit.to) {
-            continue;
-        }
-        chunk_loader.rebuild(chunks_meshed_with(edit.block));
-    }
-    chunk_loader.rebuild_reroofed(&mut world);
-}
-
 impl ChunkLoader {
+    /// Has every loaded group rebuilt whose mesh a change to the block at `block` reaches,
+    /// along with those lit through roofs the world's edits have changed.
+    pub fn rebuild_edited(&mut self, world: &mut World, block: I64Vec3) {
+        self.rebuild(chunks_meshed_with(block));
+        self.rebuild_reroofed(world);
+    }
+
     // Has the loaded groups holding `chunks` rebuilt; one not loaded yet has the edits put in as
     // it's generated.
     fn rebuild(&mut self, chunks: impl IntoIterator<Item = ChunkCoordinate>) {

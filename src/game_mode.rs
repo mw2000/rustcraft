@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::block::BlockType;
 use crate::player::{Movement, Player};
 
 /// How a player plays (§4.5), one each so players in a world can differ.
@@ -35,6 +36,12 @@ impl GameMode {
     /// middle-clicking one in the world, and never used up by placing it.
     pub fn has_every_block(self) -> bool {
         self == GameMode::Creative
+    }
+
+    /// Whether the player may place `block`: any solid block in either mode, until M1.1 has
+    /// survival place only what it carries.
+    pub fn can_place(self, block: BlockType) -> bool {
+        block.is_solid()
     }
 }
 

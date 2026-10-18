@@ -465,10 +465,11 @@ mod tests {
         use super::super::{load_groups, rebuild_groups, BuildChunkGroup};
         use crate::block::BlockType;
         use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
-        use crate::chunks::chunk_loader::{apply_edits, Chunk, ChunkLoader};
+        use crate::chunks::chunk_loader::{Chunk, ChunkLoader};
         use crate::chunks::fade::Fade;
         use crate::chunks::lod::{LodKey, LodLayout};
-        use crate::edits::EditBlock;
+        use crate::client::edits::apply_block_changes;
+        use crate::protocol::BlockChanged;
         use crate::world::World;
 
         // The world with the chunks in the box from `min` to `max` loaded, empty, and settled.
@@ -505,18 +506,20 @@ mod tests {
         fn test_an_edit_rebuilds_the_loaded_groups_whose_meshes_it_changes() {
             let mut ecs = bevy::ecs::world::World::new();
             loaded(&mut ecs, I64Vec3::new(-1, 19, -1), I64Vec3::new(1, 21, 1));
-            ecs.init_resource::<bevy::ecs::message::Messages<EditBlock>>();
+            ecs.init_resource::<bevy::ecs::message::Messages<BlockChanged>>();
             // in the top corner of chunk (0, 20, 0), against the chunks to +x, +y and -z
-            ecs.write_message(EditBlock {
+            ecs.write_message(BlockChanged {
                 block: I64Vec3::new(15, 20 * 16 + 15, 0),
                 to: BlockType::Stone,
+                by: None,
             });
             // and one in a chunk not loaded, which is put in when it's generated
-            ecs.write_message(EditBlock {
+            ecs.write_message(BlockChanged {
                 block: I64Vec3::new(400, 20 * 16, 400),
                 to: BlockType::Stone,
+                by: None,
             });
-            ecs.run_system_once(apply_edits).unwrap();
+            ecs.run_system_once(apply_block_changes).unwrap();
             // the chunk below too, whose light falls through the chunk above it
             let expected: HashSet<LodKey> = [
                 group(0, 9, -1),
@@ -539,8 +542,11 @@ mod tests {
             let mut app = App::new();
             app.add_plugins((MinimalPlugins, AssetPlugin::default()))
                 .init_asset::<Mesh>()
-                .add_message::<EditBlock>()
-                .add_systems(Update, (apply_edits, rebuild_groups, load_groups).chain());
+                .add_message::<BlockChanged>()
+                .add_systems(
+                    Update,
+                    (apply_block_changes, rebuild_groups, load_groups).chain(),
+                );
             // group (0, 10, 0) and every chunk round it
             loaded(
                 app.world_mut(),
@@ -549,9 +555,10 @@ mod tests {
             );
             let key = group(0, 10, 0);
             let edit = |app: &mut App, to| {
-                app.world_mut().write_message(EditBlock {
+                app.world_mut().write_message(BlockChanged {
                     block: I64Vec3::new(5, 20 * 16 + 5, 5),
                     to,
+                    by: None,
                 });
                 for _ in 0..1000 {
                     app.update();

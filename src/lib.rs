@@ -1,5 +1,6 @@
 pub mod block;
 pub mod chunks;
+pub mod client;
 pub mod clock;
 pub mod clouds;
 pub mod collision;
@@ -14,7 +15,9 @@ pub mod interaction;
 pub mod menu;
 pub mod picker;
 pub mod player;
+pub mod protocol;
 pub mod save;
+pub mod server;
 pub mod settings;
 pub mod sky;
 pub mod sky_dome;

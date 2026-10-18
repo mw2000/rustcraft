@@ -76,7 +76,8 @@ water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building 
 cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace).
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
-`src/interaction.rs`). Worlds are saved as their edits and the player (`src/save/`).
+`src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
+`src/client/`). Worlds are saved as their edits and the player (`src/save/`).
 
 Not there yet: inventory, crafting, health, ores in the world, block
 light, structures, mobs, networking.
@@ -149,7 +150,8 @@ The world's state beyond the seed (INV-1).
   chunk down, and covers faces, ambient occlusion and shores across borders. Light is worked out
   per mesh from the chunk and the one above, so a shaft or a roof changes light that far down.
   Rebuilds mesh from the world's blocks on the compute pool, ahead of loading work, and swap the
-  new mesh onto the same entity with no fade (`group::rebuild_groups`, `load_groups`).
+  new mesh onto the same entity with no fade (`group::rebuild_groups`, `load_groups`). Since
+  M0.5b the server makes edits and the client queues the rebuilds (§4.4).
 - Edits are what's saved (§4.3) and what's sent over the network (§4.4). Generated blocks are
   neither.
 - Chunks with heavy edits (a big build) can switch to storing their whole contents rather than a
@@ -262,6 +264,41 @@ The world's state beyond the seed (INV-1).
   holds the murk and underwater effects. The clock is `src/clock.rs` (`ClockPlugin`, and
   `wind_clock` for `[` and `]` on the client), apart from `move_sky`, which only places the sun
   and moon. `tests/headless.rs` runs saving, game modes and the clock on `MinimalPlugins`.
+- **Built (M0.5b):** `bevy_replicon =0.45.2` with only its `client` and `server` features, so
+  no transport and no `bevy_world_serialization`; it adds five small crates (replicon,
+  `postcard-derive`, `deterministic-hash`, `smallbitvec`, `xxhash-rust`) and no Bevy features.
+  The game adds `RepliconPlugins`, `ProtocolPlugin` (`src/protocol.rs`, which registers every
+  message in one order), `ServerPlugin` (`src/server/`) and `ClientPlugin` (`src/client/`).
+  With no transport `ClientState` stays `Disconnected` and `ServerState` `Stopped`, so
+  `is_authority` holds and replicon passes messages across in `PostUpdate`: what's written as
+  `RequestEdit` comes out as `FromClient<RequestEdit>` from `ClientId::Server` in
+  `ClientSystems::Send`, and `ToClients<BlockChanged>` comes out as `BlockChanged` in
+  `ServerSystems::Send`. Headless Apps also need `StatesPlugin`, and tests `app.finish()`, where
+  replicon sets up its message systems. Blocks travel by name (`BlockType`'s serde), positions
+  as `I64Vec3`, and `by`'s `ClientId` as its entity's bits, or none for the server.
+  - `use_target` sends `RequestEdit { block, to, seq }`, `seq` counting up per request.
+    `server::edits::receive_edits` runs between those two sets, so the request, the check, the
+    change to `World` and the start of the group rebuild all happen in the click's frame (one
+    `app.update()`, pinned by a test in `interaction`), as soon as in M0.2: the client runs
+    `rebuild_groups` again in `PostUpdate`, straight after queueing, as well as in `Update`
+    for sealed chunks the camera nears.
+  - The server refuses an edit, answering `EditRejected { seq, block, actual }` to the requester
+    alone, if the client is over its allowance (a burst of 20 refilled at 20 a second, above the
+    ~15 clicks a second anyone manages, and counting refused requests), the block is beyond the
+    world's layers or in a chunk not loaded, the block's nearest point is further than `REACH`
+    plus 1 from the requester's eye, a place is into a solid block, of a block the player's
+    `GameMode::can_place` refuses (any solid block, in either mode until M1.1), or into any
+    player's body (`overlaps`), or the block's already what's asked for. Otherwise it calls
+    `World::edit` (which records the edit for saving, as before) and sends
+    `BlockChanged { block, to, by: Some((client, seq)) }` to every client.
+  - The requester's player is the one player until M0.5c gives players their `ClientId`
+    (`player_of`). `EditBlock` and `apply_edits` are gone: `client::edits::apply_block_changes`
+    calls `World::edit`, a no-op in one App, and always queues the rebuilds
+    (`ChunkLoader::rebuild_edited`). Nothing reads `EditRejected` until prediction (M0.6).
+  - Deviations: `SharedPlugin` is for now just `ProtocolPlugin`, as nothing else shared needs
+    a plugin yet. Both sides run in `PostUpdate` rather than after replicon's `Receive` sets in
+    `PreUpdate`, which would have cost singleplayer two frames; over a network messages arrive
+    in `PreUpdate`, so the same systems still see them that frame.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
   `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
@@ -300,8 +337,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - **Built (M0.2):** `src/interaction.rs` steps a ray from the eye through the blocks it crosses
   (a DDA), stopping at the first solid one within 5 blocks, so it passes through air and water,
   and outlines it with a gizmo. Left click breaks it at once, right click places the hotbar's
-  selected block against the face looked at, into air or water but not into the player's body,
-  and middle click picks the block looked at into the hotbar (§5.2). None of it happens while
+  selected block against the face looked at, into air or water but not into the player's body
+  (checked by the server since M0.5b, §4.4), and middle click picks the block looked at into the hotbar (§5.2). None of it happens while
   paused, in the block picker or with the command bar open.
 
 ### 5.2 Inventory and items
@@ -465,13 +502,15 @@ and loads.**
   - ☑ **M0.5a Game state off the camera.** A `PlayerLook { yaw, pitch }` on the player that the
     camera follows; movement and saving read it; the movement step as a pure function; the clock
     split from the sun and moon. A headless App runs saving, game modes and the clock.
-  - ☐ **M0.5b Replicon and edits through it.** `bevy_replicon` with no transport, `protocol.rs`,
+  - ☑ **M0.5b Replicon and edits through it.** `bevy_replicon` with no transport, `protocol.rs`,
     `RequestEdit` / `BlockChanged` / `EditRejected`, the server validating edits.
   - ☐ **M0.5c Players owned by the server.** Spawned from saves by the server; the client puts
     the camera on its `LocalPlayer`.
   - ☐ **M0.5d Commands and game modes on the server.**
   - ☐ **M0.5e Time on the server**, with `TimeSync`.
-  - ☐ **M0.5f Server chunk residency**, headless, with shared holders in `World`.
+  - ☐ **M0.5f Server chunk residency**, headless, with shared holders in `World`. A dedicated
+    server must drain `World::reroofed` itself, since only the client takes it now, and
+    `EditAllowances` must forget a client when it disconnects (M0.6).
 - ☐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
   replicated, simple player models, chat (§4.4). In steps:
   - ☐ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
