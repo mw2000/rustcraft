@@ -21,6 +21,7 @@ use rustcraft::client::clock::{follow_clock, wind_clock};
 use rustcraft::client::command_bar::{command_bar_closed, CommandPlugin};
 use rustcraft::client::cracks::DrawCracksPlugin;
 use rustcraft::client::creatures::DrawCreaturesPlugin;
+use rustcraft::client::critters::AmbientLifePlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::models::DrawPlayersPlugin;
 use rustcraft::client::servers::{ServerList, SERVERS_FILE};
@@ -221,6 +222,7 @@ fn main() {
         MapPlugin,
         AuthoringPlugin,
         SoundPlugin,
+        AmbientLifePlugin,
     ))
     // the client and the server: in singleplayer they're in one App with no transport running,
     // so replicon passes their messages straight across, and joining a server elsewhere the

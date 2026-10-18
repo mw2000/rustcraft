@@ -7,6 +7,7 @@ pub mod clock;
 pub mod command_bar;
 pub mod cracks;
 pub mod creatures;
+pub mod critters;
 pub mod drops;
 pub mod edits;
 pub mod join;

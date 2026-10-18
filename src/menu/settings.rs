@@ -68,6 +68,7 @@ enum Setting {
     Vsync,
     Shadows,
     Clouds,
+    AmbientLife,
     Sensitivity,
     InvertY,
     Master,
@@ -165,6 +166,7 @@ impl Setting {
             Setting::Vsync => ("VSync", on_off(p.video.vsync)),
             Setting::Shadows => ("Shadows", on_off(p.video.shadows)),
             Setting::Clouds => ("Clouds", on_off(p.video.clouds)),
+            Setting::AmbientLife => ("Ambient Life", on_off(p.video.ambient_life)),
             Setting::InvertY => ("Invert Mouse", on_off(p.controls.invert_y)),
             Setting::HurtTilt => ("Hurt Tilt", on_off(p.accessibility.hurt_tilt)),
             Setting::LargerText => ("Larger Text", on_off(p.accessibility.larger_text)),
@@ -189,6 +191,7 @@ impl Setting {
             Setting::Vsync => toggle(&mut p.video.vsync),
             Setting::Shadows => toggle(&mut p.video.shadows),
             Setting::Clouds => toggle(&mut p.video.clouds),
+            Setting::AmbientLife => toggle(&mut p.video.ambient_life),
             Setting::InvertY => toggle(&mut p.controls.invert_y),
             Setting::HurtTilt => toggle(&mut p.accessibility.hurt_tilt),
             Setting::LargerText => toggle(&mut p.accessibility.larger_text),
@@ -320,7 +323,7 @@ fn video(page: &mut ChildSpawnerCommands, p: &Preferences) {
         p,
         &[
             &[Preset, RenderDistance, FullDetail, FieldOfView, UiScale],
-            &[FrameCap, Fullscreen, Vsync, Shadows, Clouds],
+            &[FrameCap, Fullscreen, Vsync, Shadows, Clouds, AmbientLife],
         ],
     );
     page.spawn(note(

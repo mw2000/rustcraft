@@ -78,6 +78,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | The renderer's defaults, and the player's own settings over them, volumes too, from the Settings screen | `assets/settings.toml`, `src/settings.rs`, `src/preferences.rs`, `src/client/sound/volume.rs` |
 | Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; sheep, cows, pigs and chickens, and four monsters out in the dark that hunt players, despawning unsaved (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
+| Ambient life | Butterflies, fireflies with their glow, starling murmurations and skeins of geese, decoration on the client alone, by biome and time of day (§5.8) | `src/client/critters/` |
 | Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time from recordings and synthesis, rare music (§5.10) | `src/client/sound/`, `assets/sounds/` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
 
@@ -1456,6 +1457,17 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   - Later: wall torches (blocks with a facing), lit water (its shader takes sky light only),
     a flicker, and coloured or dimmer emitters (lava, glowstone) in the `emits` column. Since
     M2.4a lanterns give 13, a little less than a torch.
+- **Firefly light (ported from upstream #79).** Fireflies (§5.8) light the ground round them,
+  but they move, so baking them into block light, which is worked out per mesh as it's built,
+  would remesh every frame. Instead the nearest of them that are lit up carry Bevy point lights,
+  and `point_lights.wesl` adds those Bevy clusters near a face to the world shader's light:
+  `max(sky, TORCH_LIGHT * block²) + glow`, the glow capped at 0.3 so a swarm by a torch doesn't
+  wash it out, and dim (40,000 lumens, reaching 4 blocks) so a firefly makes a small pool on the
+  grass rather than lighting the field. At most `MAX_FIREFLY_LIGHTS` (12) exist, a pool moved
+  each frame to the nearest lit fireflies, and none at all while no firefly's about, so by day
+  the shader's lookup finds an empty cluster. Bevy's own materials (creatures, items) are lit by
+  them too; water isn't, its shader taking sky light only. It's only drawn: it's no block light,
+  so it keeps no monster from spawning (M3.3's darkness rule reads block light alone).
 
 ### 5.5a Farming and food
 
@@ -2243,6 +2255,54 @@ from high places.
     times, `MOON_BOOST`), so at night they're black shapes with glowing eyes, which suits
     monsters but hides animals and friends, and wants their light from the sky and block light
     where they stand; monsters swimming after players; more dungeons' kinds by structure.
+- **Built: ambient life** (ported from rornic/rustcraft #79 by Aymen Qader, `src/client/critters/`,
+  `AmbientLifePlugin`). Not creatures: creatures are gameplay, owned by the server, replicated
+  and hit; critters are decoration round the camera on each client alone. The server
+  knows nothing of them and sends nothing, so two players see different butterflies, which for
+  things so small and fleeting reads as natural; they're seeded from the system, or by tests.
+  Nothing aims at or collides with them (the raycast and collision see blocks and the creatures
+  the server replicates), so they never get in the way, and they're under the `client` feature,
+  so the dedicated server doesn't link them (its dependency tree and binary are unchanged).
+  - **Butterflies** (14 at most, within 26 blocks, let go past 44) by day over flowers (poppies,
+    dandelions, cornflowers), in five colours from one drawn 16px wing texture, looping and
+    bobbing round a flower and drifting to another now and then.
+  - **Fireflies** (60 at most) at night, drifting and blinking out of step, over grass and plants
+    in forest and jungle, or anywhere but deserts and glaciers within 6 blocks of water. Their
+    light on the ground is §5.5's firefly light.
+  - **Starlings** (a flock of 160) at dusk (0.64 to 0.77 of the day, the sun setting at 0.75) over
+    open land: grassland, foothills or savanna, not in a cave. Boids: each steers with its
+    neighbours within 7 blocks, toward their middle and clear of those within 3.2, and after a
+    heading that wanders round the camera 40 to 55 blocks off and 34 over the ground, at 9 to 15
+    blocks a second, never within 8 of the ground. They gather and leave over 3 seconds,
+    making off up and away.
+  - **Geese** by day, every 45 to 110 seconds, skeins of 7 to 11 in a V, 64 blocks over the
+    ground and at least 36 over the camera, passing within 70 blocks to either side; every skein
+    of a day flies the same way, give or take a quarter radian (`migration_course`, from the seed
+    and the day), as migrating geese do.
+  - Butterflies, fireflies and starlings fade in and out with the time of day, and all of them
+    stay away under water, on the title screen and while loading, and go with the world on
+    leaving it. Upstream's wings (`wings.rs`: a flat mirrored wing, a beat, birds gliding now and
+    then) are shared by the butterflies and both birds.
+  - **Settings:** "Ambient Life" in Settings' Video tab (`Video::ambient_life`, on by default):
+    off, every critter goes at once and none come. `AmbientLife::rain` is the hook for weather
+    (M3.5): past 0.3 butterflies, fireflies and starlings leave and no geese fly.
+  - **Cost:** measured in a headless App on a field (load average 17 to 21), the frame's median
+    takes 0.14 ms more at dusk with the flock of 160 (its steering is every pair, 25,600 a frame),
+    0.02 ms at night with 60 fireflies and their lights, and nothing measurable by day with
+    butterflies. A day with none of them pays a few empty queries. The shader's point-light
+    lookup is a cluster index and an empty range on every world fragment while there are no
+    fireflies, and at most 12 lights in a cluster while there are.
+  - **Tests** (`client::critters`): butterflies over flowers by day and not at night or over bare
+    grass, and leaving at nightfall; fireflies by water and in the woods at night and not on dry
+    open grass or by day; never more firefly lights than the cap, each at a lit firefly, and
+    none by day; starlings at dusk over open land and not by day or in the woods; geese by day,
+    high, the day's way; the setting taking them all away and bringing them back; rain sending
+    them to shelter; leaving the world and the title screen; the raycast passing through a
+    butterfly to the flower under it; and upstream's paths and steering, with a flock kept
+    together, at its speeds and over the ground for two minutes, skeins' V, the migration's
+    determinism, the dusk window and wings' beat.
+  - **Later:** sounds (starlings' chatter, geese honking), more kinds (bees, moths round
+    lanterns, fish, gulls by the sea), a spatial grid for bigger flocks.
 
 ### 5.9 Distribution
 
@@ -2469,7 +2529,8 @@ both sides built the same thing they're merged into one system keeping the best 
 
 - ☑ **U-77 Ambience** (Aymen Qader): CC0 recordings and synthesised wind, merged into §5.10.
 - ☑ **U-78 Flora** (Aymen Qader): swaying grasses, ferns and flowers, as breakable plant blocks.
-- ◐ **U-79 Critters** (Aymen Qader): butterflies, fireflies lighting the ground, starlings, geese.
+- ☑ **U-79 Critters** (Aymen Qader): butterflies, fireflies lighting the ground, starlings, geese,
+  as client-side ambient life (§5.8, §5.5).
 - ☐ **U-82 Perf** (Rory Nickolls): leaf faces meshed apart and drawn only near the camera; full
   detail out to 24 chunks.
 - ☐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
@@ -2704,6 +2765,7 @@ For agents and contributors:
 - **Sounds:** new or changed sounds with the `sounds` skill.
 - **Upstream ports:** work from rornic/rustcraft is ported onto this fork's code, merged with what
   we have rather than beside it, its author kept on the commit: so far #77's ambience (Aymen
-  Qader), §5.10, and #78's flora (Aymen Qader), §5.5a.
+  Qader), §5.10, #78's flora (Aymen Qader), §5.5a, and #79's critters (Aymen Qader): ambient
+  life and firefly light, §5.8 and §5.5.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.

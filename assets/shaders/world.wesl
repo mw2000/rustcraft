@@ -13,6 +13,7 @@ import super::lighting::{direct_moon, direct_sun, open_sky};
 import super::sky::SUN_LIGHT;
 import super::cloud_shadow::cloud_shadow;
 import super::lod_patch::patch_tint;
+import super::point_lights::point_light_glow;
 import super::dither::dither_threshold;
 import super::curvature::{curved, uncurved};
 // How bright the leaves seen through a solid tree box's holes are, to its surface's.
@@ -35,6 +36,8 @@ const BLOCK_LIGHT_CURVE: f32 = 2.0;
 // brightly whatever the light.
 const FLAME_BOTTOM: f32 = 9.0 / 16.0;
 const FLAME_GLOW: f32 = 1.6;
+// The most fireflies' light adds to a face, so a swarm near a torch doesn't wash it out.
+const POINT_GLOW_MAX: f32 = 0.3;
 // Magma glows at least this brightly, near or far, so a volcano's crater shows at night from
 // kilometres away, where LODs draw no block light.
 const MAGMA_GLOW: f32 = 1.4;
@@ -215,8 +218,10 @@ fn fragment(
 
     let shaded = lit_normal(normal, world_position);
     let sky_light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded);
-    // the brighter of the sky's light and the torches', colour by colour
-    var light = max(sky_light, block_ambient(block));
+    // the brighter of the sky's light and the torches', colour by colour, and on top of it
+    // fireflies' glow, which moves with them, so can't be block light
+    let glow = min(point_light_glow(world_position, normal, in.position.xy), vec3<f32>(POINT_GLOW_MAX));
+    var light = max(sky_light, block_ambient(block)) + glow;
     if is_flame(in.color.a, in.uv) {
         light = vec3<f32>(FLAME_GLOW);
     }

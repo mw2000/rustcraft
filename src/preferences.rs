@@ -52,6 +52,8 @@ pub struct Video {
     pub ui_scale: f32,
     pub shadows: bool,
     pub clouds: bool,
+    /// Butterflies, fireflies and birds about the world, see `client::critters`.
+    pub ambient_life: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -151,6 +153,7 @@ impl Preferences {
                 ui_scale: 1.0,
                 shadows: true,
                 clouds: true,
+                ambient_life: true,
             },
             controls: ControlSettings {
                 sensitivity: 1.0,
