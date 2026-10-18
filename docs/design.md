@@ -2148,6 +2148,10 @@ start.**
   - ☐ Follow-up: a fallen tower and other built landmarks, from structure templates.
   - ☐ Follow-up: magma streams down a volcano's flanks show only in cells two blocks wide or
     narrower, so they vanish past a few hundred blocks; draw them in coarse LODs too.
+  - ☐ Follow-up (review): the magma lake reads as a flat orange disc — give magma a moving,
+    textured surface (crust and glow variation) in the M-A1 art pass; and make great peaks more
+    dramatic from a distance (steeper upper slopes, cliffs and a sharper summit) so one on the
+    horizon reads as a mountain, not a big hill.
 - ☑ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2, §4.4).
   - ☐ Follow-up: draw builds as boxes in coarse LODs, as structures are, so towers and houses
     narrower than half a cell stay visible beyond ~1 km (§4.2, Built M2.8).
