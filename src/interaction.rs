@@ -10,7 +10,8 @@ use crate::edits::EditBlock;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::menu::GameState;
-use crate::player::{player_look, player_move, Player, BODY};
+use crate::player::input::{player_look, player_move};
+use crate::player::{Player, PlayerLook, BODY, EYE_HEIGHT};
 use crate::world::World;
 
 /// How far from the eye a block can be reached, in blocks.
@@ -108,22 +109,19 @@ pub fn overlaps(body: Aabb, position: Vec3, block: I64Vec3) -> bool {
     (min + SLACK).cmplt(block + 1.0).all() && (max - SLACK).cmpgt(block).all()
 }
 
-#[allow(clippy::type_complexity)]
 fn target_block(
     world: Res<World>,
     mut target: ResMut<Target>,
-    camera: Query<(&ChildOf, &Transform), (With<Camera>, Without<Player>)>,
-    player: Query<&Transform, With<Player>>,
+    player: Query<(&Transform, &PlayerLook), With<Player>>,
 ) {
-    let (parent, camera) = camera.single().expect("camera does not exist");
-    let player = player.get(parent.parent()).expect("player does not exist");
-    let eye = player.mul_transform(*camera);
+    let (feet, look) = player.single().expect("player does not exist");
+    let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
     // blocks not generated yet can't be reached, nor can air and water, which are looked through
     let stops = |block: I64Vec3| {
         world.is_chunk_generated(ChunkCoordinate::containing(block))
             && world.get_block_at(block).is_solid()
     };
-    target.0 = raycast(eye.translation, *eye.forward(), REACH, stops);
+    target.0 = raycast(eye, look.forward(), REACH, stops);
 }
 
 fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {

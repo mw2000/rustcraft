@@ -1,13 +1,13 @@
 use std::f32::consts::PI;
 use std::io;
 
-use bevy::math::{EulerRot, Quat, Vec3};
+use bevy::math::Vec3;
 use bevy::transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
-use crate::player::Movement;
+use crate::player::{Movement, PlayerLook};
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 pub const FORMAT_VERSION: u32 = 1;
@@ -31,7 +31,7 @@ pub struct WorldFile {
 pub struct PlayerState {
     /// Their feet, in blocks.
     pub position: [f32; 3],
-    /// Which way they face, in radians: the body's turn about y, and the head's up or down.
+    /// Which way they look, in radians, as `PlayerLook` has it.
     pub yaw: f32,
     pub pitch: f32,
     pub movement: Movement,
@@ -55,18 +55,18 @@ impl PlayerState {
         }
     }
 
-    /// The state of a player with the body and camera transforms given.
+    /// The state of a player with the body and look given.
     pub fn of(
         body: &Transform,
-        camera: &Transform,
+        look: PlayerLook,
         movement: Movement,
         game_mode: GameMode,
         hotbar: Hotbar,
     ) -> Self {
         Self {
             position: body.translation.into(),
-            yaw: body.rotation.to_euler(EulerRot::YXZ).0,
-            pitch: camera.rotation.to_euler(EulerRot::XYZ).0,
+            yaw: look.yaw,
+            pitch: look.pitch,
             movement,
             game_mode,
             hotbar,
@@ -75,12 +75,13 @@ impl PlayerState {
 
     pub fn body(&self) -> Transform {
         Transform::from_translation(self.position.into())
-            .with_rotation(Quat::from_rotation_y(self.yaw))
     }
 
-    /// How the camera turns up or down, under the body.
-    pub fn head(&self) -> Quat {
-        Quat::from_rotation_x(self.pitch)
+    pub fn look(&self) -> PlayerLook {
+        PlayerLook {
+            yaw: self.yaw,
+            pitch: self.pitch,
+        }
     }
 }
 
@@ -121,14 +122,14 @@ impl WorldFile {
 
 #[cfg(test)]
 mod tests {
-    use bevy::math::{Quat, Vec3};
+    use bevy::math::Vec3;
     use bevy::transform::components::Transform;
 
     use super::{PlayerState, WorldFile, FORMAT_VERSION};
     use crate::block::BlockType;
     use crate::game_mode::GameMode;
     use crate::hotbar::Hotbar;
-    use crate::player::Movement;
+    use crate::player::{Movement, PlayerLook};
 
     #[test]
     fn test_world_files_round_trip() {
@@ -182,19 +183,21 @@ mod tests {
 
     #[test]
     fn test_a_player_faces_the_way_they_did() {
-        let body = Transform::from_xyz(1.0, 2.0, 3.0).looking_to(Vec3::new(1.0, 0.0, 2.0), Vec3::Y);
-        let camera = Transform::from_rotation(Quat::from_rotation_x(-0.5));
+        let body = Transform::from_xyz(1.0, 2.0, 3.0);
+        let look = PlayerLook {
+            yaw: 2.5,
+            pitch: -0.5,
+        };
         let state = PlayerState::of(
             &body,
-            &camera,
+            look,
             Movement::Fly,
             GameMode::Creative,
             Hotbar::default(),
         );
-        assert_eq!(body.translation, state.body().translation);
-        assert!(body.rotation.angle_between(state.body().rotation) < 1e-5);
-        assert!(camera.rotation.angle_between(state.head()) < 1e-5);
-        let arriving = PlayerState::arriving_at(Vec3::ONE).body();
+        assert_eq!(body, state.body());
+        assert_eq!(look, state.look());
+        let arriving = PlayerState::arriving_at(Vec3::ONE).look();
         assert!(arriving.forward().dot(Vec3::Z) > 0.9999);
     }
 

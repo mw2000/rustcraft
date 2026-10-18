@@ -7,11 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bevy::app::{App, AppExit, Last, OnAppExitSystems, Plugin};
-use bevy::camera::Camera;
 use bevy::ecs::{
-    hierarchy::ChildOf,
     message::MessageReader,
-    query::With,
     resource::Resource,
     schedule::IntoScheduleConfigs,
     system::{Query, Res, ResMut, SystemParam},
@@ -22,11 +19,11 @@ use bevy::tasks::{block_on, futures, IoTaskPool, Task};
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 
+use crate::clock::{TimeOfDay, START_TIME};
 use crate::edits::Edits;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
-use crate::player::Player;
-use crate::sky::{TimeOfDay, START_TIME};
+use crate::player::{Player, PlayerLook};
 use crate::world::World;
 use region::{ChunkEdits, Region};
 pub use world_file::{PlayerState, WorldFile};
@@ -216,26 +213,23 @@ struct Savable<'w, 's> {
         (
             &'static Transform,
             &'static Player,
+            &'static PlayerLook,
             &'static GameMode,
             &'static Hotbar,
         ),
     >,
-    cameras: Query<'w, 's, (&'static ChildOf, &'static Transform), With<Camera>>,
 }
 
 impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
-        file.player = self.cameras.iter().find_map(|(parent, camera)| {
-            let (body, player, mode, hotbar) = self.players.get(parent.parent()).ok()?;
-            Some(PlayerState::of(
-                body,
-                camera,
-                player.movement,
-                *mode,
-                *hotbar,
-            ))
-        });
+        file.player = self
+            .players
+            .iter()
+            .next()
+            .map(|(body, player, look, mode, hotbar)| {
+                PlayerState::of(body, *look, player.movement, *mode, *hotbar)
+            });
         save.snapshot(self.world.edits_mut(), file)
     }
 }
@@ -298,11 +292,11 @@ mod tests {
     };
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
+    use crate::clock::TimeOfDay;
     use crate::edits::Edits;
     use crate::game_mode::GameMode;
     use crate::hotbar::Hotbar;
-    use crate::player::{Movement, Player};
-    use crate::sky::TimeOfDay;
+    use crate::player::{Movement, Player, PlayerLook};
 
     // A directory of its own under the system's temporary one, removed afterwards.
     struct TempDir(PathBuf);
@@ -428,19 +422,24 @@ mod tests {
             .insert_resource(TimeOfDay(file.time_of_day));
         let mut player = Player::default();
         player.movement = state.movement;
-        app.world_mut()
-            .spawn((player, state.game_mode, state.hotbar, state.body()))
-            .with_child((Camera3d::default(), Transform::from_rotation(state.head())));
+        // with no camera, as a server's players have none
+        app.world_mut().spawn((
+            player,
+            state.look(),
+            state.game_mode,
+            state.hotbar,
+            state.body(),
+        ));
         app
     }
 
-    fn player(app: &mut App) -> (Transform, Movement) {
-        let (transform, player) = app
+    fn player(app: &mut App) -> (Transform, PlayerLook, Movement) {
+        let (transform, look, player) = app
             .world_mut()
-            .query::<(&Transform, &Player)>()
+            .query::<(&Transform, &PlayerLook, &Player)>()
             .single(app.world())
             .unwrap();
-        (*transform, player.movement)
+        (*transform, *look, player.movement)
     }
 
     #[test]
@@ -450,16 +449,26 @@ mod tests {
         let mut app = play(&dir);
         app.update();
         let at = Vec3::new(100.0, 480.0, -50.0);
+        let looking = PlayerLook {
+            yaw: 4.0,
+            pitch: -0.5,
+        };
         {
             let world = app.world_mut();
             let mut game_world = world.resource_mut::<crate::world::World>();
             assert!(game_world.edit(built, BlockType::Furnace));
             world.resource_mut::<TimeOfDay>().0 = 3.5;
-            let mut players =
-                world.query::<(&mut Transform, &mut Player, &mut GameMode, &mut Hotbar)>();
-            let (mut transform, mut player, mut mode, mut hotbar) =
+            let mut players = world.query::<(
+                &mut Transform,
+                &mut PlayerLook,
+                &mut Player,
+                &mut GameMode,
+                &mut Hotbar,
+            )>();
+            let (mut transform, mut look, mut player, mut mode, mut hotbar) =
                 players.single_mut(world).unwrap();
             transform.translation = at;
+            *look = looking;
             player.movement = Movement::Walk;
             *mode = GameMode::Survival;
             hotbar.slots[2] = Some(BlockType::IronOre);
@@ -470,8 +479,11 @@ mod tests {
         drop(app);
 
         let mut app = play(&dir);
-        let (transform, movement) = player(&mut app);
-        assert_eq!((at, Movement::Walk), (transform.translation, movement));
+        let (transform, look, movement) = player(&mut app);
+        assert_eq!(
+            (at, looking, Movement::Walk),
+            (transform.translation, look, movement)
+        );
         assert_eq!(3.5, app.world().resource::<TimeOfDay>().0);
         let (mode, hotbar) = app
             .world_mut()

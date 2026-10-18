@@ -6,22 +6,20 @@ use bevy::{
         bundle::Bundle,
         component::Component,
         query::{With, Without},
-        resource::Resource,
         system::{Commands, Query, Res, ResMut},
     },
-    input::{keyboard::KeyCode, ButtonInput},
     light::{
         atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight,
         CascadeShadowConfigBuilder, DirectionalLight, SunDisk,
     },
     math::{UVec2, UVec3, Vec3},
     pbr::{AtmosphereSettings, DistanceFog, FogFalloff},
-    time::Time,
     transform::components::{GlobalTransform, Transform},
 };
 
 use std::f32::consts::{PI, TAU};
 
+use crate::clock::{TimeOfDay, START_TIME};
 use crate::curvature::WORLD_CURVE;
 
 /// How opaque fog gets at its far end.
@@ -29,14 +27,6 @@ pub const FOG_MAX_OPACITY: f32 = 0.8;
 
 /// Where the sun is at noon: its path across the sky is the great circle through this and the horizon, see `path_basis`.
 pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
-/// Seconds in a game day.
-const DAY_SECONDS: f32 = 600.0;
-/// Days of the clock the world starts at: 0 is midnight, 0.5 is noon.
-pub const START_TIME: f32 = 0.4;
-// How fast `[` and `]` wind the clock, in days a second.
-const SCRUB_SPEED: f32 = 0.1;
-const SCRUB_BACK_KEY: KeyCode = KeyCode::BracketLeft;
-const SCRUB_FORWARD_KEY: KeyCode = KeyCode::BracketRight;
 // How far past opposite the sun the moon rides, in radians, which keeps it nearly full.
 const MOON_LAG: f32 = 0.5;
 /// Warm, to stand out against the cool light from the sky.
@@ -108,15 +98,9 @@ pub fn moon() -> impl Bundle {
     )
 }
 
-/// The time of day, in days: the whole part counts days, the rest is the clock, see `START_TIME`.
-#[derive(Resource)]
-pub struct TimeOfDay(pub f32);
-
-impl TimeOfDay {
-    /// Where the sun is on its path, in radians: 0 as it rises, a quarter turn at noon.
-    fn sun_angle(&self) -> f32 {
-        TAU * (self.0.fract() - 0.25)
-    }
+// Where the sun is on its path at `time` days, in radians: 0 as it rises, a quarter turn at noon.
+fn sun_angle(time: f32) -> f32 {
+    TAU * (time.fract() - 0.25)
 }
 
 // The sun's path across the sky as a circle through `east` and `peak`, which are square to each other.
@@ -133,25 +117,20 @@ fn on_path(angle: f32) -> Vec3 {
 
 /// Toward the sun at `time` days.
 pub fn sun_direction(time: f32) -> Vec3 {
-    on_path(TimeOfDay(time).sun_angle())
+    on_path(sun_angle(time))
 }
 
 /// Toward the moon at `time` days: opposite the sun, so it rises as the sun sets.
 pub fn moon_direction(time: f32) -> Vec3 {
-    on_path(TimeOfDay(time).sun_angle() + PI + MOON_LAG)
+    on_path(sun_angle(time) + PI + MOON_LAG)
 }
 
-/// Runs the clock, wound with `[` and `]`, and moves the sun and moon to it: the sky, fog and
-/// light all follow them.
+/// Moves the sun and moon to the time of day: the sky, fog and light all follow them.
 pub fn move_sky(
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    mut clock: ResMut<TimeOfDay>,
+    clock: Res<TimeOfDay>,
     mut sun: Query<&mut Transform, (With<Sun>, Without<Moon>)>,
     mut moon: Query<&mut Transform, (With<Moon>, Without<Sun>)>,
 ) {
-    let wound = keys.pressed(SCRUB_FORWARD_KEY) as i32 - keys.pressed(SCRUB_BACK_KEY) as i32;
-    clock.0 += time.delta_secs() * (1.0 / DAY_SECONDS + wound as f32 * SCRUB_SPEED);
     if let Ok(mut transform) = sun.single_mut() {
         *transform = shining_from(sun_direction(clock.0));
     }

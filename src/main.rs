@@ -11,6 +11,7 @@ use rustcraft::chunks::{
     material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
+use rustcraft::clock::{run_clock, wind_clock, ClockPlugin, TimeOfDay};
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
@@ -21,13 +22,12 @@ use rustcraft::hotbar::HotbarPlugin;
 use rustcraft::interaction::InteractionPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::picker::PickerPlugin;
-use rustcraft::player::{
-    murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player, EYE_HEIGHT,
-};
+use rustcraft::player::input::{follow_look, player_look, player_move};
+use rustcraft::player::underwater::{murk, update_underwater_effects, MurkMaterial};
+use rustcraft::player::{Player, EYE_HEIGHT};
 use rustcraft::save::{world_name, worlds_dir, PlayerState, SavePlugin, WorldSave};
 use rustcraft::sky::{
-    atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, TimeOfDay,
-    FOG_MAX_OPACITY,
+    atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, FOG_MAX_OPACITY,
 };
 use rustcraft::sky_dome::{NightSkyPlugin, SunGlarePlugin};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
@@ -76,13 +76,19 @@ fn setup_scene(
     let mut body = Player::default();
     body.movement = arrival.movement;
     let player = commands
-        .spawn((body, arrival.game_mode, arrival.hotbar, arrival.body()))
+        .spawn((
+            body,
+            arrival.look(),
+            arrival.game_mode,
+            arrival.hotbar,
+            arrival.body(),
+        ))
         .id();
 
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
-            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).with_rotation(arrival.head()),
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
             Camera3d { ..default() },
             atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
@@ -219,7 +225,7 @@ fn main() {
             InteractionPlugin,
             SavePlugin,
         ))
-        .add_plugins((GameModePlugin, HotbarPlugin, PickerPlugin))
+        .add_plugins((GameModePlugin, ClockPlugin, HotbarPlugin, PickerPlugin))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
@@ -234,11 +240,12 @@ fn main() {
                 (player_move, player_look)
                     .run_if(in_state(GameState::Playing))
                     .run_if(command_bar_closed),
+                follow_look,
                 update_horizon,
                 update_underwater_effects,
             )
                 .chain(),
         )
-        .add_systems(Update, move_sky)
+        .add_systems(Update, (wind_clock, move_sky.after(run_clock)).chain())
         .run();
 }

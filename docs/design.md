@@ -65,8 +65,8 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk; no block light | `src/chunks/generate/light.rs` |
-| Sky | 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
-| Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player.rs`, `src/collision.rs`, `src/game_mode.rs` |
+| Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
+| Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel), creative block picker (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/picker.rs`, `src/debug.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
@@ -254,6 +254,14 @@ The world's state beyond the seed (INV-1).
 - **Determinism handshake** (D-3): a stable hash (not `DefaultHasher`) of `generate_chunk`'s output
   for a few fixed sample chunks near and far from spawn, sent in `Welcome` and checked by the
   client, which refuses to join on a mismatch.
+- **Built (M0.5a):** the player's look is a `PlayerLook { yaw, pitch }` on the player, which
+  movement, `target_block` and saving read; the camera, a child of the player at `EYE_HEIGHT`,
+  only follows it (`follow_look`), and the player's own `Transform` has no rotation. The movement
+  step is `player::physics::step`, a pure function of a `MoveInput`, the look, the `Player` and a
+  block lookup; `player::input` turns keys and the mouse into those, and `player::underwater`
+  holds the murk and underwater effects. The clock is `src/clock.rs` (`ClockPlugin`, and
+  `wind_clock` for `[` and `]` on the client), apart from `move_sky`, which only places the sun
+  and moon. `tests/headless.rs` runs saving, game modes and the clock on `MinimalPlugins`.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
   `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
@@ -424,9 +432,9 @@ and loads.**
 - ☑ **M0.3 Saving and loading.** World directory, edits and player position saved and loaded
   (§4.3). Edits survive a restart.
 - ☑ **M0.4 Game modes.** Survival and creative, `/gamemode`, creative block picker (§4.5).
-- ☐ **M0.5 Client/server split.** Integrated server in-process; game state flows through it
+- ◐ **M0.5 Client/server split.** Integrated server in-process; game state flows through it
   (§4.4). Singleplayer plays the same as before. In steps, each playable with tests green:
-  - ☐ **M0.5a Game state off the camera.** A `PlayerLook { yaw, pitch }` on the player that the
+  - ☑ **M0.5a Game state off the camera.** A `PlayerLook { yaw, pitch }` on the player that the
     camera follows; movement and saving read it; the movement step as a pure function; the clock
     split from the sun and moon. A headless App runs saving, game modes and the clock.
   - ☐ **M0.5b Replicon and edits through it.** `bevy_replicon` with no transport, `protocol.rs`,
