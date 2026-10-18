@@ -82,7 +82,8 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
-cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace, chest), plants
+cobblestone, stone bricks, bricks, coal, copper and iron ore, the far climates' gold, frost crystal
+and jade ores and embers with blocks made from them, crafting table, furnace, chest), plants
 (tall grass, poppy, dandelion, cornflower, fern), the torch and the bed, and for farming farmland and
 wheat's eight stages.
 
@@ -1057,7 +1058,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   | 2 | Stone | Copper | Everywhere, shallow |
   | 3 | Copper | Iron | Everywhere, mid-depth |
   | 4 | Iron | Regional ores | Specific regions (P3) |
-  | 5 | Alloys from regional ores | The deepest ores | Deep, specific regions |
+  | 5 | Bright steel, an alloy of iron and a regional material | The deepest ores | Deep, everywhere |
 
 - **Built (M1.5):** `src/crafting.rs`.
   - **Recipes** are the `recipes!` table: each row a `Recipe` variant with a stable name, sent
@@ -1110,6 +1111,34 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   - `PROTOCOL_VERSION` is 6.
 - **Progression needs travel (P3):** higher tiers need ores found only in certain climates (under
   glaciers, deep under deserts, in mountain cores), so moving up means going somewhere.
+- **Built (M2.5): regional ores and bright steel.** Each far climate has an ore under it that
+  needs an iron pickaxe; any of their materials blended with iron makes bright steel, tier 5,
+  which mines the embers at the bottom of the world:
+
+  | Material | Ore, under | Heights | Mined with | Made into |
+  |---|---|---|---|---|
+  | Gold ingot | Gold ore, deep under desert and savanna | 48–288 | Iron | Bright steel blend, gold block |
+  | Frost crystal | Frost crystal ore, under glacier and taiga | 192–440 | Iron | Bright steel blend, frost crystal block, ember lamp |
+  | Jade | Jade ore, under jungle | 160–424 | Iron | Bright steel blend, polished jade |
+  | Bright steel ingot | (an alloy) | | | Tier 5 tools, bright steel block |
+  | Ember | Ember ore, every climate, glowing faintly (light 5) | 16–112 | Bright steel | Ember lamp |
+
+  - **Bright steel:** a crafting table blends an iron ingot with a gold ingot, a frost crystal
+    or a jade into a bright steel blend, and a furnace smelts the blend into an ingot, as
+    smelting stays one item into one. Any of the three will do, so a player heads for
+    whichever far climate is nearest their spawn, rather than one fixed direction; the world
+    is too big to send everyone to the same corner of it. Recipes keep to two ingredients, as
+    the crafting list's cards fit no more.
+  - **Tier 5 tools** (`BrightSteelPickaxe`, axe, shovel, hoe) take bright steel ingots as
+    iron's take iron: durability 384 and speed 13, against iron's 256 and 10 (`TIERS`).
+  - **Blocks:** the ores (hardness 10, embers 12) and, made 4 into 1 at a table, a gold block,
+    a frost crystal block, polished jade and a bright steel block; an ember lamp, an ember in
+    4 frost crystals, gives light 14 as a torch does but is a full block. Tiles and sprites are
+    drawn by the `block-textures` skill's `draw.py` and `items.py` (INV-8).
+  - **Loot:** the glacier outpost holds frost crystal, the desert temple gold ingots and jade,
+    and the dungeon embers and gold; each now and then bright steel, ingots or a tool.
+  - `PROTOCOL_VERSION` is unchanged: blocks, items and recipes travel by name. The golden
+    checksum changed.
 
 ### 5.4 Underground: caves and ores
 
@@ -1157,7 +1186,28 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   Coal is in the stone from just under the surface; copper is a short dig under lowland ground;
   iron starts fifty or more blocks down, a deep dig or a walk down the caves. A tunnel through
   the thick of the bands passes a vein of coal or copper every thirty blocks or so, and of iron
-  every sixty. Regional ores (M2.5) join the same table, by climate as well as depth.
+  every sixty.
+- **Built (M2.5): regional ores.** The `ORES` table gives each ore the biomes it's found
+  under, by name as structures name them, or none for every climate. A vein grows as before,
+  and each block of it turns stone to ore only where the column it's in belongs to one of its
+  biomes, which every chunk knows for its own columns, so it's still local (INV-3) and a vein
+  under a climate's edge stops at it. LODs are unchanged. The rarer ores come in bigger veins:
+
+  | Ore | Under | Heights | Veins per 16³ | Blocks a vein | Share of stone |
+  |---|---|---|---|---|---|
+  | Gold | Desert, savanna | 48–288 | 0.4 | 6–16 | ~0.10% |
+  | Frost crystal | Glacier, taiga | 192–440 | 0.4 | 6–16 | ~0.10% |
+  | Jade | Jungle | 160–424 | 0.4 | 6–16 | ~0.10% |
+  | Ember | Everywhere | 16–112 | 0.4 | 4–10 | ~0.065% |
+
+  Gold is a long dig under the deserts, 150 blocks and more; frost crystal and jade start a
+  little under the sea, a short dig under their lowlands. Embers glow (light 5), so they show in
+  the dark of the deepest caverns. Tests check over many columns that each comes up under its
+  own biomes and depths only, rarer than iron, and in real chunks under each far biome. The
+  four new ores add about 9,500 instructions to generating a chunk underground, 0.5% (counted,
+  as the machine was too loaded to time). The checksum samples two more layers, so they take
+  in gold under the spawn's savanna and embers, besides frost crystal and jade under the taiga
+  and jungle columns.
 - Underground structures (mineshafts, dungeons) come with §5.6.
 
 ### 5.5 Survival
@@ -1548,8 +1598,8 @@ need the ground shaped low and wet, and plains were most of the gap savanna now 
   empty cells from the climate alone, as a test checks.
 - **Determinism:** the golden checksum changed, as the spawn of seed 3 is now savanna and its
   cold sample column taiga; a fourth column samples a jungle.
-- Later: swamp, plains, badlands, vines on jungle giants, and regional ores by biome (M2.5,
-  which can read `Biomes::name` the way structures do).
+- Later: swamp, plains, badlands, vines on jungle giants. Regional ores by biome came with
+  M2.5 (§5.4), reading `Biomes::name` the way structures do.
 
 Built (M2.9): M opens the map (`src/map/`), a `GameState` like the inventory's, which frees the
 cursor and stops the player but not the clock; M or Escape closes it. The client reveals 64-block
@@ -1816,7 +1866,7 @@ start.**
 - ☐ **M2.4b First structures,** to the style guide in the `structures` skill (§5.6): desert
   temple, jungle temple, forest ruin, glacier outpost, mineshaft, dungeon, alongside the
   watchtower, each reworked with the new blocks (§5.6).
-- ☐ **M2.5 Regional ores and higher tiers.** (§5.3)
+- ☑ **M2.5 Regional ores and higher tiers.** (§5.3, §5.4)
 - ☑ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☐ **M2.7 Landmarks.** (§5.7)
 - ☑ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2, §4.4).

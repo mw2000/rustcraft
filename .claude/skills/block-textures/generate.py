@@ -61,6 +61,15 @@ TILES = [
     dict(name="StructureVoid", drawn=True),  # for authoring structures: icons only, never drawn in the world
     dict(name="LootMarker", drawn=True),
     dict(name="Fern", drawn=True),  # greyscale, tinted per climate like TallGrass
+    dict(name="GoldOre", drawn=True),
+    dict(name="FrostCrystalOre", drawn=True),
+    dict(name="JadeOre", drawn=True),
+    dict(name="EmberOre", drawn=True),
+    dict(name="GoldBlock", drawn=True),
+    dict(name="FrostCrystalBlock", drawn=True),
+    dict(name="PolishedJade", drawn=True),
+    dict(name="BrightSteelBlock", drawn=True),
+    dict(name="EmberLamp", drawn=True),
 ]
 
 

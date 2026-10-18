@@ -153,6 +153,108 @@ def iron_ore(rng):
     return ore(rng, (232, 204, 184), (204, 164, 140), (150, 114, 98), [rng.integers(7, 11), rng.integers(3, 6), 2, rng.integers(2, 4)])
 
 
+def gold_ore(rng):
+    # fat nuggets of gold, the far ores' deposits bigger than the common ones'
+    return ore(rng, (255, 238, 150), (234, 190, 56), (166, 118, 30), [rng.integers(10, 14), rng.integers(5, 8), rng.integers(3, 5), 2])
+
+
+def jade_ore(rng):
+    return ore(rng, (156, 226, 170), (72, 172, 112), (34, 110, 70), [rng.integers(10, 14), rng.integers(5, 8), rng.integers(2, 4)])
+
+
+def frost_crystal_ore(rng):
+    """The Stone tile with pale blue crystals jutting out of it, each a few texels along one diagonal or the
+    other, lit at its upper end and with a glint at its tip, so they read as shards rather than lumps."""
+    out = source("Stone").copy()
+    ice = [(86, 146, 196), (150, 210, 240), (214, 242, 255)]
+    for cy, cx, length in [(3, 3, 5), (4, 11, 4), (11, 6, 5), (12, 13, 3), (8, 1, 3)]:
+        cy, cx = cy + rng.integers(-1, 2), cx + rng.integers(-1, 2)
+        dx = rng.choice([-1, 1])
+        for i in range(length):  # from its root up
+            y, x = (cy - i) % 16, (cx + dx * i) % 16
+            out[y, x] = ice[2] if i == length - 1 else ice[1]
+            out[(y + 1) % 16, x] = ice[0]  # its shaded underside, the width of the shard
+    return out
+
+
+def ember_ore(rng):
+    """Darker, scorched stone with glowing flecks in it, bright at their hearts, as it gives off a little light."""
+    out = source("Stone") * 0.62
+    centres = []
+    for size in [rng.integers(5, 8), 4, 3, 3, 2, 2]:
+        while True:
+            c = rng.integers(0, 16, 2)
+            if all((np.abs((c - o + 8) % 16 - 8) > 3).any() for o in centres):
+                break
+        centres.append(c)
+        cells = blob(rng, size)
+        for i, (y, x) in enumerate(cells):  # the first texel of a fleck its heart, the last its cooling edge
+            colour = (255, 226, 120) if i == 0 else (176, 54, 22) if i >= len(cells) - 1 > 1 else (244, 124, 40)
+            out[(c[0] + y) % 16, (c[1] + x) % 16] = colour
+    return out
+
+
+def bevel(out, lit, shade, width=1):
+    """A raised rim round the tile, lit along the top and left and shaded along the bottom and right."""
+    out[:width] = lit
+    out[:, :width] = lit
+    out[16 - width:] = shade
+    out[:, 16 - width:] = shade
+    return out
+
+
+def gold_block(rng):
+    gold = np.array([(196, 148, 40), (226, 182, 60), (240, 204, 86)], float)
+    out = gold[levels(noise(rng, (0, 3)), 3)]  # brushed along the rows
+    y, x = np.mgrid[:16, :16]
+    out[(x + y) % 16 == 11] = (255, 236, 150)  # a glint across it
+    out[(x + y) % 16 == 12] = (250, 222, 120)
+    return bevel(out, (255, 236, 146), (150, 104, 26))
+
+
+def frost_crystal_block(rng):
+    """Crystal faces packed together, the cells of jittered points as cobblestone's stones are, each a flat shade of
+    pale blue, with bright edges where two faces meet."""
+    blue = np.array([(120, 182, 222), (150, 206, 238), (176, 222, 246), (200, 236, 252)], float)
+    points = (np.stack(np.meshgrid(np.arange(3), np.arange(3)), -1).reshape(-1, 2) + rng.uniform(0.2, 0.8, (9, 2))) * 16 / 3
+    yx = np.stack(np.mgrid[:16, :16], -1)[:, :, None] + 0.5
+    dist = np.linalg.norm((yx - points + 8) % 16 - 8, axis=-1)
+    order = np.sort(dist, -1)
+    out = blue[rng.integers(0, 4, 9)[dist.argmin(-1)]]
+    out[order[..., 1] - order[..., 0] < 0.9] = (232, 248, 255)
+    return out
+
+
+def polished_jade(rng):
+    jade = np.array([(46, 132, 86), (62, 152, 102), (82, 172, 120)], float)
+    out = jade[levels(noise(rng, (2, 2)), 3)]  # soft clouds in the stone
+    vein = noise(rng, (1, 1))
+    out[(vein > 0.47) & (vein < 0.53)] = (140, 210, 166)  # a pale vein winding through it
+    return bevel(out, (120, 200, 150), (28, 92, 58))
+
+
+def bright_steel_block(rng):
+    """Four plates of pale steel with a cool sheen, each bevelled, riveted at the corners where they meet."""
+    steel = np.array([(170, 182, 196), (192, 204, 216), (212, 222, 232)], float)
+    out = steel[levels(noise(rng, (0, 2)), 3)]
+    y, x = np.mgrid[:16, :16]
+    out[(y % 8 == 0) | (x % 8 == 0)] = (240, 246, 252)  # each plate's lit top and left edge
+    out[(y % 8 == 7) | (x % 8 == 7)] = (120, 130, 146)  # and its shaded bottom and right
+    for ry, rx in [(1, 1), (1, 6), (6, 1), (6, 6)]:  # rivets in each plate's corners
+        out[(y % 8 == ry) & (x % 8 == rx)] = (232, 214, 150)  # warm, from the far metal blended in
+    return out
+
+
+def ember_lamp(rng):
+    """Embers glowing behind four panes of frost crystal, hottest at the middle, in a pale crystal frame."""
+    y, x = np.mgrid[:16, :16]
+    heat = 1 - np.hypot(y - 7.5, x - 7.5) / 8 + noise(rng) * 0.3
+    glow = np.array([(214, 96, 30), (244, 150, 52), (255, 204, 96), (255, 240, 170)], float)
+    out = glow[levels(heat, 4)]
+    out[(x == 7) | (x == 8) | (y == 7) | (y == 8)] = (196, 230, 248)  # the frame between the panes
+    return bevel(out, (214, 242, 255), (110, 160, 200), width=2)
+
+
 def crafting_table_top(rng):
     wood = shades("LogEnd")
     frame = shades("LogBark")
@@ -421,7 +523,9 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
             BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
             RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side, StructureVoid=structure_void,
-            LootMarker=loot_marker, Fern=fern)
+            LootMarker=loot_marker, Fern=fern, GoldOre=gold_ore, FrostCrystalOre=frost_crystal_ore, JadeOre=jade_ore,
+            EmberOre=ember_ore, GoldBlock=gold_block, FrostCrystalBlock=frost_crystal_block, PolishedJade=polished_jade,
+            BrightSteelBlock=bright_steel_block, EmberLamp=ember_lamp)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

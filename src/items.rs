@@ -44,8 +44,8 @@ pub enum ToolKind {
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Tool {
     pub kind: ToolKind,
-    /// Its tier (§5.3), from wood (1) to iron (4): a block needing a higher one drops nothing
-    /// when it's broken with it.
+    /// Its tier (§5.3), from wood (1) to bright steel (5): a block needing a higher one drops
+    /// nothing when it's broken with it.
     pub tier: u8,
     /// How many blocks it breaks before it breaks itself.
     pub durability: u16,
@@ -53,9 +53,10 @@ pub struct Tool {
     pub speed: f32,
 }
 
-// Each tier's durability and speed, from wood to iron. A tier lasts longer and digs quicker than
-// the one before, so each is worth the trip to the ore it needs.
-const TIERS: [(u16, f32); 4] = [(64, 4.0), (128, 6.0), (192, 8.0), (256, 10.0)];
+// Each tier's durability and speed, from wood to bright steel. A tier lasts longer and digs
+// quicker than the one before, so each is worth the trip to the ore it needs, and bright steel,
+// the furthest, by the most.
+const TIERS: [(u16, f32); 5] = [(64, 4.0), (128, 6.0), (192, 8.0), (256, 10.0), (384, 13.0)];
 
 // A row's properties as a tool of `kind` in `tier`, from 1.
 const fn tool(kind: ToolKind, tier: u8) -> Properties {
@@ -133,6 +134,8 @@ use ToolKind::{Axe, Hoe, Pickaxe, Shovel};
 // planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
 // Apples come from leaves, now and then, seeds from tall grass, and wheat from the seeds sown
 // (`farming`), which bread is baked from. Mutton comes from sheep (§5.8) and cooks in a furnace.
+// Gold, frost crystal and jade come from ores under far climates, and any of them blended with
+// iron smelts into bright steel, the best tools; embers come from the deepest ore.
 items! {
     Stick { name: "stick" },
     Coal { name: "coal" },
@@ -160,6 +163,16 @@ items! {
     Bread { name: "bread", food(5) },
     Mutton { name: "mutton", food(2) },
     CookedMutton { name: "cooked_mutton", food(6) },
+    GoldIngot { name: "gold_ingot" },
+    FrostCrystal { name: "frost_crystal" },
+    Jade { name: "jade" },
+    BrightSteelBlend { name: "bright_steel_blend" },
+    BrightSteelIngot { name: "bright_steel_ingot" },
+    Ember { name: "ember" },
+    BrightSteelPickaxe { name: "bright_steel_pickaxe", tool(Pickaxe, 5) },
+    BrightSteelAxe { name: "bright_steel_axe", tool(Axe, 5) },
+    BrightSteelShovel { name: "bright_steel_shovel", tool(Shovel, 5) },
+    BrightSteelHoe { name: "bright_steel_hoe", tool(Hoe, 5) },
 }
 
 impl Item {
@@ -543,6 +556,7 @@ mod tests {
             Item::StonePickaxe,
             Item::CopperPickaxe,
             Item::IronPickaxe,
+            Item::BrightSteelPickaxe,
         ];
         for (tier, pair) in (1..).zip(pickaxes.windows(2)) {
             let (worse, better) = (pair[0].tool().unwrap(), pair[1].tool().unwrap());
@@ -564,7 +578,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::CookedMutton.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::BrightSteelHoe.sprite());
     }
 
     #[test]

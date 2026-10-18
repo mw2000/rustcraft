@@ -16,6 +16,7 @@ use super::terrain::{freeze_cell, terrain_block, under_surface, FREEZE_TEMPERATU
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
 use crate::chunks::generate::light::{Light, SkyLight, MAX_LIGHT};
 use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::ores::{is_ore, ore_climates};
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
@@ -2936,9 +2937,7 @@ fn test_new_biomes_look_the_same_from_every_level() {
                 // LODs draw no plants, and no ores, which are in the stone
                 let block = match full.get_block_at(U16Vec3::new(x, y, z)) {
                     plant if plant.is_plant() => BlockType::Air,
-                    BlockType::CoalOre | BlockType::CopperOre | BlockType::IronOre => {
-                        BlockType::Stone
-                    }
+                    ore if is_ore(ore) => BlockType::Stone,
                     block => block,
                 };
                 let expected = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
@@ -2955,6 +2954,49 @@ fn test_new_biomes_look_the_same_from_every_level() {
             checked += exact.len();
         }
         assert!(checked > 0, "no trees checked in {biome}");
+    }
+}
+
+#[test]
+fn test_regional_ores_come_up_under_their_own_climates_and_no_others() {
+    // each far climate, its ore and the chunk layers through the thick of the ore's band
+    let regional = [
+        ("desert", BlockType::GoldOre, 4..17),
+        ("glacier", BlockType::FrostCrystalOre, 14..26),
+        ("jungle", BlockType::JadeOre, 12..25),
+    ];
+    for (biome, own, layers) in regional {
+        let (regions, spot) = lowland_in(biome);
+        let biomes = regions.noise().biomes();
+        let mut found = 0;
+        // four chunk columns near it in the thick of the biome, as the spot may be at its edge
+        let near = (-4..4).flat_map(|x| (-4..4).map(move |z| (spot.x / 16 + x, spot.y / 16 + z)));
+        let within = near
+            .map(|(cx, cz)| {
+                (
+                    cx,
+                    cz,
+                    regions.chunk_columns(&mut regions.sampler(), cx, cz),
+                )
+            })
+            .filter(|(.., columns)| biomes.name(columns.biome(8, 8)) == Some(biome));
+        for (cx, cz, columns) in within.take(4) {
+            for y in layers.clone() {
+                let coord = ChunkCoordinate(I64Vec3::new(cx, y, cz));
+                for (at, block) in generate_chunk(regions.clone(), coord).iter_non_air() {
+                    let Some(climates) = ore_climates(block).filter(|c| !c.is_empty()) else {
+                        continue;
+                    };
+                    let under = biomes.name(columns.biome(at.x as i64, at.z as i64));
+                    assert!(
+                        under.is_some_and(|b| climates.contains(&b)),
+                        "{block:?} {under:?}"
+                    );
+                    found += (block == own) as usize;
+                }
+            }
+        }
+        assert!(found > 0, "no {own:?} under {biome}");
     }
 }
 

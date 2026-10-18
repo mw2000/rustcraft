@@ -21,8 +21,9 @@ const FAR_COLUMNS: [I64Vec2; 4] = [
     I64Vec2::new(-2_112, -2_112),
 ];
 // The chunk layers sampled in each column besides those at, over and just under its ground: a
-// cavern's depth, near the bottom where ores are richest, and halfway between.
-const DEEP_LAYERS: [i64; 3] = [1, 6, 20];
+// cavern's depth, near the bottom where ores are richest, where embers are, halfway between,
+// and where gold is under the spawn's savanna.
+const DEEP_LAYERS: [i64; 5] = [1, 3, 6, 12, 20];
 // The nearest structure to the spawn within this many blocks each way is sampled too, its floor
 // and the chunk over it, so the structures a world builds are checked like its terrain.
 const STRUCTURE_SEARCH: i64 = 4096;
@@ -110,10 +111,10 @@ mod tests {
     // update it deliberately, knowing that worlds will generate differently from before, so a
     // game of the version before can't join one of this version, and saved edits sit on new
     // terrain. CI runs this on Linux, Windows and macOS to see whether they agree (D-3).
-    // Last changed by M2.6, which brought jungle, savanna and taiga, changing the trees, plants
-    // and grass of much of the world, the spawn's savanna and the cold column's taiga among it,
-    // and sampled a jungle column too.
-    const GOLDEN: u64 = 0xfe17_9ccc_4c93_e061;
+    // Last changed by M2.5, which brought ores under the far climates and embers at the bottom
+    // of the world, frost crystal under the taiga column and jade under the jungle's among them,
+    // and sampled two more layers, for gold under the spawn's savanna and the embers.
+    const GOLDEN: u64 = 0xb76e_b1aa_0d6b_57f7;
 
     #[test]
     fn test_generation_matches_its_golden_checksum() {
@@ -130,12 +131,22 @@ mod tests {
         assert!(blocks.iter().any(BlockType::is_plant));
         assert!(blocks.contains(&BlockType::Leaves));
         assert!(blocks.contains(&BlockType::StoneBricks));
-        for ore in [BlockType::CoalOre, BlockType::CopperOre, BlockType::IronOre] {
+        // and the far climates' ores, under the spawn's savanna and the taiga and jungle
+        // columns, and the deepest
+        for ore in [
+            BlockType::CoalOre,
+            BlockType::CopperOre,
+            BlockType::IronOre,
+            BlockType::GoldOre,
+            BlockType::FrostCrystalOre,
+            BlockType::JadeOre,
+            BlockType::EmberOre,
+        ] {
             assert!(blocks.contains(&ore), "no {ore:?}");
         }
         // air deep underground is a cave
         let deep = samples
-            .as_chunks::<6>()
+            .as_chunks::<8>()
             .0
             .iter()
             .flat_map(|column| &column[3..]);

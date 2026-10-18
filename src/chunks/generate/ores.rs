@@ -7,9 +7,12 @@ use crate::chunks::chunk::CHUNK_SIZE;
 
 const SEED_OFFSET: u64 = 4000;
 
-/// An ore, the band of heights its veins are found in and how many there are.
+/// An ore, the band of heights its veins are found in, how many there are, and under which
+/// climates.
 struct Ore {
     block: BlockType,
+    // the biomes it's found under, by name, or none for under every climate
+    climates: &'static [&'static str],
     // the lowest and highest blocks its veins start at, thinning out over `FADE` blocks inside
     // each end
     bottom: i64,
@@ -27,10 +30,16 @@ struct Ore {
 // lowland ground and goes on to the bottom of the world, so it takes a deep dig or a walk down
 // through the caves. A tunnel through the thick of the bands passes a vein of coal or copper
 // on its walls every thirty blocks or so, and of iron every sixty, and caverns show far more.
-// Regional ores (M2.5) are to join this table with the climates they're found under.
-const ORES: [Ore; 3] = [
+//
+// The far climates each have an ore of their own, for bright steel (§5.3): gold deep under the
+// deserts and savannas, frost crystal under the glaciers and taiga from a little under the
+// sea, and jade under the jungles. Their veins are a quarter as many as iron's but nearly three
+// times as big, so they're rarer, and one found is worth the journey. Embers are deepest of
+// all, in the bottom hundred blocks under every climate.
+const ORES: [Ore; 7] = [
     Ore {
         block: BlockType::CoalOre,
+        climates: &[],
         bottom: 192,
         top: WORLD_HEIGHT as i64,
         veins: 3.0,
@@ -38,6 +47,7 @@ const ORES: [Ore; 3] = [
     },
     Ore {
         block: BlockType::CopperOre,
+        climates: &[],
         bottom: 128,
         top: 456,
         veins: 2.5,
@@ -45,12 +55,65 @@ const ORES: [Ore; 3] = [
     },
     Ore {
         block: BlockType::IronOre,
+        climates: &[],
         bottom: 16,
         top: 392,
         veins: 1.5,
         size: (2, 6),
     },
+    Ore {
+        block: BlockType::GoldOre,
+        climates: &["desert", "savanna"],
+        bottom: 48,
+        top: 288,
+        veins: 0.4,
+        size: (6, 16),
+    },
+    Ore {
+        block: BlockType::FrostCrystalOre,
+        climates: &["glacier", "taiga"],
+        bottom: 192,
+        top: 440,
+        veins: 0.4,
+        size: (6, 16),
+    },
+    Ore {
+        block: BlockType::JadeOre,
+        climates: &["jungle"],
+        bottom: 160,
+        top: 424,
+        veins: 0.4,
+        size: (6, 16),
+    },
+    Ore {
+        block: BlockType::EmberOre,
+        climates: &[],
+        bottom: 16,
+        top: 112,
+        veins: 0.4,
+        size: (4, 10),
+    },
 ];
+
+/// Whether `block` is one of the ores veins are made of.
+#[cfg(test)]
+pub fn is_ore(block: BlockType) -> bool {
+    ore_climates(block).is_some()
+}
+
+/// The biomes `block`'s veins are found under, if it's an ore, or none for every climate.
+#[cfg(test)]
+pub fn ore_climates(block: BlockType) -> Option<&'static [&'static str]> {
+    Some(ORES.iter().find(|ore| ore.block == block)?.climates)
+}
+
+impl Ore {
+    // Whether it's found under a column of `biome`, the biome's name or None for the base
+    // terrain.
+    fn found_under(&self, biome: Option<&str>) -> bool {
+        self.climates.is_empty() || biome.is_some_and(|name| self.climates.contains(&name))
+    }
+}
 
 // Veins start in a grid of cells as big as chunks, a few in each, and grow from there a block
 // at a time, staying within `REACH` blocks of where they started each way. That's less than a
@@ -59,7 +122,7 @@ const ORES: [Ore; 3] = [
 const CELL: i64 = CHUNK_SIZE as i64;
 const REACH: i64 = 2;
 // Room for the biggest vein, which fits easily in the box it grows in.
-const MOST_BLOCKS: usize = 12;
+const MOST_BLOCKS: usize = 16;
 // Where a cell's veins of an ore start comes from one hash, twelve bits each, so there's room
 // for five, and a vein's box has a bit each in a `u128`, see `vein`.
 const _: () = {
@@ -75,9 +138,16 @@ const _: () = {
 const FADE: f64 = 32.0;
 
 /// Turns the stone of the chunk whose lowest block is `origin` to ore where veins run through
-/// it, with `cells` in `ChunkData::from_cells` order and `ground` the top of the highest ground
-/// over it. Only for full detail: LODs don't draw underground.
-pub fn place_ores(seed: u32, origin: I64Vec3, ground: i64, cells: &mut [BlockType]) {
+/// it, with `cells` in `ChunkData::from_cells` order, `ground` the top of the highest ground
+/// over it and `biome` the name of the biome owning each of its columns, by its `x` and `z` in
+/// the chunk, or None for the base terrain. Only for full detail: LODs don't draw underground.
+pub fn place_ores(
+    seed: u32,
+    origin: I64Vec3,
+    ground: i64,
+    biome: impl Fn(i64, i64) -> Option<&'static str>,
+    cells: &mut [BlockType],
+) {
     let size = CHUNK_SIZE as i64;
     // stone is all under the ground
     if origin.y >= ground {
@@ -113,8 +183,10 @@ pub fn place_ores(seed: u32, origin: I64Vec3, ground: i64, cells: &mut [BlockTyp
                     if local.cmplt(I64Vec3::ZERO).any() || local.cmpge(I64Vec3::splat(size)).any() {
                         continue;
                     }
+                    // a vein under the edge of its climate stops at the edge, column by column,
+                    // which each chunk knows for its own
                     let at = &mut cells[((local.x * size + local.z) * size + local.y) as usize];
-                    if *at == BlockType::Stone {
+                    if *at == BlockType::Stone && ore.found_under(biome(local.x, local.z)) {
                         *at = ore.block;
                     }
                 }
@@ -185,16 +257,25 @@ mod tests {
     use crate::chunks::generate::noise::NoiseGenerator;
     use crate::chunks::generate::region_store::RegionStore;
 
-    // Ores through solid stone in the chunks at chunk `x`, `z` from the bottom of the world to
-    // the top, a chunk's cells each.
-    fn stone_column(seed: u32, x: i64, z: i64) -> Vec<Vec<BlockType>> {
+    // Ores through solid stone under `biome` in the chunks at chunk `x`, `z` from the bottom of
+    // the world to the top, a chunk's cells each.
+    fn stone_column(seed: u32, x: i64, z: i64, biome: Option<&'static str>) -> Vec<Vec<BlockType>> {
         let size = CHUNK_SIZE as i64;
         (0..WORLD_HEIGHT as i64 / size)
             .map(|y| {
                 let mut cells = vec![BlockType::Stone; CELLS];
-                place_ores(seed, I64Vec3::new(x, y, z) * size, i64::MAX, &mut cells);
+                let origin = I64Vec3::new(x, y, z) * size;
+                place_ores(seed, origin, i64::MAX, |_, _| biome, &mut cells);
                 cells
             })
+            .collect()
+    }
+
+    // Every biome there is, by name, and the base terrain.
+    fn every_biome() -> Vec<Option<&'static str>> {
+        let biomes = crate::chunks::generate::biome::Biomes::new(0);
+        std::iter::once(None)
+            .chain(biomes.names().map(Some))
             .collect()
     }
 
@@ -227,7 +308,7 @@ mod tests {
         };
         let forwards = generate(&mut coords.iter());
         assert!(forwards == generate(&mut coords.iter().rev()));
-        for ore in ORES.map(|ore| ore.block) {
+        for ore in [BlockType::CoalOre, BlockType::CopperOre, BlockType::IronOre] {
             let found = forwards
                 .iter()
                 .flat_map(|(_, blocks)| blocks)
@@ -260,7 +341,10 @@ mod tests {
                 })
                 .collect();
             let mut after = before.clone();
-            place_ores(1, origin, i64::MAX, &mut after);
+            // a mix of climates, column by column, so the regional ores come up too
+            let biomes = every_biome();
+            let biome = |x: i64, z: i64| biomes[(x + 3 * z) as usize % biomes.len()];
+            place_ores(1, origin, i64::MAX, biome, &mut after);
             for (&was, &is) in before.iter().zip(&after) {
                 if was != is {
                     assert_eq!(BlockType::Stone, was);
@@ -275,10 +359,10 @@ mod tests {
     #[test]
     fn test_ores_keep_to_their_depths() {
         let size = CHUNK_SIZE as i64;
-        // ore blocks of each kind in each 64 blocks of height
-        let mut bands = [[0usize; 3]; WORLD_HEIGHT as usize / 64];
+        // ore blocks of each kind in each 64 blocks of height, under the base terrain
+        let mut bands = [[0usize; ORES.len()]; WORLD_HEIGHT as usize / 64];
         for (x, z) in (0..64).map(|i| (i % 8 * 5, i / 8 * 7)) {
-            for (y, cells) in stone_column(2, x, z).iter().enumerate() {
+            for (y, cells) in stone_column(2, x, z, None).iter().enumerate() {
                 for (index, block) in cells.iter().enumerate() {
                     if let Some(ore) = ORES.iter().position(|ore| ore.block == *block) {
                         bands[((y as i64 * size + local(index).y) / 64) as usize][ore] += 1;
@@ -309,13 +393,73 @@ mod tests {
         assert!((0.002..0.005).contains(&copper), "copper {copper}");
         assert!((0.001..0.0025).contains(&iron), "iron {iron}");
         assert!(coal > copper && copper > iron);
+        // and none of the far climates' ores
+        for (ore, _) in ORES
+            .iter()
+            .enumerate()
+            .filter(|(_, ore)| !ore.climates.is_empty())
+        {
+            assert!(bands.iter().all(|counts| counts[ore] == 0));
+        }
+    }
+
+    #[test]
+    fn test_regional_ores_come_up_only_under_their_climates_rarer_than_iron() {
+        let size = CHUNK_SIZE as i64;
+        for biome in every_biome() {
+            // ore blocks of each kind, and how many are in the thick of their bands
+            let (mut found, mut thick) = ([0usize; ORES.len()], [0usize; ORES.len()]);
+            for (x, z) in (0..32).map(|i| (i % 8 * 3, i / 8 * 5)) {
+                for (y, cells) in stone_column(7, x, z, biome).iter().enumerate() {
+                    for (index, block) in cells.iter().enumerate() {
+                        let Some(ore) = ORES.iter().position(|ore| ore.block == *block) else {
+                            continue;
+                        };
+                        let height = y as i64 * size + local(index).y;
+                        let Ore { bottom, top, .. } = ORES[ore];
+                        assert!((bottom - REACH..top + REACH).contains(&height), "{block:?}");
+                        found[ore] += 1;
+                        let fade = FADE as i64;
+                        thick[ore] += (bottom + fade..top - fade).contains(&height) as usize;
+                    }
+                }
+            }
+            for (ore, kind) in ORES.iter().enumerate() {
+                assert_eq!(
+                    kind.found_under(biome),
+                    found[ore] > 0,
+                    "{biome:?} {:?}",
+                    kind.block
+                );
+            }
+            // as a share of the stone in the thick of each band
+            let share = |ore: usize| {
+                let Ore { bottom, top, .. } = ORES[ore];
+                thick[ore] as f64 / ((top - bottom) as f64 - 2.0 * FADE) / (32.0 * 256.0)
+            };
+            for ore in (3..ORES.len()).filter(|&ore| found[ore] > 0) {
+                let rate = share(ore);
+                let block = ORES[ore].block;
+                assert!((0.0005..0.8 * share(2)).contains(&rate), "{block:?} {rate}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_every_climate_an_ore_is_found_under_is_a_biome() {
+        let biomes = every_biome();
+        for ore in &ORES {
+            for name in ore.climates {
+                assert!(biomes.contains(&Some(name)), "{name}");
+            }
+        }
     }
 
     #[test]
     fn test_ore_comes_in_veins() {
         let size = CHUNK_SIZE as i64;
         let (mut ore, mut beside_ore) = (0, 0);
-        for cells in (0..16).flat_map(|i| stone_column(5, i, -i)) {
+        for cells in (0..16).flat_map(|i| stone_column(5, i, -i, Some("jungle"))) {
             for (index, &block) in cells.iter().enumerate() {
                 if block == BlockType::Stone {
                     continue;

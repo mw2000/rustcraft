@@ -55,8 +55,9 @@ use Item::*;
 
 // One for each structure planned (§5.6), better the deeper or further out it's found: those near
 // the surface and the start give food, coal and torches with a little metal, and only now and
-// then a tool, and those deep down or far away iron and iron tools. Regional ores (M2.5) are to
-// join the far ones.
+// then a tool, and those deep down or far away iron and iron tools, and what the far climates'
+// ores give (§5.3): each far structure what's found under its own climate, and the deepest
+// embers and now and then bright steel.
 pub const TABLES: &[LootTable] = &[
     // a forest ruin, found early
     LootTable {
@@ -105,6 +106,8 @@ pub const TABLES: &[LootTable] = &[
             entry(block(BlockType::Bed), 1..=1, 2),
             entry(IronPickaxe, 1..=1, 2),
             entry(IronAxe, 1..=1, 2),
+            entry(FrostCrystal, 1..=4, 4),
+            entry(BrightSteelIngot, 1..=2, 1),
         ],
     },
     // old workings underground, left with what was dug
@@ -137,6 +140,10 @@ pub const TABLES: &[LootTable] = &[
             entry(IronAxe, 1..=1, 2),
             entry(IronShovel, 1..=1, 2),
             entry(IronHoe, 1..=1, 1),
+            entry(Ember, 1..=3, 3),
+            entry(GoldIngot, 1..=3, 2),
+            entry(BrightSteelIngot, 1..=2, 2),
+            entry(BrightSteelPickaxe, 1..=1, 1),
         ],
     },
     // a desert temple, the furthest out and the richest
@@ -152,6 +159,10 @@ pub const TABLES: &[LootTable] = &[
             entry(IronAxe, 1..=1, 3),
             entry(IronShovel, 1..=1, 2),
             entry(IronHoe, 1..=1, 1),
+            entry(GoldIngot, 2..=6, 6),
+            entry(Jade, 1..=4, 3),
+            entry(BrightSteelIngot, 1..=3, 2),
+            entry(BrightSteelAxe, 1..=1, 1),
         ],
     },
 ];

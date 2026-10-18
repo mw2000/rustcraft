@@ -79,6 +79,28 @@ mod tests {
         assert!(!harvests(BlockType::IronOre, tool(Item::StonePickaxe)));
         assert!(harvests(BlockType::IronOre, tool(Item::CopperPickaxe)));
         assert!(harvests(BlockType::IronOre, tool(Item::IronPickaxe)));
+        // the far climates' ores need iron, and the deepest bright steel, which they make
+        for ore in [
+            BlockType::GoldOre,
+            BlockType::FrostCrystalOre,
+            BlockType::JadeOre,
+        ] {
+            assert!(!harvests(ore, tool(Item::CopperPickaxe)), "{ore:?}");
+            assert!(harvests(ore, tool(Item::IronPickaxe)), "{ore:?}");
+        }
+        assert!(!harvests(BlockType::EmberOre, tool(Item::IronPickaxe)));
+        assert!(harvests(
+            BlockType::EmberOre,
+            tool(Item::BrightSteelPickaxe)
+        ));
+        assert!(!harvests(
+            BlockType::EmberOre,
+            tool(Item::BrightSteelShovel)
+        ));
+        assert_eq!(
+            12.0 / 13.0,
+            break_time(BlockType::EmberOre, tool(Item::BrightSteelPickaxe))
+        );
         assert_eq!(
             9.0,
             break_time(BlockType::IronOre, tool(Item::StonePickaxe))
@@ -106,7 +128,7 @@ mod tests {
         }
         // and the best tier there is mines everything tiered
         for block in BlockType::ALL.into_iter().filter(|b| b.tier() > 0) {
-            assert!(harvests(block, tool(Item::IronPickaxe)), "{block:?}");
+            assert!(harvests(block, tool(Item::BrightSteelPickaxe)), "{block:?}");
         }
     }
 

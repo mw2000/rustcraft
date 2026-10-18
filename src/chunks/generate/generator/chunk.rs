@@ -82,6 +82,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
         regions.noise().seed(),
         origin,
         ground_top(highest),
+        |x, z| biomes.name(columns.biome(x, z)),
         &mut cells,
     );
     for placed in &columns.structures {

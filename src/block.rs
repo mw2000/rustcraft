@@ -269,6 +269,74 @@ blocks! {
         hardness: 9.0, tool: Some(Pickaxe), tier: 3,
         top: Tile::IronOre, side: Tile::IronOre, bottom: Tile::IronOre, lod: Tile::IronOre,
     },
+    // Ores found only under far climates (§5.3), which need an iron pickaxe, and the deepest,
+    // which needs bright steel and glows a little in the dark of the caverns it's found in.
+    GoldOre {
+        name: "gold_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 10.0, tool: Some(Pickaxe), tier: 4,
+        top: Tile::GoldOre, side: Tile::GoldOre, bottom: Tile::GoldOre, lod: Tile::GoldOre,
+    },
+    FrostCrystalOre {
+        name: "frost_crystal_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        emits: 0,
+        style: RenderStyle::Cube, replaceable: false,
+        drops: Drops::Item(Item::FrostCrystal),
+        hardness: 10.0, tool: Some(Pickaxe), tier: 4,
+        top: Tile::FrostCrystalOre, side: Tile::FrostCrystalOre, bottom: Tile::FrostCrystalOre,
+        lod: Tile::FrostCrystalOre,
+    },
+    JadeOre {
+        name: "jade_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Item(Item::Jade),
+        hardness: 10.0, tool: Some(Pickaxe), tier: 4,
+        top: Tile::JadeOre, side: Tile::JadeOre, bottom: Tile::JadeOre, lod: Tile::JadeOre,
+    },
+    EmberOre {
+        name: "ember_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 5,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Item(Item::Ember),
+        hardness: 12.0, tool: Some(Pickaxe), tier: 5,
+        top: Tile::EmberOre, side: Tile::EmberOre, bottom: Tile::EmberOre, lod: Tile::EmberOre,
+    },
+    // What the far ores are worked into, to build with.
+    GoldBlock {
+        name: "gold_block", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 9.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::GoldBlock, side: Tile::GoldBlock, bottom: Tile::GoldBlock, lod: Tile::GoldBlock,
+    },
+    FrostCrystalBlock {
+        name: "frost_crystal_block", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 9.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::FrostCrystalBlock, side: Tile::FrostCrystalBlock,
+        bottom: Tile::FrostCrystalBlock, lod: Tile::FrostCrystalBlock,
+    },
+    PolishedJade {
+        name: "polished_jade", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 9.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::PolishedJade, side: Tile::PolishedJade, bottom: Tile::PolishedJade,
+        lod: Tile::PolishedJade,
+    },
+    BrightSteelBlock {
+        name: "bright_steel_block", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 12.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::BrightSteelBlock, side: Tile::BrightSteelBlock,
+        bottom: Tile::BrightSteelBlock, lod: Tile::BrightSteelBlock,
+    },
+    // Embers behind frost crystal panes, as bright as a torch.
+    EmberLamp {
+        name: "ember_lamp", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        emits: 14,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 3.0, tool: Some(Pickaxe), tier: 0,
+        top: Tile::EmberLamp, side: Tile::EmberLamp, bottom: Tile::EmberLamp,
+        lod: Tile::EmberLamp,
+    },
     CraftingTable {
         name: "crafting_table", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
@@ -579,9 +647,18 @@ pub enum Tile {
     StructureVoid,
     LootMarker,
     Fern,
+    GoldOre,
+    FrostCrystalOre,
+    JadeOre,
+    EmberOre,
+    GoldBlock,
+    FrostCrystalBlock,
+    PolishedJade,
+    BrightSteelBlock,
+    EmberLamp,
 }
 
-pub const TILE_COUNT: usize = 46;
+pub const TILE_COUNT: usize = 55;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -630,7 +707,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Fern as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::EmberLamp as usize + 1);
     }
 
     #[test]

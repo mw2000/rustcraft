@@ -7,7 +7,7 @@
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, see `Tile` in block.rs
-const ATLAS_CELLS: f32 = 46.0;
+const ATLAS_CELLS: f32 = 55.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
@@ -54,7 +54,7 @@ fn block_sample(uv: vec2<f32>, vertex_alpha: f32, footprint: BlockFootprint) -> 
 // order. `gen_atlas` prints these and the block-textures skill's `pack.py`
 // rewrites them, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 46>(
+    var means = array<vec3<f32>, 55>(
         vec3<f32>(0.1182, 0.1186, 0.1186), // stone
         vec3<f32>(0.5003, 0.5003, 0.5003), // grass top
         vec3<f32>(0.4776, 0.3611, 0.1822), // sand
@@ -101,6 +101,15 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.1878, 0.6445, 1.0000), // structure void
         vec3<f32>(0.6570, 0.4062, 0.0420), // loot marker
         vec3<f32>(0.4955, 0.4955, 0.4955), // fern
+        vec3<f32>(0.1791, 0.1559, 0.1158), // gold ore
+        vec3<f32>(0.1391, 0.1787, 0.2149), // frost crystal ore
+        vec3<f32>(0.1200, 0.1453, 0.1263), // jade ore
+        vec3<f32>(0.1037, 0.0676, 0.0474), // ember ore
+        vec3<f32>(0.7385, 0.4981, 0.0937), // gold block
+        vec3<f32>(0.4980, 0.7352, 0.9018), // frost crystal block
+        vec3<f32>(0.0782, 0.3459, 0.1625), // polished jade
+        vec3<f32>(0.5330, 0.5788, 0.6221), // bright steel block
+        vec3<f32>(0.6481, 0.6424, 0.5752), // ember lamp
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

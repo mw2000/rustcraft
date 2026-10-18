@@ -20,7 +20,12 @@ MATERIALS = dict(
     stone=shades("Cobblestone", 2.2)[[1, 2, 3]] * 1.25,
     copper=np.array([(150, 76, 44), (204, 112, 62), (236, 160, 104)], float),
     iron=np.array([(140, 140, 148), (196, 196, 202), (236, 236, 240)], float),
+    bright_steel=np.array([(120, 138, 162), (184, 204, 224), (240, 248, 255)], float),
 )
+GOLD = np.array([(170, 120, 30), (232, 188, 56), (255, 236, 146)], float)
+FROST = np.array([(86, 146, 196), (150, 210, 240), (220, 246, 255)], float)
+JADE = np.array([(34, 110, 70), (72, 172, 112), (156, 226, 170)], float)
+EMBER = np.array([(176, 54, 22), (244, 124, 40), (255, 226, 120)], float)
 # Coal's black, a little blue where it catches the light, as coal ore's flecks are.
 COAL = np.array([(24, 24, 28), (44, 44, 50), (78, 80, 90)], float)
 
@@ -70,6 +75,46 @@ def lump():
 def ingot():
     # a bar seen from above at a slant: its top face, and its front face below it
     return (y >= 6) & (y <= 11) & (x >= 2 + (11 - y) // 2) & (x <= 13 - (11 - y) // 2)
+
+
+def crystal():
+    # a long shard on the diagonal, pointed at both ends, with a shorter one leaning off its foot
+    long = np.abs(V) / 2.4 + np.abs(U - 11.0) / 7.5 < 1.0
+    short = np.abs(V - 3.2) / 1.5 + np.abs(U - 7.0) / 3.6 < 1.0
+    return long | short
+
+
+def gem():
+    # a rounded pebble, smoothed as jade is
+    return ((x - 7.5) / 5.6) ** 2 + ((y - 8.5) / 4.6) ** 2 < 1.0
+
+
+def heap():
+    # a little heap of grains, wider at its foot
+    return (y >= 6) & (y <= 13) & (np.abs(x - 7.5) < (y - 4) * 0.85)
+
+
+def jade():
+    out = single(gem(), JADE)
+    out[6, 5:7, :3] = out[7, 5, :3] = (214, 250, 222)  # a soft gleam, upper left
+    return out
+
+
+def blend():
+    """A heap of iron filings and bright grains mixed, ready for the furnace."""
+    out = np.zeros((16, 16, 4))
+    lit(heap(), MATERIALS["iron"] * 0.85, out)
+    for gy, gx in [(8, 7), (10, 5), (10, 10), (12, 8), (12, 3), (11, 12), (9, 9)]:
+        out[gy, gx, :3] = (240, 222, 150)
+    outline(out)
+    return out
+
+
+def ember():
+    out = single(lump(), EMBER)
+    for gy, gx in [(7, 8), (8, 7), (8, 8), (9, 9), (6, 10)]:  # its white-hot heart
+        out[gy, gx, :3] = (255, 246, 190)
+    return out
 
 
 def apple():
@@ -209,6 +254,10 @@ for material in ["wooden", "stone", "copper", "iron"]:
 SPRITES.update(seeds=seeds, wheat=sheaf, bread=bread)
 SPRITES.update(mutton=mutton(np.array([(150, 40, 46), (200, 66, 70), (232, 118, 112)], float)),
                cooked_mutton=mutton(np.array([(92, 48, 26), (138, 78, 42), (180, 116, 66)], float)))
+SPRITES.update(gold_ingot=lambda: bar(GOLD), frost_crystal=lambda: single(crystal(), FROST), jade=jade,
+               bright_steel_blend=blend, bright_steel_ingot=lambda: bar(MATERIALS["bright_steel"]), ember=ember)
+for kind, head in [*HEADS.items(), ("hoe", hoe)]:
+    SPRITES[f"bright_steel_{kind}"] = lambda head=head: tool(head, MATERIALS["bright_steel"])
 
 
 def table_order():

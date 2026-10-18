@@ -199,6 +199,66 @@ recipes! {
         name: "bread", station: CraftingTable,
         ingredients: [(Item::Wheat, 3)], output: (Item::Bread, 1),
     },
+    // Bright steel is iron blended with something from a far climate, whichever's nearest: gold
+    // from under the deserts, frost crystal from under the cold or jade from the jungle (§5.3).
+    BrightSteelBlendOfGold {
+        name: "bright_steel_blend_of_gold", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 1), (Item::GoldIngot, 1)],
+        output: (Item::BrightSteelBlend, 1),
+    },
+    BrightSteelBlendOfFrostCrystal {
+        name: "bright_steel_blend_of_frost_crystal", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 1), (Item::FrostCrystal, 1)],
+        output: (Item::BrightSteelBlend, 1),
+    },
+    BrightSteelBlendOfJade {
+        name: "bright_steel_blend_of_jade", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 1), (Item::Jade, 1)],
+        output: (Item::BrightSteelBlend, 1),
+    },
+    BrightSteelPickaxe {
+        name: "bright_steel_pickaxe", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 3), (Item::Stick, 2)],
+        output: (Item::BrightSteelPickaxe, 1),
+    },
+    BrightSteelAxe {
+        name: "bright_steel_axe", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 3), (Item::Stick, 2)],
+        output: (Item::BrightSteelAxe, 1),
+    },
+    BrightSteelShovel {
+        name: "bright_steel_shovel", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 1), (Item::Stick, 2)],
+        output: (Item::BrightSteelShovel, 1),
+    },
+    BrightSteelHoe {
+        name: "bright_steel_hoe", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 2), (Item::Stick, 2)],
+        output: (Item::BrightSteelHoe, 1),
+    },
+    GoldBlock {
+        name: "gold_block", station: CraftingTable,
+        ingredients: [(Item::GoldIngot, 4)], output: (Item::Block(BlockType::GoldBlock), 1),
+    },
+    FrostCrystalBlock {
+        name: "frost_crystal_block", station: CraftingTable,
+        ingredients: [(Item::FrostCrystal, 4)],
+        output: (Item::Block(BlockType::FrostCrystalBlock), 1),
+    },
+    PolishedJade {
+        name: "polished_jade", station: CraftingTable,
+        ingredients: [(Item::Jade, 4)], output: (Item::Block(BlockType::PolishedJade), 1),
+    },
+    BrightSteelBlock {
+        name: "bright_steel_block", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 4)],
+        output: (Item::Block(BlockType::BrightSteelBlock), 1),
+    },
+    EmberLamp {
+        name: "ember_lamp", station: CraftingTable,
+        ingredients: [(Item::Ember, 1), (Item::FrostCrystal, 4)],
+        output: (Item::Block(BlockType::EmberLamp), 1),
+    },
     CopperIngot {
         name: "copper_ingot", station: Furnace,
         ingredients: [(Item::Block(BlockType::CopperOre), 1)], output: (Item::CopperIngot, 1),
@@ -214,6 +274,14 @@ recipes! {
     CookedMutton {
         name: "cooked_mutton", station: Furnace,
         ingredients: [(Item::Mutton, 1)], output: (Item::CookedMutton, 1),
+    },
+    GoldIngot {
+        name: "gold_ingot", station: Furnace,
+        ingredients: [(Item::Block(BlockType::GoldOre), 1)], output: (Item::GoldIngot, 1),
+    },
+    BrightSteelIngot {
+        name: "bright_steel_ingot", station: Furnace,
+        ingredients: [(Item::BrightSteelBlend, 1)], output: (Item::BrightSteelIngot, 1),
     },
 }
 
