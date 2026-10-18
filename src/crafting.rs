@@ -169,6 +169,12 @@ recipes! {
         name: "sandstone", station: CraftingTable,
         ingredients: [(SAND, 4)], output: (Item::Block(BlockType::Sandstone), 1),
     },
+    // a frame of planks and a mattress of grass, as there's no wool without sheep
+    Bed {
+        name: "bed", station: CraftingTable,
+        ingredients: [(PLANKS, 3), (Item::Block(BlockType::TallGrass), 3)],
+        output: (Item::Block(BlockType::Bed), 1),
+    },
     CopperIngot {
         name: "copper_ingot", station: Furnace,
         ingredients: [(Item::Block(BlockType::CopperOre), 1)], output: (Item::CopperIngot, 1),
@@ -359,7 +365,7 @@ mod tests {
             &[(Item::Coal, 1), (Item::Stick, 1)],
             Recipe::Torches.ingredients()
         );
-        assert_eq!(Some(Item::Coal), BlockType::CoalOre.drops());
+        assert_eq!(Some(Item::Coal), BlockType::CoalOre.drops(&mut rand::rng()));
     }
 
     #[test]

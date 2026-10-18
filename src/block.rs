@@ -1,3 +1,5 @@
+use rand::{Rng, RngExt};
+
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::items::Item;
 use crate::items::ToolKind::{self, Axe, Pickaxe, Shovel};
@@ -61,6 +63,9 @@ pub enum Drops {
     Block(BlockType),
     /// An item that isn't a block, as coal ore leaves coal.
     Item(Item),
+    /// An item one time in so many, and otherwise nothing, as leaves now and then leave an
+    /// apple.
+    Chance(Item, u32),
 }
 
 // Declares `BlockType` and its table of `Properties` together, so each block's properties sit
@@ -131,9 +136,9 @@ blocks! {
     },
     Leaves {
         name: "leaves", solid: true, light_opacity: 1, occlusion_weight: 0.3, emits: 0,
-        style: RenderStyle::Cube, replaceable: false, drops: Drops::Nothing,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Chance(Item::Apple, 20),
         hardness: 0.3, tool: None, tier: 0,
-        // Saplings and apples come with farming (M1.9b).
+        // Saplings come with farming (M1.9b).
         top: Tile::Leaves, side: Tile::Leaves, bottom: Tile::Leaves, lod: Tile::Leaves,
     },
     Dirt {
@@ -220,11 +225,11 @@ blocks! {
         top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
     },
     // Plants, standing on the block below and gone with it. They're broken at a touch, let light
-    // and the player through and are built over, so their faces hide nothing. They drop nothing
-    // until farming, which has tall grass drop seeds.
+    // and the player through and are built over, so their faces hide nothing. Flowers drop
+    // nothing, and tall grass itself, for beds' mattresses, until farming has it drop seeds too.
     TallGrass {
         name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
-        style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        style: RenderStyle::Cross, replaceable: true, drops: Drops::Itself,
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::TallGrass, side: Tile::TallGrass, bottom: Tile::TallGrass, lod: Tile::TallGrass,
     },
@@ -253,6 +258,14 @@ blocks! {
         style: RenderStyle::Torch, replaceable: false, drops: Drops::Itself,
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::Torch, side: Tile::Torch, bottom: Tile::Torch, lod: Tile::Torch,
+    },
+    // A cube for now, rather than two blocks long. Right-clicking one sets where its sleeper
+    // respawns, and at night sleeps in it (§5.5).
+    Bed {
+        name: "bed", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 1.0, tool: Some(Axe), tier: 0,
+        top: Tile::BedTop, side: Tile::BedSide, bottom: Tile::Planks, lod: Tile::BedTop,
     },
 }
 
@@ -293,13 +306,15 @@ impl BlockType {
         self.properties().style
     }
 
-    /// The item it leaves when it's broken in survival, if any.
-    pub fn drops(self) -> Option<Item> {
+    /// The item it leaves when it's broken in survival, if any, with `rng` deciding one left
+    /// to chance.
+    pub fn drops(self, rng: &mut impl Rng) -> Option<Item> {
         match self.properties().drops {
             Drops::Nothing => None,
             Drops::Itself => Some(Item::Block(self)),
             Drops::Block(block) => Some(Item::Block(block)),
             Drops::Item(item) => Some(item),
+            Drops::Chance(item, one_in) => rng.random_ratio(1, one_in).then_some(item),
         }
     }
 
@@ -422,9 +437,11 @@ pub enum Tile {
     Dandelion,
     Cornflower,
     Torch,
+    BedTop,
+    BedSide,
 }
 
-pub const TILE_COUNT: usize = 30;
+pub const TILE_COUNT: usize = 32;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -467,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Torch as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::BedSide as usize + 1);
     }
 
     #[test]
@@ -537,7 +554,10 @@ mod tests {
         assert!(!torch.is_solid() && !torch.is_opaque() && !torch.is_replaceable());
         assert_eq!(0, torch.light_opacity());
         assert!(torch.needs_ground() && torch.is_tangible() && !torch.is_plant());
-        assert_eq!(Some(crate::items::Item::Block(torch)), torch.drops());
+        assert_eq!(
+            Some(crate::items::Item::Block(torch)),
+            torch.drops(&mut rand::rng())
+        );
         assert_eq!(0, BlockType::Stone.emits());
     }
 

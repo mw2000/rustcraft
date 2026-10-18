@@ -25,6 +25,7 @@ use crate::protocol::{
     Teleport, Welcome,
 };
 use crate::save::{PlayerState, WorldSave};
+use crate::survival::{SpawnBed, Vitals};
 use crate::world::World;
 
 // How far ahead of the server's clock a client's movement can get, in seconds of moving at its
@@ -161,6 +162,8 @@ type Leaving<'a> = (
     &'a GameMode,
     &'a Hotbar,
     &'a Inventory,
+    &'a Vitals,
+    &'a SpawnBed,
 );
 
 /// Sees a client off as it disconnects: keeps its player's state to save, despawns them, which
@@ -176,8 +179,11 @@ pub(super) fn see_off(
     let client = ClientId::Client(gone.entity);
     allowances.forget(client);
     let leaving = players.iter().find(|(_, owner, ..)| owner.0 == client);
-    if let Some((player, _, name, body, look, state, mode, hotbar, inventory)) = leaving {
-        let state = PlayerState::of(body, *look, state.movement, *mode, *hotbar, inventory);
+    if let Some((player, _, name, body, look, state, mode, hotbar, inventory, vitals, bed)) =
+        leaving
+    {
+        let state = PlayerState::of(body, *look, state.movement, *mode, *hotbar, inventory)
+            .surviving(*vitals, *bed);
         save.left(name, state);
         commands.entity(player).despawn();
         announce(&mut output, format!("{} left the game", name.as_str()));
@@ -185,7 +191,8 @@ pub(super) fn see_off(
     }
 }
 
-fn announce(output: &mut MessageWriter<ToClients<CommandOutput>>, text: String) {
+/// Tells everyone `text` in the command bar.
+pub(super) fn announce(output: &mut MessageWriter<ToClients<CommandOutput>>, text: String) {
     output.write(ToClients {
         targets: SendTargets::All,
         message: CommandOutput { text, error: false },

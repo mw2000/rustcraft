@@ -13,12 +13,17 @@ use bevy::{
 use bevy_replicon::prelude::ClientId;
 
 use crate::{
-    collision::Aabb, game_mode::GameMode, hotbar::Hotbar, inventory::Inventory, save::PlayerState,
+    collision::Aabb,
+    game_mode::GameMode,
+    hotbar::Hotbar,
+    inventory::Inventory,
+    save::PlayerState,
+    survival::{SpawnBed, Vitals},
 };
 
 /// The player's body, at its feet, and how it's moving.
 #[derive(Component, Default)]
-#[require(GameMode, Hotbar, Inventory, PlayerLook, Transform)]
+#[require(GameMode, Hotbar, Inventory, PlayerLook, SpawnBed, Transform, Vitals)]
 pub struct Player {
     pub movement: Movement,
     velocity: Vec3,
@@ -40,6 +45,8 @@ pub fn arriving(state: &PlayerState) -> impl Bundle {
         state.hotbar,
         state.inventory(),
         state.body(),
+        state.vitals,
+        state.spawn_bed(),
     )
 }
 

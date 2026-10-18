@@ -9,13 +9,14 @@ use crate::block::BlockType;
 /// How many of an item make a full stack, unless its row says otherwise.
 pub const MAX_STACK: u8 = 64;
 
-/// An item's row in the table: how it behaves. Food (the hunger it fills) joins it as a column
-/// when it comes (M1.8).
+/// An item's row in the table: how it behaves.
 struct Properties {
     /// How many make a full stack.
     max_stack: u8,
     /// What it does as a tool, if it's one.
     tool: Option<Tool>,
+    /// How much of the food bar eating one fills (§5.5), or 0 if it isn't food.
+    fills: u8,
 }
 
 // What every block item has, and every row of the table unless it says otherwise: blocks
@@ -23,6 +24,7 @@ struct Properties {
 const PLAIN: Properties = Properties {
     max_stack: MAX_STACK,
     tool: None,
+    fills: 0,
 };
 
 /// What a tool is for: each is quick at breaking the blocks whose row names it (M1.2).
@@ -61,7 +63,13 @@ const fn tool(kind: ToolKind, tier: u8) -> Properties {
             durability,
             speed,
         }),
+        fills: 0,
     }
+}
+
+// A row's properties as food that fills `fills` of the food bar.
+const fn food(fills: u8) -> Properties {
+    Properties { fills, ..PLAIN }
 }
 
 // Declares `Item`, with a variant for each row beside the one for blocks, and each row's stable
@@ -110,6 +118,8 @@ use ToolKind::{Axe, Pickaxe, Shovel};
 
 // Coal comes from coal ore, ingots from smelting ore in a furnace, and the tools are made from
 // planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
+// Apples come from leaves, now and then; bread and meat wait for farming (M1.9b) and animals
+// (M3.2).
 items! {
     Stick { name: "stick" },
     Coal { name: "coal" },
@@ -127,6 +137,7 @@ items! {
     IronPickaxe { name: "iron_pickaxe", tool(Pickaxe, 4) },
     IronAxe { name: "iron_axe", tool(Axe, 4) },
     IronShovel { name: "iron_shovel", tool(Shovel, 4) },
+    Apple { name: "apple", food(4) },
 }
 
 impl Item {
@@ -154,6 +165,11 @@ impl Item {
     /// What it does as a tool, if it's one.
     pub fn tool(self) -> Option<Tool> {
         self.properties().tool
+    }
+
+    /// How much of the food bar eating one fills, if it's food.
+    pub fn fills(self) -> Option<u8> {
+        Some(self.properties().fills).filter(|&fills| fills > 0)
     }
 
     /// The block it places, if it's a block.
@@ -319,6 +335,9 @@ impl TryFrom<SavedStack> for ItemStack {
 mod tests {
     use std::collections::HashSet;
 
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
     use super::{take, Item, ItemStack, ToolKind, MAX_STACK};
     use crate::block::BlockType;
 
@@ -356,28 +375,44 @@ mod tests {
 
     #[test]
     fn test_blocks_drop_themselves_or_what_their_row_says() {
-        let drop = |block: BlockType| block.drops().and_then(Item::block);
-        assert_eq!(Some(BlockType::Dirt), drop(BlockType::Grass));
-        assert_eq!(Some(BlockType::Dirt), drop(BlockType::Dirt));
-        assert_eq!(Some(BlockType::Cobblestone), drop(BlockType::Stone));
-        assert_eq!(Some(BlockType::IronOre), drop(BlockType::IronOre));
-        assert_eq!(Some(Item::Coal), BlockType::CoalOre.drops());
-        assert_eq!(Some(BlockType::Log), drop(BlockType::Log));
-        for nothing in [
-            BlockType::Air,
-            BlockType::Water,
-            BlockType::Leaves,
-            BlockType::TallGrass,
-            BlockType::Poppy,
-        ] {
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut drop = |block: BlockType| block.drops(&mut rng);
+        let block = |block| Some(Item::Block(block));
+        assert_eq!(block(BlockType::Dirt), drop(BlockType::Grass));
+        assert_eq!(block(BlockType::Dirt), drop(BlockType::Dirt));
+        assert_eq!(block(BlockType::Cobblestone), drop(BlockType::Stone));
+        assert_eq!(block(BlockType::IronOre), drop(BlockType::IronOre));
+        assert_eq!(block(BlockType::Log), drop(BlockType::Log));
+        assert_eq!(block(BlockType::TallGrass), drop(BlockType::TallGrass));
+        for nothing in [BlockType::Air, BlockType::Water, BlockType::Poppy] {
+            assert_eq!(Some(Item::Coal), drop(BlockType::CoalOre));
             assert_eq!(None, drop(nothing), "{nothing:?}");
         }
         // and every drop is an item there is
         for block in BlockType::ALL {
-            if let Some(item) = block.drops() {
+            if let Some(item) = (0..100).find_map(|_| drop(block)) {
                 assert_eq!(Some(item), Item::from_name(item.name()));
             }
         }
+    }
+
+    #[test]
+    fn test_leaves_drop_an_apple_one_time_in_twenty() {
+        let mut rng = StdRng::seed_from_u64(7);
+        let drops: Vec<_> = (0..2000)
+            .map(|_| BlockType::Leaves.drops(&mut rng))
+            .collect();
+        let apples = drops
+            .iter()
+            .filter(|&&drop| drop == Some(Item::Apple))
+            .count();
+        assert!((70..130).contains(&apples), "{apples} apples");
+        assert!(drops
+            .iter()
+            .all(|&drop| drop.is_none() || drop == Some(Item::Apple)));
+        assert_eq!(Some(4), Item::Apple.fills());
+        assert_eq!(None, Item::Stick.fills());
+        assert_eq!(None, Item::Block(BlockType::Leaves).fills());
     }
 
     #[test]
@@ -449,7 +484,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::IronShovel.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::Apple.sprite());
     }
 
     #[test]

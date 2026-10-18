@@ -4,8 +4,12 @@
 //! (`client::drops`). They aren't saved: a world reopened has none, as they'd have gone in a
 //! few minutes anyway.
 
+use std::f32::consts::TAU;
+
 use bevy::math::I64Vec3;
 use bevy::prelude::*;
+use rand::rngs::StdRng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 use crate::chunks::chunk::ChunkCoordinate;
@@ -13,6 +17,7 @@ use crate::collision::{move_and_collide, Aabb};
 use crate::inventory::Inventory;
 use crate::items::ItemStack;
 use crate::player::{Player, BODY, EYE_HEIGHT};
+use crate::survival::Vitals;
 use crate::world::World;
 
 /// How big a dropped item is, in blocks, at its middle bottom.
@@ -35,6 +40,9 @@ const POP_SPEED: f32 = 4.0;
 // How hard a thrown one leaves the eye, and how much upward it's given, in blocks a second.
 const THROW_SPEED: f32 = 6.0;
 const THROW_LIFT: f32 = 1.5;
+// How fast what a player who dies was carrying flies out from where they fell, at most, in
+// blocks a second.
+const SCATTER_SPEED: f32 = 3.0;
 // Seconds before a player can pick one up: a moment, so a block's item is seen to drop, and
 // longer for one thrown, so the thrower can get it away from themselves.
 const DROPPED_PICKUP_DELAY: f32 = 0.5;
@@ -45,6 +53,17 @@ const LIFETIME: f32 = 300.0;
 // same item to gather into one stack with it.
 const PICKUP_REACH: f32 = 1.5;
 const MERGE_REACH: f32 = 1.0;
+
+/// The server's dice, for what's left to chance, such as whether leaves drop an apple: seeded
+/// from the system, or by a test to know what comes up.
+#[derive(Resource)]
+pub struct Chance(pub StdRng);
+
+impl Default for Chance {
+    fn default() -> Self {
+        Self(rand::make_rng())
+    }
+}
 
 /// Some items lying in the world, at the middle bottom of its `Transform`. Replicated to
 /// clients, which draw it, with only its stack: the rest is for the server moving it.
@@ -86,6 +105,22 @@ impl DroppedItem {
             pickup_after: THROWN_PICKUP_DELAY,
         };
         (item, Transform::from_translation(at))
+    }
+
+    /// Items a player with their feet at `feet` was carrying as they died, flung a little way
+    /// in a direction `rng` picks.
+    pub fn scattered(stack: ItemStack, feet: Vec3, rng: &mut StdRng) -> (Self, Transform) {
+        let (angle, speed) = (
+            rng.random_range(0.0..TAU),
+            rng.random_range(0.0..SCATTER_SPEED),
+        );
+        let item = Self {
+            stack,
+            velocity: Vec3::new(angle.cos() * speed, POP_SPEED, angle.sin() * speed),
+            age: 0.0,
+            pickup_after: THROWN_PICKUP_DELAY,
+        };
+        (item, Transform::from_translation(feet + Vec3::Y))
     }
 }
 
@@ -170,13 +205,13 @@ pub(super) fn merge(
     }
 }
 
-/// Puts dropped items near a player into their inventory, as much as it has room for.
+/// Puts dropped items near a living player into their inventory, as much as it has room for.
 pub(super) fn pick_up(
-    mut players: Query<(&Transform, &mut Inventory), With<Player>>,
+    mut players: Query<(&Transform, &mut Inventory, &Vitals), With<Player>>,
     mut items: Query<(Entity, &mut DroppedItem, &Transform)>,
     mut commands: Commands,
 ) {
-    for (body, mut inventory) in &mut players {
+    for (body, mut inventory, _) in players.iter_mut().filter(|(.., vitals)| !vitals.is_dead()) {
         let (feet, head) = (body.translation, body.translation + Vec3::Y * BODY.max.y);
         for (entity, mut item, at) in &mut items {
             let middle = at.translation + Vec3::Y * (SIZE / 2.0);

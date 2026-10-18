@@ -17,10 +17,12 @@ use rustcraft::game_mode::{GameMode, GameModePlugin};
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
 use rustcraft::player::name::PlayerName;
+use rustcraft::player::physics::{step, MoveInput};
 use rustcraft::player::{Movement, Player, PlayerLook, PlayerOwner, EYE_HEIGHT};
 use rustcraft::protocol::{BlockChanged, ProtocolPlugin, RequestEdit};
 use rustcraft::save::{SavePlugin, WorldSave};
 use rustcraft::server::{ServerPlugin, WorldToOpen};
+use rustcraft::survival::Vitals;
 use rustcraft::world::World;
 
 // A server playing the world saved in `dir`, or a new one with seed 3, started.
@@ -201,4 +203,63 @@ fn test_a_server_alone_keeps_the_chunks_near_its_player_loaded() {
     let there = ChunkCoordinate::containing(away.floor().as_i64vec3());
     update_until(&mut app, |world| world.is_chunk_generated(there));
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// Moves every player as walking with no keys held does, under gravity, as their clients would.
+fn walk(
+    time: Res<Time>,
+    world: Res<World>,
+    mut players: Query<(&mut Transform, &mut Player, &PlayerLook)>,
+) {
+    let block = |at| {
+        world
+            .is_chunk_generated(ChunkCoordinate::containing(at))
+            .then(|| world.get_block_at(at))
+    };
+    for (mut body, mut player, look) in &mut players {
+        body.translation = step(
+            body.translation,
+            &mut player,
+            *look,
+            MoveInput::default(),
+            time.delta_secs(),
+            block,
+        );
+    }
+}
+
+#[test]
+fn test_a_new_survival_player_arrives_unhurt() {
+    let dir = temp_dir("arrival");
+    let mut app = server(&dir);
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        50,
+    )))
+    .add_systems(Update, walk);
+    let player = hosts_player(&mut app);
+    assert_eq!(
+        GameMode::Survival,
+        *app.world().get::<GameMode>(player).unwrap()
+    );
+    let spawn = app.world().resource::<World>().spawn();
+    // waiting in the air for the ground to load, then dropping onto it
+    let start = Instant::now();
+    let mut still = 0;
+    while still < 20 {
+        assert!(start.elapsed() < Duration::from_secs(30), "never landed");
+        std::thread::sleep(Duration::from_millis(5));
+        let was = app.world().get::<Transform>(player).unwrap().translation;
+        app.update();
+        let now = app.world().get::<Transform>(player).unwrap().translation;
+        still = if now == was && now.y < spawn.y - 5.0 {
+            still + 1
+        } else {
+            0
+        };
+    }
+    assert_eq!(
+        Vitals::default(),
+        *app.world().get::<Vitals>(player).unwrap()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

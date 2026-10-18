@@ -323,9 +323,9 @@ fn use_target(
     let (mode, mut hotbar, inventory) = player.single_mut().expect("player does not exist");
     let slot = hotbar.selected as u8;
     let replaceable = world.get_block_at(hit.block).is_replaceable();
-    // and right click on a crafting table or a furnace opens it instead, see `use_station`
-    let places =
-        (replaceable || hit.face != I64Vec3::ZERO) && station_used(&world, hit, *mode).is_none();
+    // and right click on a crafting table, a furnace or a bed uses it instead, see
+    // `use_station`
+    let places = (replaceable || hit.face != I64Vec3::ZERO) && !is_used(&world, hit, *mode);
     if mouse.just_pressed(MouseButton::Right) && places {
         if let Some(held) = hotbar.held(inventory).and_then(|stack| stack.item.block()) {
             let at = if replaceable {
@@ -344,6 +344,12 @@ fn use_target(
     }
 }
 
+/// Whether right-clicking `hit` uses it, rather than building against it or eating: a bed
+/// always, and a station in survival.
+pub fn is_used(world: &World, hit: Hit, mode: GameMode) -> bool {
+    world.get_block_at(hit.block) == BlockType::Bed || station_used(world, hit, mode).is_some()
+}
+
 // The station right-clicking `hit` opens, if it's one, in survival: in creative, where there's
 // no crafting or smelting, it's built against like any other block.
 fn station_used(world: &World, hit: Hit, mode: GameMode) -> Option<Station> {
@@ -351,7 +357,8 @@ fn station_used(world: &World, hit: Hit, mode: GameMode) -> Option<Station> {
 }
 
 // Right click on a crafting table or a furnace opens the inventory screen at it, as the
-// server's told, so what's made there is checked against it, and a furnace's sent.
+// server's told, so what's made there is checked against it, and a furnace's sent, and on a bed
+// tells the server, which sleeps in it.
 #[allow(clippy::too_many_arguments)]
 fn use_station(
     world: Res<World>,
@@ -369,7 +376,9 @@ fn use_station(
     if !mouse.just_pressed(MouseButton::Right) {
         return;
     }
-    if let Some(at) = station_used(&world, hit, mode) {
+    if world.get_block_at(hit.block) == BlockType::Bed {
+        uses.write(UseBlock { block: hit.block });
+    } else if let Some(at) = station_used(&world, hit, mode) {
         uses.write(UseBlock { block: hit.block });
         *station = CraftingStation(at);
         *view = ContainerView::opening(world.get_block_at(hit.block), hit.block);

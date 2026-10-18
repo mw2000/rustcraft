@@ -28,6 +28,7 @@ use crate::hotbar::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
+use crate::survival::{SpawnBed, Vitals};
 use crate::world::World;
 use region::{ChunkEdits, Region};
 pub use world_file::{PlayerState, WorldFile};
@@ -333,6 +334,8 @@ struct Savable<'w, 's> {
             &'static Inventory,
             &'static PlayerOwner,
             Option<&'static PlayerName>,
+            &'static Vitals,
+            &'static SpawnBed,
         ),
     >,
 }
@@ -340,8 +343,10 @@ struct Savable<'w, 's> {
 impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
-        for (body, player, look, mode, hotbar, inventory, owner, name) in &self.players {
-            let state = PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory);
+        for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players
+        {
+            let state = PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory)
+                .surviving(*vitals, *bed);
             match (owner.0, name) {
                 (ClientId::Server, _) => file.player = Some(state),
                 (_, Some(name)) => save.keep_player(name, state),

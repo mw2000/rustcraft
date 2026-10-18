@@ -5,7 +5,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
-use super::drops::DroppedItem;
+use super::drops::{Chance, DroppedItem};
 use super::sync::BlockChanges;
 use crate::block::BlockType;
 use crate::breaking::{break_time, harvests};
@@ -130,6 +130,7 @@ pub(super) fn receive_edits(
     mut players: Players,
     mut changed: BlockChanges,
     mut rejected: MessageWriter<ToClients<EditRejected>>,
+    mut chance: ResMut<Chance>,
     mut commands: Commands,
 ) {
     for &FromClient {
@@ -192,7 +193,8 @@ pub(super) fn receive_edits(
         }
         let drops = mode.drops_broken_blocks();
         let mut leave = |broken: BlockType, at: I64Vec3| {
-            if let Some(item) = broken.drops().filter(|_| drops && harvests(broken, held)) {
+            let harvested = drops && harvests(broken, held);
+            if let Some(item) = broken.drops(&mut chance.0).filter(|_| harvested) {
                 commands.spawn((
                     DroppedItem::from_block(ItemStack::new(item, 1), at),
                     Replicated,

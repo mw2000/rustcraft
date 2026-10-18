@@ -20,14 +20,16 @@ pub(crate) const TEXT_SHADOW: TextShadow = TextShadow {
     color: Color::srgb(0.24, 0.24, 0.24),
 };
 
-/// Whether the game's being played, paused under the menu, or carrying on under the inventory:
-/// the block picker in creative, and the inventory screen in survival.
+/// Whether the game's being played, paused under the menu, carrying on under the inventory
+/// (the block picker in creative, and the inventory screen in survival), or carrying on with
+/// the player dead, under the death screen until they respawn.
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameState {
     #[default]
     Playing,
     Paused,
     Inventory,
+    Dead,
 }
 
 /// Escape opens a menu over the game, like Minecraft's, and pauses it: the clock stops, the
@@ -135,12 +137,12 @@ pub(crate) fn font(size: f32) -> TextFont {
     }
 }
 
-fn label(text: &str) -> impl Bundle {
+pub(crate) fn label(text: &str) -> impl Bundle {
     (Text::new(text), font(18.0), TEXT_SHADOW)
 }
 
-// A button, for a label to go in.
-fn button() -> impl Bundle {
+/// A button, for a label to go in.
+pub(crate) fn button() -> impl Bundle {
     (
         Button,
         Hovered::default(),
@@ -163,16 +165,18 @@ fn toggle_menu(
     mut next: ResMut<NextState<GameState>>,
 ) {
     if keys.just_pressed(TOGGLE_KEY) {
-        // which closes the inventory rather than pausing over it
-        next.set(match state.get() {
-            GameState::Playing => GameState::Paused,
-            GameState::Paused | GameState::Inventory => GameState::Playing,
-        });
+        // which closes the inventory rather than pausing over it, and does nothing for the
+        // dead, who can only respawn
+        match state.get() {
+            GameState::Playing => next.set(GameState::Paused),
+            GameState::Paused | GameState::Inventory => next.set(GameState::Playing),
+            GameState::Dead => {}
+        }
     } else if keys.just_pressed(INVENTORY_KEY) {
         match state.get() {
             GameState::Playing => next.set(GameState::Inventory),
             GameState::Inventory => next.set(GameState::Playing),
-            GameState::Paused => {}
+            GameState::Paused | GameState::Dead => {}
         }
     }
 }

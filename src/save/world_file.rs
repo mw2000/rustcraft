@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 use std::io;
 
-use bevy::math::Vec3;
+use bevy::math::{I64Vec3, Vec3};
 use bevy::transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +9,7 @@ use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
+use crate::survival::{SpawnBed, Vitals};
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 /// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), and format 3 added
@@ -41,10 +42,16 @@ pub struct PlayerState {
     // saves from before game modes, the hotbar and the inventory get the ones a new player has
     #[serde(default)]
     pub game_mode: GameMode,
+    /// The bed they respawn on, if they've used one.
+    #[serde(default)]
+    pub bed: Option<[i64; 3]>,
     #[serde(default)]
     pub hotbar: Hotbar,
     #[serde(default)]
     inventory: Option<Inventory>,
+    // and before health, whole
+    #[serde(default)]
+    pub vitals: Vitals,
 }
 
 impl PlayerState {
@@ -62,8 +69,10 @@ impl PlayerState {
                 Movement::Walk
             },
             game_mode,
+            bed: None,
             hotbar: Hotbar::default(),
             inventory: None,
+            vitals: Vitals::default(),
         }
     }
 
@@ -82,9 +91,24 @@ impl PlayerState {
             pitch: look.pitch,
             movement,
             game_mode,
+            bed: None,
             hotbar,
             inventory: Some(inventory.clone()),
+            vitals: Vitals::default(),
         }
+    }
+
+    /// The same, with how they are and the bed they respawn on.
+    pub fn surviving(self, vitals: Vitals, bed: SpawnBed) -> Self {
+        Self {
+            vitals,
+            bed: bed.0.map(|bed| bed.to_array()),
+            ..self
+        }
+    }
+
+    pub fn spawn_bed(&self) -> SpawnBed {
+        SpawnBed(self.bed.map(I64Vec3::from_array))
     }
 
     /// What they carry, or what a new player in their game mode starts with if they're new or
@@ -144,7 +168,7 @@ impl WorldFile {
 
 #[cfg(test)]
 mod tests {
-    use bevy::math::Vec3;
+    use bevy::math::{I64Vec3, Vec3};
     use bevy::transform::components::Transform;
 
     use super::{PlayerState, WorldFile, FORMAT_VERSION};
@@ -154,6 +178,7 @@ mod tests {
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
     use crate::player::{Movement, PlayerLook};
+    use crate::survival::{SpawnBed, Vitals};
 
     #[test]
     fn test_world_files_round_trip() {
@@ -260,6 +285,32 @@ mod tests {
         assert_eq!(look, state.look());
         let arriving = PlayerState::arriving_at(Vec3::ONE).look();
         assert!(arriving.forward().dot(Vec3::Z) > 0.9999);
+    }
+
+    #[test]
+    fn test_health_hunger_breath_and_the_bed_round_trip_and_older_saves_are_whole() {
+        let mut file = WorldFile::new(1, 0.5);
+        let vitals = Vitals {
+            health: 7,
+            food: 3,
+            air: 4,
+        };
+        let bed = SpawnBed(Some(I64Vec3::new(-12, 470, 1 << 40)));
+        file.player = Some(PlayerState::arriving_at(Vec3::ONE).surviving(vitals, bed));
+        let text = file.to_toml();
+        assert!(text.contains("health = 7"), "{text}");
+        let player = WorldFile::from_toml(&text).unwrap().player.unwrap();
+        assert_eq!((vitals, bed), (player.vitals, player.spawn_bed()));
+        // and sent, as in `Welcome`
+        let bytes = postcard::to_stdvec(&player).unwrap();
+        assert_eq!(player, postcard::from_bytes(&bytes).unwrap());
+
+        let older = &text[..text.find("bed").unwrap()];
+        let player = WorldFile::from_toml(older).unwrap().player.unwrap();
+        assert_eq!(
+            (Vitals::default(), SpawnBed(None)),
+            (player.vitals, player.spawn_bed())
+        );
     }
 
     #[test]

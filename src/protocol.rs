@@ -31,13 +31,14 @@ use crate::save::region::{local_block, local_index};
 use crate::save::PlayerState;
 use crate::server::drops::DroppedItem;
 use crate::server::HeldItem;
+use crate::survival::Vitals;
 
 /// The port a world is hosted on unless another's asked for.
 pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -92,7 +93,12 @@ impl Plugin for ProtocolPlugin {
             .replicate::<PlayerName>()
             .replicate::<GameMode>()
             .replicate::<HeldItem>()
-            .add_visibility_filter::<PlayerOwner>();
+            .add_visibility_filter::<PlayerOwner>()
+            // in order, as stopping eating only makes sense after starting, and a client's
+            // player's health after the damage before it
+            .add_client_message::<Eat>(Channel::Ordered)
+            .add_client_message::<Respawn>(Channel::Ordered)
+            .add_server_message::<VitalsChanged>(Channel::Ordered);
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -285,7 +291,8 @@ pub struct PlayerPose {
 }
 
 /// Where the server has put a client's player, by its feet, for the client to move them to:
-/// somewhere `/tp` sent them, or back where they were if they moved further than they could.
+/// somewhere `/tp` sent them, where they respawn, or back where they were if they moved further
+/// than they could.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct Teleport {
     pub position: Vec3,
@@ -368,6 +375,23 @@ pub struct ContainerChanged {
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartBreaking {
     pub block: I64Vec3,
+}
+
+/// A player starting to eat what's in hotbar slot `slot`, as they hold right click with food
+/// in it, or stopping, as `None`, as they let go. The server times it, as it does breaking.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Eat(pub Option<u8>);
+
+/// A dead player asking to live again, from the death screen.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Respawn;
+
+/// A client's player's health, food and breath, as the server has changed them, and whether
+/// they're asleep. The host's needs no telling, as they're the server's own.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VitalsChanged {
+    pub vitals: Vitals,
+    pub asleep: bool,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself

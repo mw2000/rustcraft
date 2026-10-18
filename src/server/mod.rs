@@ -1,6 +1,7 @@
 //! What the server decides (INV-4): in singleplayer it runs in the same App as the client, and
 //! a dedicated server runs it on its own (§4.4).
 
+mod beds;
 mod chunks;
 mod clock;
 mod commands;
@@ -11,6 +12,7 @@ mod edits;
 mod host;
 mod inventory;
 mod players;
+mod survival;
 mod sync;
 
 pub use chunks::{keep_chunks_near_players, ServerChunks};
@@ -41,7 +43,9 @@ impl Plugin for ServerPlugin {
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
             .init_resource::<Containers>()
+            .init_resource::<drops::Chance>()
             .add_observer(players::welcome)
+            .add_observer(survival::start_living)
             .add_observer(players::see_off)
             .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
             .add_systems(
@@ -100,6 +104,25 @@ impl Plugin for ServerPlugin {
             )
             .add_systems(
                 PostUpdate,
+                // with every player where they've moved, as falls are judged by it, and the
+                // requests made this frame received, before what's changed is sent
+                (
+                    survival::receive_eating,
+                    survival::receive_respawns,
+                    beds::use_beds,
+                    survival::live,
+                    beds::get_up,
+                    beds::skip_night,
+                    survival::send_vitals,
+                )
+                    .chain()
+                    .after(ClientSystems::Send)
+                    .after(players::move_players)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
                 // once this frame's requests and commands have changed them
                 (
                     players::send_inventories,
@@ -110,6 +133,7 @@ impl Plugin for ServerPlugin {
                     .after(edits::receive_edits)
                     .after(inventory::receive_inventory_requests)
                     .after(commands::run_commands)
+                    .after(survival::live)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
             )

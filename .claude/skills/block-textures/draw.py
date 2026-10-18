@@ -190,6 +190,31 @@ def furnace_side(rng):
     return out
 
 
+# A bed's blanket, darkest first, and its sheet and pillow.
+BLANKET = np.array([(132, 26, 30), (166, 36, 38), (196, 54, 52)], float)
+LINEN = np.array([(206, 204, 194), (232, 230, 222)], float)
+
+
+def bed_top(rng):
+    out = BLANKET[levels(noise(rng, (1, 2)), 3)]
+    out[2:6, 3:13] = LINEN[levels(noise(rng)[2:6, 3:13], 2)]  # the pillow at the head
+    out[2, 3:13] = out[2:6, 3] = LINEN[1]  # lit along its upper left
+    out[6, 2:14] = BLANKET[0]  # the blanket's turned-down edge under it
+    frame = shades("Planks")
+    out[:, [0, 15]] = frame[1]
+    out[[0, 15]] = frame[1]
+    return out
+
+
+def bed_side(rng):
+    out = planks(rng)  # the frame
+    out[0:2] = LINEN[1]  # the sheet's edge
+    out[2:9] = BLANKET[levels(noise(rng, (0, 3))[2:9], 3)]  # the blanket hanging over the side
+    out[8] = BLANKET[0]
+    out[13:16, 3:13] = shades("Planks")[0] * 0.6  # in the shade under it, between the legs
+    return out
+
+
 def clear():
     """A tile with nothing in it yet, as RGBA, for plants drawn on transparency."""
     return np.zeros((16, 16, 4))
@@ -268,7 +293,8 @@ def torch(rng):
 
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
-            TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch)
+            TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
+            BedSide=bed_side)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::game_mode::GameModePlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::hotbar::HotbarPlugin;
+use rustcraft::hud::HudPlugin;
 use rustcraft::interaction::InteractionPlugin;
 use rustcraft::inventory::screen::InventoryScreenPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
@@ -232,6 +233,7 @@ fn main() {
     .add_plugins((
         GameModePlugin,
         HotbarPlugin,
+        HudPlugin,
         PickerPlugin,
         InventoryScreenPlugin,
         DrawDropsPlugin,

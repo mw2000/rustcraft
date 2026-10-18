@@ -50,6 +50,7 @@ impl Plugin for ClientPlugin {
                         join::follow_inventory,
                         join::follow_game_mode,
                         join::follow_teleports,
+                        join::follow_vitals,
                     ),
                 )
                     .chain()

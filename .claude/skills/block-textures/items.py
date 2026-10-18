@@ -66,6 +66,19 @@ def ingot():
     return (y >= 6) & (y <= 11) & (x >= 2 + (11 - y) // 2) & (x <= 13 - (11 - y) // 2)
 
 
+def apple():
+    """A round fruit, a little wider than tall, dimpled where its stalk goes in, with a leaf beside the stalk."""
+    out = np.zeros((16, 16, 4))
+    body = ((x - 7.5) / 5.8) ** 2 + ((y - 9.5) / 5.3) ** 2 < 1.0
+    body &= ~((np.abs(x - 7.5) < 1.0) & (y < 5))
+    lit(body, np.array([(150, 22, 26), (204, 38, 36), (236, 92, 80)], float), out)
+    out[6:8, 4] = out[6, 5] = (255, 200, 190, 255)  # a glint, upper left
+    lit((x == 8) & (y >= 1) & (y <= 4), HANDLE, out)
+    lit(((x - 11) / 2.2) ** 2 + ((y - 2.5) / 1.2) ** 2 < 1.0, np.array([(46, 102, 34), (72, 140, 48), (110, 176, 70)], float), out)
+    outline(out)
+    return out
+
+
 def shift(a, dy, dx):
     """`a` moved by (dy, dx), filling in with zeros: sprites don't wrap round, as tiles do."""
     out = np.zeros_like(a)
@@ -134,6 +147,7 @@ SPRITES = dict(stick=lambda: single(stick(), HANDLE), coal=coal, copper_ingot=la
 for material in ["wooden", "stone", "copper", "iron"]:
     for kind, head in HEADS.items():
         SPRITES[f"{material}_{kind}"] = lambda head=head, material=material: tool(head, MATERIALS[material])
+SPRITES["apple"] = apple
 
 
 def table_order():

@@ -84,7 +84,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits, containers and the player (`src/save/`).
 
-Not there yet: health, structures, mobs, networking.
+Not there yet: structures, mobs.
 
 ---
 
@@ -574,8 +574,7 @@ The world's state beyond the seed (INV-1).
     Older games ignore the directory, so the format isn't raised.
   - `PROTOCOL_VERSION` is 5.
   - **Known gaps:** names aren't authenticated, so anyone can join as anyone and take their
-    save, which is fine among friends. Respawning (M1.8) on a joiner will need its
-    `Teleport`. Labels show through terrain. The host's own player is only relayed, never
+    save, which is fine among friends. Labels show through terrain. The host's own player is only relayed, never
     checked, as it's the server's.
   - `tests/multiplayer.rs` adds, with up to three Apps: two joiners named alike get names of
     their own, each sees the host and the other but not themselves, and one leaving goes from
@@ -931,6 +930,54 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - Hunger (D-5): a food bar that drains slowly, faster while sprinting, jumping or healing.
   Eating refills it; a fuller bar heals over time and an empty one hurts, down to half a heart.
   No saturation or exhaustion arithmetic beyond that.
+- **Built (M1.8):** health, hunger, breath, death and beds, for players in survival; creative
+  takes no damage and needs no food.
+  - **State:** `Vitals { health, food, air }` (`src/survival.rs`) on each player: 20 health (ten
+    hearts), 20 food, 10 bubbles, saved in `PlayerState` with the bed a player respawns on
+    (`SpawnBed`), both with serde defaults, so older saves are whole and respawn at the world's
+    spawn, and joiners keep theirs in `players/<name>.toml`. Only the server changes them
+    (`src/server/survival.rs`, INV-4), sending a client its own as `VitalsChanged { vitals,
+    asleep }` when they change; the host's are the server's own.
+  - **Falls, and why the client can't skip them:** movement is the client's (§4.4), so the
+    server judges falls from where it sees each player, frame by frame (a client's poses, or
+    the host's body), against the ground in its own world (`Footing`, `surroundings`): feet
+    within 0.05 of the top of a solid block under a corner of the body are standing. It keeps
+    the highest point since a player last stood or swam, from the ground they left, however
+    sparse the poses, and when it next finds them standing they take a point a block beyond 3
+    (`fall_damage`, floored: 4 blocks hurt 1, 23 kill). Feet or middle in water breaks a fall.
+    Clients say nothing about falling, so leaving damage out means lying about where they are,
+    which the pose checks (M0.6d) catch past a slack. Not judged: moving more than 8 blocks
+    between frames (being teleported or respawned, beyond any fall or flight in a pose's 50 ms),
+    and falls before a player's first stood since arriving, respawning or being put somewhere,
+    which is a new player dropping onto ground that's only just loaded (a test arrives one).
+  - **Drowning:** 15 seconds of breath with the eyes under water, the bubbles counting it
+    down over the food bar, then 2 damage a second; it comes back in 2 seconds above water.
+  - **Hunger:** a point every 35 seconds just living, three times as fast sprinting (judged by
+    the server from 0.5-second windows of poses faster than 5 blocks a second), 1/40 of a point
+    a jump (leaving the ground upwards) and half a point a point healed. Above 17 food a player
+    heals a point every 4 seconds; at none they're hurt a point every 4 seconds down to half a
+    heart, so starving never kills. Eating is holding right click with food in the hotbar,
+    `Eat(Some(slot))` and `Eat(None)` as it starts and stops: the server eats one every 1.6
+    seconds while it's held, refusing when the bar's full or it isn't food.
+  - **Death:** at no health the server drops everything carried where they fell, scattered
+    (`DroppedItem::scattered`, a server `Chance` RNG), tells everyone "X fell from a high
+    place" or "X drowned" in the command bar, and the dead pick nothing up. The client shows
+    the death screen (`GameState::Dead`); its Respawn button sends `Respawn`, and the server
+    puts them, whole and fed, on their bed if it's still there or the world's spawn, sending a
+    joiner a `Teleport`.
+  - **Beds:** `bed`, a cube for now, from 3 planks and 3 tall grass at a crafting table: a
+    frame and a grass mattress, as there's no wool without sheep, and tall grass is the one soft
+    thing a player can gather (it now drops itself). Right-clicking one in reach (`UseBlock`)
+    sets the respawn point, and at night (the sun down, 0.74 to 0.24) lies the player down
+    (`Asleep`), fading their screen; moving half a block gets them up. Once every player has
+    been asleep for 2 seconds the clock skips to the next morning (0.26) and everyone wakes.
+  - **HUD** (`src/hud.rs`): hearts over the hotbar's left, the food bar over its right filling
+    from the right, bubbles over it while short of breath, hidden in creative and behind the
+    inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
+    `assets/textures/hud.png`, drawn by the block-textures skill's `hud.py`.
+  - `PROTOCOL_VERSION` is 7.
+  - **Later:** a two-block bed lain in, with a Leave Bed button; bread and meat (M1.9b, M3.2);
+    damage from mobs and lava; leaves dropping apples as they decay, once they do.
 - Day and night already exist; night brings hostile mobs (§5.8).
 - **Block light (built, M1.7).** Blocks that `emit` light (the torch, 14) light the blocks round
   them alongside sky light, so caves and nights can be lit. It loses a level a block, and the
@@ -981,7 +1028,11 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   sparse where it's dry or cold, and flowers in patches of one kind, rarer. Deserts, glaciers and
   snow have no grass, so no plants. Trees grow over them. The server lets plants go only on solid
   ground and removes a plant whose ground is broken, as a `BlockChanged` of its own; it simply
-  goes, dropping nothing until seeds from tall grass come with farming.
+  goes, dropping nothing until seeds from tall grass come with farming (since M1.8 tall grass
+  drops itself, for beds).
+- **Built (M1.8):** the `apple`, the first food: food items have a `fills` column in `items!`
+  (`food(4)`), and leaves drop one a time in 20 when broken (`Drops::Chance(Item::Apple, 20)`
+  in `blocks!`).
 
 ### 5.6 Structures
 
@@ -1100,7 +1151,7 @@ Done when: **you can start with nothing and make iron tools.**
   copper and iron tools (§5.3).
 - ☑ **M1.6 Furnace.** Smelting ores, with containers (§5.2).
 - ☑ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
-- ☐ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
+- ☑ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
   (§5.5).
 - ☐ **M1.9 Plants and farming** (§5.5a).
   - ☑ **M1.9a Plant blocks.** The cross render style, tall grass and flowers in the world.

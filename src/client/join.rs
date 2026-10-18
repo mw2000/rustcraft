@@ -22,9 +22,11 @@ use crate::player::name::PlayerName;
 use crate::player::{arriving, Player, PlayerLook};
 use crate::protocol::{
     name_to_user_data, CommandOutput, EditReach, GameModeChanged, InventoryChanged, PlayerPose,
-    Teleport, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID, POSE_INTERVAL, PROTOCOL_VERSION,
+    Teleport, VitalsChanged, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID, POSE_INTERVAL,
+    PROTOCOL_VERSION,
 };
 use crate::settings::Settings;
+use crate::survival::{Asleep, Vitals};
 use crate::world::World;
 
 /// The server at `address`, `host:port` or just `host` for the default port.
@@ -274,4 +276,26 @@ pub(super) fn refused(_: On<ProtocolMismatch>, mut output: MessageWriter<Command
     );
     error!("{text}");
     output.write(CommandOutput { text, error: true });
+}
+
+/// Puts the vitals the server says this client's player has on them, and lies them down or
+/// gets them up as it says.
+pub(super) fn follow_vitals(
+    mut changes: MessageReader<VitalsChanged>,
+    mut player: Query<(Entity, &Transform, &mut Vitals), With<LocalPlayer>>,
+    mut commands: Commands,
+) {
+    let (Some(&VitalsChanged { vitals, asleep }), Ok((entity, body, mut held))) =
+        (changes.read().last(), player.single_mut())
+    else {
+        return;
+    };
+    *held = vitals;
+    if asleep {
+        commands.entity(entity).insert(Asleep {
+            at: body.translation,
+        });
+    } else {
+        commands.entity(entity).remove::<Asleep>();
+    }
 }

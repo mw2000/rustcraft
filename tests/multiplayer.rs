@@ -35,12 +35,14 @@ use rustcraft::player::name::PlayerName;
 use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
     BlockChanged, ChunkEdits, CommandOutput, ContainerChanged, EditRejected, PlayerMoved,
-    PlayerPose, ProtocolPlugin, RequestEdit, RunCommand, StartBreaking, Teleport, UseBlock,
+    PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand, StartBreaking, Teleport,
+    UseBlock,
 };
 use rustcraft::save::SavePlugin;
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
+use rustcraft::survival::Vitals;
 use rustcraft::world::World;
 
 // A frame's worth, so replicon's fixed-rate server ticks, which send what's written, keep up.
@@ -1079,6 +1081,13 @@ fn test_a_joiner_comes_back_where_they_left_with_what_they_had() {
         let guest = guests_player(&mut server);
         let mut inventory = server.world_mut().get_mut::<Inventory>(guest).unwrap();
         assert_eq!(None, inventory.add(gift));
+        // hurt, and too hungry to heal
+        let hurt = Vitals {
+            health: 9,
+            food: 10,
+            ..Vitals::default()
+        };
+        server.world_mut().entity_mut(guest).insert(hurt);
         update_until(&mut server, &mut client, |server, _| {
             let world = server.world();
             world.get::<Transform>(guest).unwrap().translation == place
@@ -1112,5 +1121,40 @@ fn test_a_joiner_comes_back_where_they_left_with_what_they_had() {
         .unwrap()
         .slots
         .contains(&Some(gift)));
+    assert_eq!(9, world.get::<Vitals>(me).unwrap().health);
+    assert_eq!(10, world.get::<Vitals>(me).unwrap().food);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_client_is_told_its_players_health_and_respawns_where_the_server_puts_it() {
+    let dir = temp_dir("respawning");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let guest = owners(&mut server)
+        .into_iter()
+        .find(|&owner| owner != ClientId::Server)
+        .unwrap();
+    let guests = player_of(&mut server, guest);
+    let local = local_player(&mut client);
+    let vitals = |client: &App| *client.world().get::<Vitals>(local).unwrap();
+
+    // dying, as far as the client's concerned, once the server says so
+    server.world_mut().get_mut::<Vitals>(guests).unwrap().health = 0;
+    update_until(&mut server, &mut client, |_, client| {
+        vitals(client).is_dead()
+    });
+    // having moved a little, respawning at the world's spawn, as it's told
+    let at = client.world().get::<Transform>(local).unwrap().translation;
+    move_player(&mut client, local, at + Vec3::X);
+    client.world_mut().write_message(Respawn);
+    update_until(&mut server, &mut client, |_, client| {
+        !vitals(client).is_dead()
+    });
+    assert_eq!(Vitals::default(), vitals(&client));
+    let spawn = server.world().resource::<World>().spawn();
+    update_until(&mut server, &mut client, |_, client| {
+        client.world().get::<Transform>(local).unwrap().translation == spawn
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }
