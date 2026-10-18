@@ -3,6 +3,7 @@
 //! `protocol.rs`); the screen showing it is `screen`.
 
 pub mod icons;
+pub mod recipes;
 pub mod screen;
 
 use std::ops::Range;
@@ -108,6 +109,32 @@ impl Inventory {
         held.is_some_and(|stack| stack.item == item) && take(held, 1).is_some()
     }
 
+    /// How many of `item` there are in its slots.
+    pub fn count(&self, item: Item) -> u32 {
+        let stacks = self.slots.iter().flatten();
+        stacks
+            .filter(|stack| stack.item == item)
+            .map(|s| u32::from(s.count))
+            .sum()
+    }
+
+    /// Takes `count` of `item` from its slots, if there are that many, from the main
+    /// inventory's before the hotbar's, so what's held stays in hand as long as it can.
+    pub fn take_items(&mut self, item: Item, count: u32) -> bool {
+        if self.count(item) < count {
+            return false;
+        }
+        let mut left = count;
+        let (hotbar, main) = self.slots.split_at_mut(HOTBAR_SLOTS);
+        for slot in main.iter_mut().chain(hotbar) {
+            if slot.is_some_and(|stack| stack.item == item) {
+                let taken = take(slot, u8::try_from(left).unwrap_or(u8::MAX));
+                left -= taken.map_or(0, |stack| u32::from(stack.count));
+            }
+        }
+        true
+    }
+
     /// Takes the stack in `slot`, or one of it, to drop.
     pub fn drop_from(&mut self, slot: usize, all: bool) -> Option<ItemStack> {
         let held = self.slots.get_mut(slot)?;
@@ -122,7 +149,7 @@ impl Inventory {
         let held = &mut self.slots[slot];
         match click {
             Click::Left => match (held.as_mut(), self.cursor) {
-                (Some(stack), Some(carried)) if stack.item == carried.item => {
+                (Some(stack), Some(carried)) if stack.stacks_with(carried) => {
                     self.cursor = stack.merge(carried);
                 }
                 _ => std::mem::swap(held, &mut self.cursor),
@@ -134,7 +161,7 @@ impl Inventory {
                     self.cursor = take(held, half);
                 }
                 (None, Some(_)) => *held = take(&mut self.cursor, 1),
-                (Some(stack), Some(carried)) if stack.item == carried.item => {
+                (Some(stack), Some(carried)) if stack.stacks_with(carried) => {
                     if stack.room() > 0 {
                         stack.count += 1;
                         take(&mut self.cursor, 1);
@@ -433,9 +460,14 @@ mod tests {
     fn test_inventories_round_trip_by_item_name() {
         let mut inventory = two_stacks();
         inventory.slots[35] = stack(Item::Block(BlockType::CraftingTable), 1);
+        inventory.slots[20] = Some(ItemStack {
+            wear: 40,
+            ..ItemStack::new(Item::CopperAxe, 1)
+        });
         inventory.cursor = stack(DIRT, 3);
         let text = toml::to_string(&inventory).unwrap();
         assert!(text.contains("item = \"crafting_table\""), "{text}");
+        assert!(text.contains("wear = 40"), "{text}");
         assert_eq!(inventory, toml::from_str(&text).unwrap());
 
         // a slot there isn't, or one saved twice, is refused

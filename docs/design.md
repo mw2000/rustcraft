@@ -69,7 +69,8 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
-| Items | Every placeable block as an item, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
+| Items | Every placeable block as an item, sticks, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
+| Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
 
@@ -82,7 +83,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits and the player (`src/save/`).
 
-Not there yet: crafting, breaking times, health, structures, mobs, networking.
+Not there yet: breaking times, health, structures, mobs, networking.
 
 ---
 
@@ -257,7 +258,8 @@ The world's state beyond the seed (INV-1).
   function, `GameMode`, `raycast` and `overlaps`, and the protocol in `src/protocol.rs`.
 - **Protocol.** Blocks travel by name, or by a palette sent on joining (§4.1). Client to server:
   `RequestEdit { block, to, slot, seq }`, `RunCommand`, `Chat`, the inventory's requests
-  (`InventoryClick`, `CloseInventory`, `DropItem`, `PickBlock`, §5.2), and from M0.6
+  (`InventoryClick`, `CloseInventory`, `DropItem`, `PickBlock`, §5.2), `UseBlock` and `Craft`
+  (§5.3), and from M0.6
   `PlayerState` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
   time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
@@ -572,8 +574,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - **Built (M1.1):**
   - **Items** are `Item` in `src/items.rs`: `Item::Block(BlockType)` for every tangible block,
     which isn't a row of its own, so the item table can't fall out of step with `blocks!`, and a
-    variant for each row of the `items!` table, which is empty until crafting and smelting
-    bring sticks, tools, coal and ingots. A row has a stable snake_case name and columns
+    variant for each row of the `items!` table, which crafting fills with sticks, ingots and
+    tools (M1.5). A row has a stable snake_case name and columns
     (`max_stack` so far, 64 for blocks); tools' tier, durability and speed, and food's hunger,
     join them as columns, and non-block items get tiles of their own to draw them with. Items
     are saved by name, as blocks are, and drawn in the UI by their block's tile
@@ -620,12 +622,29 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     slots over the 9 hotbar slots, buttons like the picker's, the hovered stack's name under
     them, and the stack carried following the mouse. Left, right and shift-click send
     `InventoryClick`, and closing it (E or Escape) sends `CloseInventory`.
+- **Built (M1.5):**
+  - **The `items!` table's rows** are a stick, copper and iron ingots, and a pickaxe, an axe
+    and a shovel in each of wood, stone, copper and iron (swords wait for combat, M3.3). A row is
+    a name and, for a tool, `tool(kind, tier)`, which reads its durability and speed from one
+    `TIERS` table: wood lasts 64 blocks and breaks what it's for 4 times as fast as a hand,
+    stone 128 and 6, copper 192 and 8, iron 256 and 10. Tools stack to 1. Ingots only come
+    from smelting (M1.6), so the copper and iron tools' recipes wait on it.
+  - **Wear is part of the stack:** `ItemStack { item, count, wear }`, `wear` counting the
+    blocks a tool has broken (M1.2 wears them), so a tool keeps its wear when it's moved,
+    dropped or saved. It's saved as `wear = n` beside the item and count, left out at 0, and a
+    stack worn past its tool's durability, or a worn item that isn't a tool, fails the load.
+    Two tools never stack (`ItemStack::stacks_with`), so clicking one onto another swaps them.
+    A worn tool's icon has a bar under it, green when new through yellow to red.
+  - **Sprites:** items that aren't blocks draw a 16px tile of `assets/textures/items.png`,
+    one per row in the table's order (`Item::sprite`), drawn by the block-textures skill's
+    `items.py`: tools lie on the diagonal, handle bottom left and head top right, in a shade of
+    their material lit from the upper left and outlined. Dropped, they're an upright square of
+    their sprite that spins, rather than a cube.
 
 ### 5.3 Crafting and progression
 
-- Recipes are data (INV-6). Proposed: a simpler crafting model than Minecraft's shaped grid, such as
-  a list of ingredients and an output, crafted at a station (by hand, crafting table, furnace,
-  anvil). Open, D-4.
+- Recipes are data (INV-6), and a recipe is a list of ingredients and an output, made at a
+  station: by hand, at a crafting table, and for smelting at a furnace (D-4).
 - Tool tiers set what can be mined. Proposed tiers, to rename and tune freely:
 
   | Tier | Material | Mines | Where it's found |
@@ -637,6 +656,32 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   | 4 | Iron | Regional ores | Specific regions (P3) |
   | 5 | Alloys from regional ores | The deepest ores | Deep, specific regions |
 
+- **Built (M1.5):** `src/crafting.rs`.
+  - **Recipes** are the `recipes!` table: each row a `Recipe` variant with a stable name, sent
+    by name as blocks and items are, its `Station` (`Hand` or `CraftingTable`), its ingredients
+    as items and counts, and its output. A crafting table makes what hands can and more. By
+    hand: a log makes 4 planks, 2 planks 4 sticks, and 4 planks a crafting table. At a table:
+    each tool from 3 of its head's material (planks, cobblestone, a copper or iron ingot) and 2
+    sticks, or 1 and 2 for a shovel; a furnace from 8 cobblestone; 4 stone bricks from 4
+    cobblestone; and sandstone from 4 sand. Torches are made by hand, 4 from a coal ore and a
+    stick, as coal ore drops itself for now; a coal item, from mining or smelting, can take its
+    place later. Smelting comes with the furnace (M1.6). Making a recipe takes its ingredients from the main
+    inventory before the hotbar, so what's held stays in hand.
+  - **The crafting list** (`src/inventory/recipes.rs`) is beside the inventory screen's slots:
+    two columns of buttons, each the output with its count, an arrow, and the ingredients with
+    theirs, bright when what's carried makes it and dimmed when not, its full description
+    under the slots as it's hovered. E opens it by hand, and right-clicking a crafting table in
+    survival opens it at the table (`CraftingStation`), with the table's recipes after the
+    hand's; in creative a table is built against like any block. Clicking a recipe makes it
+    once into the inventory, rather than onto the cursor, so shift-click, which makes as many
+    as the ingredients allow, works the same way.
+  - **The server crafts (INV-4)** (`src/server/crafting.rs`): `UseBlock { block }` from right
+    click opens a station for the player, if it's one and in reach, kept as `AtStation` on them
+    until `CloseInventory`. `Craft { recipe, all }` makes a hand recipe anywhere, and a table's
+    only while the player's open table is still there and in reach. What doesn't fit is dropped
+    at the player, and shift-crafting stops there, so a full inventory never becomes a heap.
+    Stacks are sent with their wear always, as postcard can't skip a field, and saved without
+    it when there's none. `PROTOCOL_VERSION` is 4.
 - **Progression needs travel (P3):** higher tiers need ores found only in certain climates (under
   glaciers, deep under deserts, in mountain cores), so moving up means going somewhere.
 
@@ -861,7 +906,7 @@ Done when: **you can start with nothing and make iron tools.**
   M1.2 makes some need the right tool.
 - ☑ **M1.3 Caves.** 3D carving underground, cave mouths, buried-chunk skipping updated (§5.4).
 - ☑ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).
-- ☐ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,
+- ☑ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,
   copper and iron tools (§5.3).
 - ☐ **M1.6 Furnace.** Smelting ores, with containers (§5.2).
 - ☑ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
@@ -906,8 +951,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
 
 ### Open
 
-- **D-4 Crafting model.** Minecraft-style shaped grid, or ingredient lists at stations. Leaning
-  towards ingredient lists: simpler, clearer, and less of a copy.
+None right now.
 
 ### Decided
 
@@ -917,6 +961,11 @@ Done when: **the world feels inhabited, and night is dangerous.**
   no deterministic-maths rewrite of the noise is needed. CI's `determinism` job runs it on every
   push: a platform that ever disagrees fails there, and the join handshake refuses the mismatch
   rather than letting players see different worlds. Decided 2026-10-18.
+
+- **D-4 Crafting is ingredient lists at stations** (§5.3), not Minecraft's shaped grid: a recipe
+  is a list of items and counts making an output, by hand, at a crafting table, or smelted at a
+  furnace (M1.6). It's simpler to read and to use, as a recipe shows everything it takes and
+  needs no pattern learnt, and it's less of a copy. Decided 2026-10-18.
 
 - **D-5 Hunger is in, kept simple** (§5.5): a food bar, eating to refill it, healing when it's
   full enough and hurting when it's empty. Farming joins the plan as M1.9 to feed it.

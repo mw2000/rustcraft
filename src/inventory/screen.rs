@@ -6,6 +6,7 @@ use bevy::ui_widgets::Button;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use super::icons::{load_icons, stack_view, ItemIcons, StackView};
+use super::recipes::{describe, show_recipes, spawn_recipes, CraftingStation, RecipeCard};
 use super::{Click, Inventory, HOTBAR_SLOTS, SLOTS};
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
@@ -18,24 +19,29 @@ const SLOT_SIZE: f32 = 48.0;
 const SLOT_BORDER: f32 = 2.0;
 const SLOT_GAP: f32 = 4.0;
 const HOTBAR_GAP: f32 = 16.0;
+// between the slots and the recipes beside them
+const RECIPES_GAP: f32 = 24.0;
 // half an icon, so the stack carried is held by its middle
 const CARRIED_OFFSET: f32 = 16.0;
 
-const HINT: &str =
-    "Right click takes half a stack or puts down one, shift-click moves a stack across";
+const HINT: &str = "Right click takes half a stack or puts down one, and shift-click moves a \
+                    stack across or crafts all you can";
 
 /// In survival, the inventory (E) is the inventory screen: the main inventory's 27 slots over
-/// the hotbar's 9, as in Minecraft. Clicks on them ask the server to move stacks about, and the
-/// stack picked up follows the mouse until it's put down. The game carries on behind it, as
+/// the hotbar's 9, as in Minecraft, beside the recipes that can be made by hand, or at the
+/// crafting table it was opened at. Clicks on the slots ask the server to move stacks about, and
+/// the stack picked up follows the mouse until it's put down. The game carries on behind it, as
 /// behind the block picker, and closing it puts the stack carried back.
 pub struct InventoryScreenPlugin;
 
 impl Plugin for InventoryScreenPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_screen.after(load_icons))
+        app.init_resource::<CraftingStation>()
+            .add_systems(Startup, spawn_screen.after(load_icons))
             .add_systems(
                 Update,
-                (carry_to_mouse, name_hovered_item).run_if(in_state(GameState::Inventory)),
+                (carry_to_mouse, name_hovered_item, show_recipes)
+                    .run_if(in_state(GameState::Inventory)),
             )
             .add_systems(OnEnter(GameState::Inventory), open)
             .add_systems(OnExit(GameState::Inventory), close);
@@ -85,8 +91,22 @@ fn spawn_screen(mut commands: Commands, icons: Res<ItemIcons>) {
                     ..default()
                 },
             ));
-            spawn_slots(screen, &icons, HOTBAR_SLOTS..SLOTS, 0.0);
-            spawn_slots(screen, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP);
+            screen
+                .spawn(Node {
+                    column_gap: Val::Px(RECIPES_GAP),
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    })
+                    .with_children(|slots| {
+                        spawn_slots(slots, &icons, HOTBAR_SLOTS..SLOTS, 0.0);
+                        spawn_slots(slots, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP);
+                    });
+                    spawn_recipes(row, &icons);
+                });
             screen.spawn((
                 ItemName,
                 Text::new(HINT),
@@ -199,10 +219,13 @@ fn carry_to_mouse(
     }
 }
 
+// The hovered stack's name, or what the hovered recipe makes and from what.
+#[allow(clippy::type_complexity)]
 fn name_hovered_item(
-    changed: Query<(), (With<Slot>, Changed<Hovered>)>,
+    changed: Query<(), (Or<(With<Slot>, With<RecipeCard>)>, Changed<Hovered>)>,
     player: Query<Ref<Inventory>, With<LocalPlayer>>,
     slots: Query<(&Slot, &Hovered)>,
+    recipes: Query<(&RecipeCard, &Hovered)>,
     mut name: Query<&mut Text, With<ItemName>>,
 ) {
     let Ok(inventory) = player.single() else {
@@ -211,10 +234,16 @@ fn name_hovered_item(
     if changed.is_empty() && !inventory.is_changed() {
         return;
     }
-    let hovered = slots.iter().find(|(_, hovered)| hovered.get());
-    let item = hovered.and_then(|(slot, _)| inventory.slots[slot.0]);
-    if let Ok(mut text) = name.single_mut() {
-        text.0 = item.map_or_else(|| HINT.into(), |stack| stack.item.display_name());
+    let slot = slots.iter().find(|(_, hovered)| hovered.get());
+    let stack = slot.and_then(|(slot, _)| inventory.slots[slot.0]);
+    let recipe = recipes.iter().find(|(_, hovered)| hovered.get());
+    let text = match (stack, recipe) {
+        (Some(stack), _) => stack.item.display_name(),
+        (None, Some((card, _))) => describe(card.0),
+        (None, None) => HINT.into(),
+    };
+    if let Ok(mut name) = name.single_mut() {
+        name.0 = text;
     }
 }
 
@@ -232,8 +261,14 @@ fn open(
     }
 }
 
-// The menu holds the cursor again as play resumes.
-fn close(mut screen: Query<&mut Node, With<Screen>>, mut closes: MessageWriter<CloseInventory>) {
+// The menu holds the cursor again as play resumes. The next time it opens, it's by hand,
+// unless it's at a crafting table again.
+fn close(
+    mut screen: Query<&mut Node, With<Screen>>,
+    mut closes: MessageWriter<CloseInventory>,
+    mut station: ResMut<CraftingStation>,
+) {
+    *station = CraftingStation::default();
     for mut node in &mut screen {
         if node.display == Display::Flex {
             node.display = Display::None;
@@ -257,8 +292,10 @@ mod tests {
     use crate::block::BlockType;
     use crate::client::player::LocalPlayer;
     use crate::commands::CommandPlugin;
+    use crate::crafting::{Recipe, Station};
     use crate::game_mode::GameMode;
     use crate::hotbar::HotbarPlugin;
+    use crate::inventory::recipes::{CraftingStation, Dimmed, RecipeCard};
     use crate::inventory::{Click, Inventory};
     use crate::items::{Item, ItemStack};
     use crate::menu::{GameState, MenuPlugin};
@@ -370,6 +407,57 @@ mod tests {
         assert_eq!(
             (dirt, None),
             (inventory(&mut app).slots[0], inventory(&mut app).cursor)
+        );
+    }
+
+    // The recipes listed, and whether each is bright, in the table's order.
+    fn listed(app: &mut App) -> Vec<(Recipe, bool)> {
+        let mut cards = app.world_mut().query::<(&RecipeCard, &Node, &Children)>();
+        let mut dims = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<Dimmed>>();
+        let world = app.world();
+        let mut listed: Vec<_> = cards
+            .iter(world)
+            .filter(|(_, node, _)| node.display != Display::None)
+            .map(|(card, _, children)| {
+                let dim = dims.get(world, *children.last().unwrap()).unwrap();
+                (card.0, *dim == Visibility::Hidden)
+            })
+            .collect();
+        listed.sort_by_key(|(recipe, _)| Recipe::ALL.iter().position(|r| r == recipe));
+        listed
+    }
+
+    #[test]
+    fn test_the_screen_lists_the_recipes_of_its_station_bright_if_theyre_makeable() {
+        let mut app = app(GameMode::Survival);
+        press(&mut app, KeyCode::KeyE);
+        // by hand, with only dirt to make anything with
+        let by_hand: Vec<_> = Recipe::ALL
+            .iter()
+            .filter(|recipe| recipe.station() == Station::Hand)
+            .map(|&recipe| (recipe, false))
+            .collect();
+        assert_eq!(4, by_hand.len());
+        assert_eq!(by_hand, listed(&mut app));
+        // and with a log there are planks to be made
+        let mut query = app.world_mut().query::<&mut Inventory>();
+        query.single_mut(app.world_mut()).unwrap().slots[1] =
+            Some(ItemStack::new(Item::Block(BlockType::Log), 1));
+        app.update();
+        assert!(listed(&mut app).contains(&(Recipe::Planks, true)));
+        press(&mut app, KeyCode::KeyE);
+
+        // at a crafting table, everything
+        app.insert_resource(CraftingStation(Station::CraftingTable));
+        press(&mut app, KeyCode::KeyE);
+        assert_eq!(Recipe::ALL.len(), listed(&mut app).len());
+        // and closing it goes back to hand
+        press(&mut app, KeyCode::KeyE);
+        assert_eq!(
+            CraftingStation(Station::Hand),
+            *app.world().resource::<CraftingStation>()
         );
     }
 }

@@ -155,6 +155,14 @@ pub(super) fn receive_edits(
     }
 }
 
+/// Whether a player with their feet at `feet` can reach `block`: whether its nearest point is
+/// within `REACH` of their eye, give or take their moving since they aimed.
+pub(super) fn in_reach(feet: Vec3, block: I64Vec3) -> bool {
+    let eye = feet + Vec3::Y * EYE_HEIGHT;
+    let nearest = eye.clamp(block.as_vec3(), block.as_vec3() + 1.0);
+    eye.distance(nearest) <= REACH + REACH_SLACK
+}
+
 // Why `client` can't change `block` to `to`, placing it from hotbar slot `slot`, if it can't.
 fn refusal(
     world: &World,
@@ -176,9 +184,7 @@ fn refusal(
     else {
         return Some("they have no player");
     };
-    let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
-    let nearest = eye.clamp(block.as_vec3(), block.as_vec3() + 1.0);
-    if eye.distance(nearest) > REACH + REACH_SLACK {
+    if !in_reach(feet.translation, block) {
         return Some("it's out of reach");
     }
     if to != BlockType::Air {

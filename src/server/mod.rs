@@ -4,6 +4,7 @@
 mod chunks;
 mod clock;
 mod commands;
+mod crafting;
 pub mod drops;
 mod edits;
 mod host;
@@ -64,6 +65,7 @@ impl Plugin for ServerPlugin {
                 (
                     edits::receive_edits,
                     inventory::receive_inventory_requests,
+                    crafting::receive_crafts,
                     commands::run_commands,
                     (clock::wind_clock, clock::sync_clock).chain(),
                 )

@@ -6,13 +6,15 @@ use crate::chunks::chunk::ChunkCoordinate;
 use crate::client::player::LocalPlayer;
 use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
+use crate::crafting::Station;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
+use crate::inventory::recipes::CraftingStation;
 use crate::inventory::Inventory;
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT};
-use crate::protocol::{PickBlock, RequestEdit};
+use crate::protocol::{PickBlock, RequestEdit, UseBlock};
 use crate::world::World;
 
 /// How far from the eye a block can be reached, in blocks.
@@ -22,25 +24,27 @@ pub const REACH: f32 = 5.0;
 const OUTLINE_SIZE: f32 = 1.004;
 const OUTLINE_COLOUR: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
 
-/// Looking at blocks, outlining the one looked at, and breaking, placing and picking blocks
-/// with the mouse (§5.1), breaking and placing as requests to the server. None of it happens
-/// while the game's paused, the block picker's up or the command bar's open.
+/// Looking at blocks, outlining the one looked at, and breaking, placing, picking and using
+/// blocks with the mouse (§5.1), breaking and placing as requests to the server. None of it
+/// happens while the game's paused, the block picker's up or the command bar's open.
 pub struct InteractionPlugin;
 
 impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Target>().add_systems(
-            Update,
-            (target_block, (outline_target, use_target))
-                .chain()
-                // from where the player is this frame
-                .after(player_move)
-                .after(player_look)
-                .run_if(in_state(GameState::Playing))
-                .run_if(command_bar_closed)
-                // a client joining a server has nothing to reach for until it's welcomed
-                .run_if(resource_exists::<World>),
-        );
+        app.init_resource::<Target>()
+            .init_resource::<CraftingStation>()
+            .add_systems(
+                Update,
+                (target_block, (outline_target, use_target, use_station))
+                    .chain()
+                    // from where the player is this frame
+                    .after(player_move)
+                    .after(player_look)
+                    .run_if(in_state(GameState::Playing))
+                    .run_if(command_bar_closed)
+                    // a client joining a server has nothing to reach for until it's welcomed
+                    .run_if(resource_exists::<World>),
+            );
     }
 }
 
@@ -169,7 +173,10 @@ fn use_target(
         request(hit.block, BlockType::Air);
     }
     let replaceable = world.get_block_at(hit.block).is_replaceable();
-    if mouse.just_pressed(MouseButton::Right) && (replaceable || hit.face != I64Vec3::ZERO) {
+    // and right click on a crafting table opens it instead, see `use_station`
+    let places =
+        (replaceable || hit.face != I64Vec3::ZERO) && station_used(&world, hit, *mode).is_none();
+    if mouse.just_pressed(MouseButton::Right) && places {
         if let Some(held) = hotbar.held(inventory).and_then(|stack| stack.item.block()) {
             let at = if replaceable {
                 hit.block
@@ -184,6 +191,36 @@ fn use_target(
         if !hotbar.pick(block, inventory) && mode.has_every_block() {
             picks.write(PickBlock { slot, block });
         }
+    }
+}
+
+// The station right-clicking `hit` opens, if it's one, in survival: in creative, where there's
+// no crafting, it's built against like any other block.
+fn station_used(world: &World, hit: Hit, mode: GameMode) -> Option<Station> {
+    Station::of_block(world.get_block_at(hit.block)).filter(|_| !mode.has_every_block())
+}
+
+// Right click on a crafting table opens the inventory screen at it, as the server's told, so
+// what's made there is checked against it.
+fn use_station(
+    world: Res<World>,
+    target: Res<Target>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    player: Query<&GameMode, With<LocalPlayer>>,
+    mut station: ResMut<CraftingStation>,
+    mut state: ResMut<NextState<GameState>>,
+    mut uses: MessageWriter<UseBlock>,
+) {
+    let (Some(hit), Ok(&mode)) = (target.0, player.single()) else {
+        return;
+    };
+    if !mouse.just_pressed(MouseButton::Right) {
+        return;
+    }
+    if let Some(at) = station_used(&world, hit, mode) {
+        uses.write(UseBlock { block: hit.block });
+        *station = CraftingStation(at);
+        state.set(GameState::Inventory);
     }
 }
 
@@ -300,7 +337,7 @@ mod tests {
         use bevy_replicon::prelude::ClientId;
         use bevy_replicon::RepliconPlugins;
 
-        use super::super::{use_target, Hit, Target};
+        use super::super::{use_station, use_target, Hit, Target};
         use crate::block::BlockType;
         use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
         use crate::chunks::chunk_loader::ChunkLoader;
@@ -308,12 +345,15 @@ mod tests {
         use crate::chunks::lod::{LodKey, LodLayout};
         use crate::client::player::LocalPlayer;
         use crate::client::ClientPlugin;
+        use crate::crafting::Station;
         use crate::game_mode::GameMode;
         use crate::hotbar::Hotbar;
+        use crate::inventory::recipes::CraftingStation;
         use crate::inventory::Inventory;
         use crate::items::{Item, ItemStack};
+        use crate::menu::GameState;
         use crate::player::{Player, PlayerOwner};
-        use crate::protocol::{EditRejected, PickBlock, ProtocolPlugin, RequestEdit};
+        use crate::protocol::{EditRejected, PickBlock, ProtocolPlugin, RequestEdit, UseBlock};
         use crate::server::ServerPlugin;
 
         // Looking down at the top of a block of sand at the origin, from `feet`.
@@ -322,16 +362,19 @@ mod tests {
             world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), ChunkData::default());
             world.edit(I64Vec3::ZERO, BlockType::Sand);
             let mut app = App::new();
-            app.add_plugins(MinimalPlugins)
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+                .init_state::<GameState>()
                 .add_message::<RequestEdit>()
                 .add_message::<PickBlock>()
+                .add_message::<UseBlock>()
                 .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<CraftingStation>()
                 .insert_resource(world)
                 .insert_resource(Target(Some(Hit {
                     block: I64Vec3::ZERO,
                     face: I64Vec3::Y,
                 })))
-                .add_systems(Update, use_target);
+                .add_systems(Update, (use_target, use_station));
             app.world_mut().spawn((
                 Player::default(),
                 PlayerOwner(ClientId::Server),
@@ -347,13 +390,7 @@ mod tests {
         // group of chunks at the origin drawn.
         fn played(feet: Vec3, mode: GameMode) -> App {
             let mut app = app(feet, mode);
-            app.add_plugins((
-                StatesPlugin,
-                RepliconPlugins,
-                ProtocolPlugin,
-                ServerPlugin,
-                ClientPlugin,
-            ));
+            app.add_plugins((RepliconPlugins, ProtocolPlugin, ServerPlugin, ClientPlugin));
             let height = app.world().resource::<crate::world::World>().height;
             let mut loader = ChunkLoader::new(
                 LodLayout::new(32, 128, 2),
@@ -517,6 +554,48 @@ mod tests {
             inventory(&mut app).slots[4] = Some(sand);
             click(&mut app, MouseButton::Middle);
             assert_eq!(4, hotbar(&mut app).selected);
+        }
+
+        #[test]
+        fn test_right_clicking_a_crafting_table_in_survival_opens_it_rather_than_building_on_it() {
+            let mut app = app_in(GameMode::Survival);
+            inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Block(BlockType::Dirt), 1));
+            assert!(click(&mut app, MouseButton::Right).is_empty());
+            let uses: Vec<_> = app
+                .world_mut()
+                .resource_mut::<Messages<UseBlock>>()
+                .drain()
+                .collect();
+            assert_eq!(
+                vec![UseBlock {
+                    block: I64Vec3::ZERO
+                }],
+                uses
+            );
+            assert_eq!(
+                CraftingStation(Station::CraftingTable),
+                *app.world().resource::<CraftingStation>()
+            );
+            app.update();
+            let state = app.world().resource::<State<GameState>>();
+            assert_eq!(GameState::Inventory, *state.get());
+
+            // while in creative, it's built on
+            let mut app = app_in(GameMode::Creative);
+            assert_eq!(1, click(&mut app, MouseButton::Right).len());
+            assert_eq!(
+                CraftingStation(Station::Hand),
+                *app.world().resource::<CraftingStation>()
+            );
+        }
+
+        // Looking at a crafting table, in `mode`.
+        fn app_in(mode: GameMode) -> App {
+            let mut app = app(AWAY, mode);
+            app.world_mut()
+                .resource_mut::<crate::world::World>()
+                .edit(I64Vec3::ZERO, BlockType::CraftingTable);
+            app
         }
     }
 }

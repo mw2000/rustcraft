@@ -44,6 +44,14 @@ python pack.py
 
 Each tile is a function that paints a few shades by index, like the 4-colour quantise leaves the generated tiles. Shades are taken from tiles already in the atlas (`shades("Stone", contrast)`, `source("Stone")` for the whole tile), so a restyled stone or log carries over when you rerun it: the ores are the Stone tile with mineral deposits grown on it from the seed, planks use the log end's colours with seams from the bark. Small pictures (the crafting table's saw and hammer, flower heads) are strings in the script. Plants are drawn on transparency, RGBA, as the shaders cut out their clear texels; tall grass is greyscale from the GrassTop shades, as it's tinted the same way, and flowers keep their colours. Keep patterns periodic in 16 so they tile, and check `out/contact.png` as for generated tiles.
 
+## Item sprites
+
+Items that aren't blocks (sticks, ingots, tools) are pictures on transparency in their own strip, `assets/textures/items.png`, one 16px tile per row of the `items!` table in `src/items.rs`, in its order. `items.py` draws them all from shapes in a frame along the diagonal (tools have the handle bottom left and the head top right), lit from the upper left and outlined, with wood and stone shades from the block atlas, and writes `out/items_contact.png` on a slot's grey. Adding an item: add its row, then a sprite to `SPRITES` in `items.py` at the same place, which it checks against the table, and run it.
+
+```
+python items.py
+```
+
 ## How it works
 
 - `block_texture.json` is the txt2img graph. SD1.5 renders 512px with circular padding in both axes so the result tiles. `generate.py` saves the render as `out/raw_<Tile>.png` and `finish()` turns it into 16x16: Lanczos down, wrap-around blur (`smooth`, keeps seams), normalise mean colour and luminance contrast, then a 4-colour quantise (`COLORS`). Plain `area` averaging gives flat grey, so don't use it.

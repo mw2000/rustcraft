@@ -26,6 +26,7 @@ cargo run --release
 - Left click breaks the block you're looking at, and right click places the hotbar's selected block against it. 1–9 or the mouse wheel select a slot, and middle click selects the slot holding the block you're looking at, or in creative picks it into the selected slot.
 - In survival, placing a block uses it up, and what you break drops an item: walk over it to pick it up. Q throws one of the held item, and Ctrl+Q the whole stack.
 - E opens the inventory in survival: left click picks up or puts down a stack, right click picks up half or puts down one, and shift-click moves a stack between the hotbar and the rest. In creative E opens the block picker instead: click a block to put a stack of it in the selected slot. E or Escape closes either.
+- Beside the inventory are the recipes you can make by hand, bright when you have what they take: click one to make it, or shift-click to make as many as you can. A log makes planks, planks make sticks and a crafting table, a stick and a coal ore make torches, and right-clicking a crafting table opens the inventory with its recipes too: tools, a furnace and building blocks.
 - `[` and `]` move the sun, and F1 shows the debug overlay.
 
 ## Commands

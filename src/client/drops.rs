@@ -1,6 +1,7 @@
 //! Drawing the items lying in the world, which the server moves (`server::drops`): each a little
-//! cube of its block, spinning and bobbing over the spot. Every one of an item shares a mesh, and
-//! all share a material, so Bevy draws them batched.
+//! cube of its block, or a flat picture of an item that isn't one, spinning and bobbing over the
+//! spot. Every one of an item shares a mesh, and all blocks share a material and all pictures
+//! another, so Bevy draws them batched.
 
 use std::f32::consts::TAU;
 
@@ -32,11 +33,12 @@ impl Plugin for DrawDropsPlugin {
     }
 }
 
-/// What dropped items are drawn with: the block atlas, and a cube for each item, made the first
-/// time one's dropped.
+/// What dropped items are drawn with: the block atlas and the items' one, and a mesh for each
+/// item, made the first time one's dropped.
 #[derive(Resource)]
 struct DropLooks {
     material: Handle<StandardMaterial>,
+    sprites: Handle<StandardMaterial>,
     meshes: HashMap<Item, Handle<Mesh>>,
     grass: LinearRgba,
 }
@@ -60,8 +62,18 @@ fn make_material(
         alpha_mode: AlphaMode::Mask(0.5),
         ..default()
     });
+    let sprites = materials.add(StandardMaterial {
+        base_color_texture: Some(icons.items().clone()),
+        perceptual_roughness: 1.0,
+        alpha_mode: AlphaMode::Mask(0.5),
+        // seen from both sides as it spins
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    });
     commands.insert_resource(DropLooks {
         material,
+        sprites,
         meshes: HashMap::new(),
         grass: icons.grass().into(),
     });
@@ -82,13 +94,18 @@ fn draw_drop(
     let mesh = looks
         .meshes
         .entry(item)
-        .or_insert_with(|| match item {
-            Item::Block(block) => meshes.add(cube(block, grass)),
+        .or_insert_with(|| match (item.block(), item.sprite()) {
+            (Some(block), _) => meshes.add(cube(block, grass)),
+            (None, sprite) => meshes.add(picture(sprite.expect("an item has a block or a sprite"))),
         })
         .clone();
     // the golden angle, so items dropped together don't spin and bob as one
     let phase = (add.entity.index_u32() as f32 * 2.39996).rem_euclid(TAU);
-    let material = looks.material.clone();
+    let material = if item.block().is_some() {
+        looks.material.clone()
+    } else {
+        looks.sprites.clone()
+    };
     commands
         .entity(add.entity)
         .insert(Visibility::default())
@@ -107,6 +124,25 @@ fn spin_and_bob(time: Res<Time>, mut cubes: Query<(&Spinning, &mut Transform)>) 
         transform.translation.y = SIZE / 2.0 + bob * BOB_HEIGHT;
         transform.rotation = Quat::from_rotation_y(t * SPIN_SPEED * TAU + spinning.phase);
     }
+}
+
+// A square `SIZE` across around its middle, upright, drawing tile `sprite` of the items' atlas.
+fn picture(sprite: usize) -> Mesh {
+    let half = SIZE / 2.0;
+    let tiles = Item::sprites() as f32;
+    let corners = [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)];
+    let positions: Vec<_> = corners.map(|(x, y)| [x * half, y * half, 0.0]).into();
+    let uvs: Vec<_> = corners
+        .map(|(x, y)| [(sprite as f32 + (x + 1.0) / 2.0) / tiles, (1.0 - y) / 2.0])
+        .into();
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U16(vec![0, 3, 2, 0, 2, 1]))
 }
 
 // A cube `SIZE` across around its middle, its faces drawing `block`'s tiles from the atlas,

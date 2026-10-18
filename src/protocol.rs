@@ -1,9 +1,9 @@
 //! What clients and the server send each other (§4.4). Blocks travel by name (§4.1).
 //!
 //! A player's inventory changes only on the server (INV-4): clients ask with `InventoryClick`,
-//! `CloseInventory`, `DropItem` and `PickBlock`, and placing a block in survival takes it from
-//! the slot `RequestEdit` names. In one App the change is made in the frame it's asked for, to
-//! the same `Inventory`; from M0.6 the server replicates each player's to its owner.
+//! `CloseInventory`, `DropItem`, `PickBlock` and `Craft`, and placing a block in survival takes
+//! it from the slot `RequestEdit` names. In one App the change is made in the frame it's asked
+//! for, to the same `Inventory`; from M0.6 the server replicates each player's to its owner.
 
 use bevy::math::{I64Vec3, U16Vec3};
 use bevy::prelude::*;
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
+use crate::crafting::Recipe;
 use crate::inventory::{Click, Inventory};
 use crate::save::region::{local_block, local_index};
 use crate::save::PlayerState;
@@ -22,7 +23,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// What netcode tells rustcraft's connections apart from other games' by.
 pub const NETCODE_PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustcraf");
@@ -54,6 +55,9 @@ impl Plugin for ProtocolPlugin {
             .add_server_message::<InventoryChanged>(Channel::Ordered)
             .add_server_message::<ChunkEdits>(Channel::Ordered)
             .add_client_message::<EditReach>(Channel::Ordered)
+            // after the station it's made at's opened
+            .add_client_message::<UseBlock>(Channel::Ordered)
+            .add_client_message::<Craft>(Channel::Ordered)
             // to every client, which draw them where the server has them
             .replicate::<DroppedItem>()
             .replicate_filtered_as::<Transform, Position, With<DroppedItem>>();
@@ -254,6 +258,20 @@ impl From<Position> for Transform {
     fn from(Position(at): Position) -> Self {
         Transform::from_translation(at)
     }
+}
+
+/// A player using the block at `block` by right-clicking it, as opening a crafting table does,
+/// which stays open for them until they close the inventory screen.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UseBlock {
+    pub block: I64Vec3,
+}
+
+/// Making `recipe` once, or `all` the times the ingredients carried allow, into the inventory.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Craft {
+    pub recipe: Recipe,
+    pub all: bool,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself
