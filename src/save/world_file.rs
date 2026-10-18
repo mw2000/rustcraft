@@ -22,7 +22,7 @@ pub struct WorldFile {
     pub seed: u32,
     /// In days, as `TimeOfDay` has it.
     pub time_of_day: f32,
-    /// The local player, once they've played in it. There's one until there's networking.
+    /// The host's player, once they've played in it, the only one saved until M0.6.
     pub player: Option<PlayerState>,
 }
 

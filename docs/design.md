@@ -298,6 +298,19 @@ The world's state beyond the seed (INV-1).
     a plugin yet. Both sides run in `PostUpdate` rather than after replicon's `Receive` sets in
     `PreUpdate`, which would have cost singleplayer two frames; over a network messages arrive
     in `PreUpdate`, so the same systems still see them that frame.
+- **Built (M0.5c):** `ServerPlugin`'s startup (`open_world`) opens the world and its save from
+  a `WorldToOpen { dir, seed, time_of_day, region_distance }`, which `main` fills from
+  `RC_WORLD`, `RC_SEED`, `RC_TIME` and the renderer's settings (now a resource, read once),
+  and spawns the host's player from the saved `PlayerState` with a `PlayerOwner(ClientId)`,
+  `ClientId::Server` for the host's. An App with no `WorldToOpen`, such as a test that builds
+  its own `World`, opens nothing. The client's observer `mark_local_player` marks the host's
+  player `LocalPlayer`, and `attach_camera` (in `PostStartup`, before transforms propagate, so
+  nothing sees the camera loose) hangs the scene's camera from its eyes. Client systems
+  (movement, look, targeting, the hotbar, the picker, the debug overlay, and commands until
+  M0.5d) find their player by `LocalPlayer`; the server's `player_of` finds a requester's by
+  `PlayerOwner`, and saving writes the host's. In M0.6 a joining client must be told which
+  player is its own and attach the camera when it arrives, and a dedicated server spawns no
+  host's player.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
   `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
@@ -537,7 +550,7 @@ and loads.**
     split from the sun and moon. A headless App runs saving, game modes and the clock.
   - ☑ **M0.5b Replicon and edits through it.** `bevy_replicon` with no transport, `protocol.rs`,
     `RequestEdit` / `BlockChanged` / `EditRejected`, the server validating edits.
-  - ☐ **M0.5c Players owned by the server.** Spawned from saves by the server; the client puts
+  - ☑ **M0.5c Players owned by the server.** Spawned from saves by the server; the client puts
     the camera on its `LocalPlayer`.
   - ☐ **M0.5d Commands and game modes on the server.**
   - ☐ **M0.5e Time on the server**, with `TimeSync`.

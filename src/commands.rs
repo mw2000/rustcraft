@@ -3,10 +3,10 @@ use bevy::input::{ButtonState, InputSystems};
 use bevy::prelude::*;
 
 use crate::chunks::generate::WATER_LEVEL;
+use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
 use crate::hotbar::HOTBAR_TOP;
 use crate::menu::GameState;
-use crate::player::Player;
 use crate::world::World;
 
 // Minecraft's: T opens the bar, and / opens it with the slash already typed.
@@ -195,7 +195,7 @@ fn run_commands(
     mut bar: ResMut<CommandBar>,
     time: Res<Time<Real>>,
     world: Option<Res<World>>,
-    mut player: Query<(&mut Transform, &mut GameMode), With<Player>>,
+    mut player: Query<(&mut Transform, &mut GameMode), With<LocalPlayer>>,
 ) {
     let now = time.elapsed_secs();
     for RunCommand(line) in lines.read() {
@@ -451,6 +451,7 @@ mod tests {
         use bevy::state::app::StatesPlugin;
 
         use super::super::{CommandBar, CommandPlugin};
+        use crate::client::player::LocalPlayer;
         use crate::game_mode::GameMode;
         use crate::menu::GameState;
         use crate::player::Player;
@@ -460,7 +461,7 @@ mod tests {
             app.add_plugins((MinimalPlugins, InputPlugin, StatesPlugin, CommandPlugin))
                 .init_state::<GameState>();
             app.world_mut()
-                .spawn((Player::default(), Transform::default()));
+                .spawn((Player::default(), LocalPlayer, Transform::default()));
             app.update();
             app
         }

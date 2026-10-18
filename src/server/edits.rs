@@ -9,7 +9,7 @@ use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::game_mode::GameMode;
 use crate::interaction::{overlaps, REACH};
-use crate::player::{Player, BODY, EYE_HEIGHT};
+use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT};
 use crate::protocol::{BlockChanged, EditRejected, RequestEdit};
 use crate::world::World;
 
@@ -51,7 +51,8 @@ impl EditAllowances {
     }
 }
 
-type Players<'w, 's> = Query<'w, 's, (&'static Transform, &'static GameMode), With<Player>>;
+type Players<'w, 's> =
+    Query<'w, 's, (&'static Transform, &'static GameMode, &'static PlayerOwner), With<Player>>;
 
 /// Makes the edits clients ask for that pass the checks, telling every client, and tells the
 /// client asking for one that doesn't what's there instead.
@@ -131,7 +132,7 @@ fn refusal(
         }
         let into_player = players
             .iter()
-            .any(|(body, _)| overlaps(BODY, body.translation, block));
+            .any(|(body, ..)| overlaps(BODY, body.translation, block));
         if into_player {
             return Some("it's into a player");
         }
@@ -139,10 +140,12 @@ fn refusal(
     None
 }
 
-// The player `client` plays as. There's only the one local player until M0.5c, whose server
-// spawns each client's player with the `ClientId` it belongs to, for this to find it by.
-fn player_of<'a>(_client: ClientId, players: &'a Players) -> Option<(&'a Transform, &'a GameMode)> {
-    players.single().ok()
+// The player `client` plays as. A search, as there are only ever a few players.
+fn player_of<'a>(client: ClientId, players: &'a Players) -> Option<(&'a Transform, &'a GameMode)> {
+    players
+        .iter()
+        .find(|(.., owner)| owner.0 == client)
+        .map(|(body, mode, _)| (body, mode))
 }
 
 #[cfg(test)]
@@ -160,7 +163,7 @@ mod tests {
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
     use crate::game_mode::GameMode;
-    use crate::player::Player;
+    use crate::player::{Player, PlayerOwner};
     use crate::protocol::{BlockChanged, EditRejected, ProtocolPlugin, RequestEdit};
     use crate::server::ServerPlugin;
     use crate::world::World;
@@ -170,7 +173,7 @@ mod tests {
     const FEET: Vec3 = Vec3::new(0.5, 1.0, 0.5);
     const FLOOR: I64Vec3 = I64Vec3::new(3, 0, 0);
 
-    // A server alone, as a dedicated one runs, its one player standing at `FEET`.
+    // A server alone, as a dedicated one runs, its host's player standing at `FEET`.
     fn server(mode: GameMode) -> App {
         let mut world = World::new(16);
         for x in 0..=1 {
@@ -196,8 +199,12 @@ mod tests {
         .insert_resource(world)
         // no time passes, so the allowance of edits isn't refilled
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
-        app.world_mut()
-            .spawn((Player::default(), mode, Transform::from_translation(FEET)));
+        app.world_mut().spawn((
+            Player::default(),
+            PlayerOwner(ClientId::Server),
+            mode,
+            Transform::from_translation(FEET),
+        ));
         // where replicon sets up its systems for the messages registered
         app.finish();
         app

@@ -8,6 +8,7 @@ use bevy::{
     ecs::component::Component,
     math::{Quat, Vec3},
 };
+use bevy_replicon::prelude::ClientId;
 
 use crate::{collision::Aabb, game_mode::GameMode, hotbar::Hotbar};
 
@@ -21,6 +22,11 @@ pub struct Player {
     // whether it walked into a wall last step, so swimming against a bank climbs out
     against_wall: bool,
 }
+
+/// The client a player belongs to: `ClientId::Server` for the host's own, the one player in
+/// singleplayer.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerOwner(pub ClientId);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

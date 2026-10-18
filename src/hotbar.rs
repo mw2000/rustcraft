@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::block::BlockType;
 use crate::chunks::generate::biome::{grass_tint, Climate};
 use crate::chunks::material::block_atlas;
+use crate::client::player::LocalPlayer;
 use crate::commands::command_bar_closed;
 use crate::menu::GameState;
-use crate::player::Player;
 
 /// How many slots the hotbar has.
 pub const SLOTS: usize = 9;
@@ -273,7 +273,7 @@ fn spawn_hotbar(mut commands: Commands, icons: Res<BlockIcons>) {
 fn select_slot(
     keys: Res<ButtonInput<KeyCode>>,
     scroll: Res<AccumulatedMouseScroll>,
-    mut hotbar: Query<&mut Hotbar, With<Player>>,
+    mut hotbar: Query<&mut Hotbar, With<LocalPlayer>>,
     // how far the wheel's turned towards the next notch
     mut notches: Local<f32>,
 ) {
@@ -297,7 +297,7 @@ fn select_slot(
 
 fn draw_hotbar(
     icons: Res<BlockIcons>,
-    hotbar: Query<&Hotbar, (With<Player>, Changed<Hotbar>)>,
+    hotbar: Query<&Hotbar, (With<LocalPlayer>, Changed<Hotbar>)>,
     mut slots: Query<(&Slot, &mut BorderColor, &mut BackgroundColor)>,
     mut slot_icons: Query<(&SlotIcon, &mut ImageNode, &mut Visibility)>,
 ) {
@@ -339,6 +339,7 @@ mod tests {
 
     use super::{Hotbar, HotbarPlugin, SLOTS};
     use crate::block::BlockType;
+    use crate::client::player::LocalPlayer;
     use crate::commands::CommandPlugin;
     use crate::menu::GameState;
     use crate::player::Player;
@@ -389,7 +390,7 @@ mod tests {
         .init_asset::<Image>()
         .init_asset::<TextureAtlasLayout>()
         .init_state::<GameState>();
-        app.world_mut().spawn(Player::default());
+        app.world_mut().spawn((Player::default(), LocalPlayer));
         app.update();
         app
     }

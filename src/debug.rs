@@ -14,7 +14,7 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 
 use crate::chunks::chunk_loader::Chunk;
 use crate::chunks::lod::LodNode;
-use crate::player::Player;
+use crate::client::player::LocalPlayer;
 use crate::world::World;
 
 const TOGGLE_KEY: KeyCode = KeyCode::F1;
@@ -139,7 +139,7 @@ fn update_overlay(
     mut since_refresh: Local<f32>,
     diagnostics: Res<DiagnosticsStore>,
     world: Option<Res<World>>,
-    player: Query<&GlobalTransform, With<Player>>,
+    player: Query<&GlobalTransform, With<LocalPlayer>>,
     chunks: Query<(), With<Chunk>>,
     lod_nodes: Query<&LodNode>,
     counts: Res<DrawCounts>,

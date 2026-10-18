@@ -18,12 +18,13 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::tasks::{block_on, futures, IoTaskPool, Task};
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
+use bevy_replicon::prelude::ClientId;
 
 use crate::clock::{TimeOfDay, START_TIME};
 use crate::edits::Edits;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
-use crate::player::{Player, PlayerLook};
+use crate::player::{Player, PlayerLook, PlayerOwner};
 use crate::world::World;
 use region::{ChunkEdits, Region};
 pub use world_file::{PlayerState, WorldFile};
@@ -216,6 +217,7 @@ struct Savable<'w, 's> {
             &'static PlayerLook,
             &'static GameMode,
             &'static Hotbar,
+            &'static PlayerOwner,
         ),
     >,
 }
@@ -223,11 +225,12 @@ struct Savable<'w, 's> {
 impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
+        // the host's, until M0.6 saves each player's
         file.player = self
             .players
             .iter()
-            .next()
-            .map(|(body, player, look, mode, hotbar)| {
+            .find(|(.., owner)| owner.0 == ClientId::Server)
+            .map(|(body, player, look, mode, hotbar, _)| {
                 PlayerState::of(body, *look, player.movement, *mode, *hotbar)
             });
         save.snapshot(self.world.edits_mut(), file)
@@ -286,10 +289,10 @@ mod tests {
 
     use bevy::math::{I64Vec3, U16Vec3, Vec3};
     use bevy::prelude::*;
+    use bevy::state::app::StatesPlugin;
+    use bevy_replicon::prelude::*;
 
-    use super::{
-        region, PlayerState, Region, SavePlugin, WorldFile, WorldSave, EDITS_DIR, WORLD_FILE,
-    };
+    use super::{region, Region, SavePlugin, WorldFile, WorldSave, EDITS_DIR, WORLD_FILE};
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
     use crate::clock::TimeOfDay;
@@ -297,6 +300,8 @@ mod tests {
     use crate::game_mode::GameMode;
     use crate::hotbar::Hotbar;
     use crate::player::{Movement, Player, PlayerLook};
+    use crate::protocol::ProtocolPlugin;
+    use crate::server::{ServerPlugin, WorldToOpen};
 
     // A directory of its own under the system's temporary one, removed afterwards.
     struct TempDir(PathBuf);
@@ -408,28 +413,26 @@ mod tests {
         );
     }
 
-    // The game's saving, headless: a world played in one app is there in the next.
+    // The game's saving, headless: a world played in one app is there in the next. The
+    // server opens it and spawns its player, with no camera, as a server's players have none.
     fn play(dir: &TempDir) -> App {
-        let (save, file, edits) = WorldSave::open(dir.world(), None).unwrap();
-        let world = crate::world::World::from_save(file.seed, edits, 16);
-        let state = file
-            .player
-            .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, SavePlugin))
-            .insert_resource(save)
-            .insert_resource(world)
-            .insert_resource(TimeOfDay(file.time_of_day));
-        let mut player = Player::default();
-        player.movement = state.movement;
-        // with no camera, as a server's players have none
-        app.world_mut().spawn((
-            player,
-            state.look(),
-            state.game_mode,
-            state.hotbar,
-            state.body(),
-        ));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            RepliconPlugins,
+            ProtocolPlugin,
+            ServerPlugin,
+            SavePlugin,
+        ))
+        .insert_resource(WorldToOpen {
+            dir: dir.world(),
+            seed: None,
+            time_of_day: None,
+            region_distance: 16,
+        });
+        app.finish();
+        app.update();
         app
     }
 
@@ -447,7 +450,6 @@ mod tests {
         let dir = TempDir::new("restart");
         let built = I64Vec3::new(3, 460, -7);
         let mut app = play(&dir);
-        app.update();
         let at = Vec3::new(100.0, 480.0, -50.0);
         let looking = PlayerLook {
             yaw: 4.0,

@@ -3,13 +3,14 @@ use bevy::prelude::*;
 
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
+use crate::client::player::LocalPlayer;
 use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
-use crate::player::{Player, PlayerLook, EYE_HEIGHT};
+use crate::player::{PlayerLook, EYE_HEIGHT};
 use crate::protocol::RequestEdit;
 use crate::world::World;
 
@@ -110,7 +111,7 @@ pub fn overlaps(body: Aabb, position: Vec3, block: I64Vec3) -> bool {
 fn target_block(
     world: Res<World>,
     mut target: ResMut<Target>,
-    player: Query<(&Transform, &PlayerLook), With<Player>>,
+    player: Query<(&Transform, &PlayerLook), With<LocalPlayer>>,
 ) {
     let (feet, look) = player.single().expect("player does not exist");
     let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
@@ -140,7 +141,7 @@ fn use_target(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut player: Query<(&GameMode, &mut Hotbar), With<Player>>,
+    mut player: Query<(&GameMode, &mut Hotbar), With<LocalPlayer>>,
     mut requests: MessageWriter<RequestEdit>,
     mut seq: Local<u32>,
 ) {
@@ -261,6 +262,7 @@ mod tests {
         use bevy::math::I64Vec3;
         use bevy::prelude::*;
         use bevy::state::app::StatesPlugin;
+        use bevy_replicon::prelude::ClientId;
         use bevy_replicon::RepliconPlugins;
 
         use super::super::{use_target, Hit, Target};
@@ -269,10 +271,11 @@ mod tests {
         use crate::chunks::chunk_loader::ChunkLoader;
         use crate::chunks::group::BuildChunkGroup;
         use crate::chunks::lod::{LodKey, LodLayout};
+        use crate::client::player::LocalPlayer;
         use crate::client::ClientPlugin;
         use crate::game_mode::GameMode;
         use crate::hotbar::Hotbar;
-        use crate::player::Player;
+        use crate::player::{Player, PlayerOwner};
         use crate::protocol::{EditRejected, ProtocolPlugin, RequestEdit};
         use crate::server::ServerPlugin;
 
@@ -291,8 +294,13 @@ mod tests {
                     face: I64Vec3::Y,
                 })))
                 .add_systems(Update, use_target);
-            app.world_mut()
-                .spawn((Player::default(), mode, Transform::from_translation(feet)));
+            app.world_mut().spawn((
+                Player::default(),
+                PlayerOwner(ClientId::Server),
+                LocalPlayer,
+                mode,
+                Transform::from_translation(feet),
+            ));
             app
         }
 

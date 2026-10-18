@@ -4,10 +4,10 @@ use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::block::BlockType;
+use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
 use crate::hotbar::{load_icons, BlockIcons, Hotbar, SLOTS};
 use crate::menu::{font, free_cursor, GameState, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
-use crate::player::Player;
 
 const TOGGLE_KEY: KeyCode = KeyCode::KeyE;
 
@@ -122,7 +122,7 @@ fn tile(block: BlockType) -> impl Bundle {
 fn put_in_hotbar(
     activate: On<Activate>,
     tiles: Query<&Tile>,
-    mut hotbar: Query<&mut Hotbar, With<Player>>,
+    mut hotbar: Query<&mut Hotbar, With<LocalPlayer>>,
 ) {
     if let (Ok(tile), Ok(mut hotbar)) = (tiles.get(activate.entity), hotbar.single_mut()) {
         let selected = hotbar.selected;
@@ -136,7 +136,7 @@ fn toggle_picker(
     keys: Res<ButtonInput<KeyCode>>,
     state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
-    player: Query<&GameMode, With<Player>>,
+    player: Query<&GameMode, With<LocalPlayer>>,
 ) {
     if !keys.just_pressed(TOGGLE_KEY) {
         return;
@@ -199,6 +199,7 @@ mod tests {
 
     use super::{display_name, PickerPlugin, Tile};
     use crate::block::BlockType;
+    use crate::client::player::LocalPlayer;
     use crate::commands::{CommandBar, CommandPlugin};
     use crate::game_mode::GameMode;
     use crate::hotbar::{Hotbar, HotbarPlugin};
@@ -227,7 +228,8 @@ mod tests {
         .init_asset::<Image>()
         .init_asset::<TextureAtlasLayout>()
         .add_message::<WindowFocused>();
-        app.world_mut().spawn((Player::default(), mode));
+        app.world_mut()
+            .spawn((Player::default(), LocalPlayer, mode));
         app.update();
         app
     }

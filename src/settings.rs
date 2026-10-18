@@ -1,11 +1,11 @@
 use std::error::Error;
 
-use bevy::ecs::component::Component;
+use bevy::ecs::resource::Resource;
 use serde::Deserialize;
 
 use crate::chunks::lod::LodLayout;
 
-#[derive(Default, Deserialize, Clone, Copy, Component)]
+#[derive(Default, Deserialize, Clone, Copy, Resource)]
 pub struct Settings {
     pub renderer: RendererSettings,
     #[serde(default)]

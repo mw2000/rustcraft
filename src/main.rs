@@ -15,7 +15,7 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::client::ClientPlugin;
-use rustcraft::clock::{run_clock, wind_clock, ClockPlugin, TimeOfDay};
+use rustcraft::clock::{run_clock, wind_clock, ClockPlugin};
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
@@ -28,10 +28,9 @@ use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::picker::PickerPlugin;
 use rustcraft::player::input::{follow_look, player_look, player_move};
 use rustcraft::player::underwater::{murk, update_underwater_effects, MurkMaterial};
-use rustcraft::player::{Player, EYE_HEIGHT};
 use rustcraft::protocol::ProtocolPlugin;
-use rustcraft::save::{world_name, worlds_dir, PlayerState, SavePlugin, WorldSave};
-use rustcraft::server::ServerPlugin;
+use rustcraft::save::{world_name, worlds_dir, SavePlugin};
+use rustcraft::server::{open_world, ServerPlugin, WorldToOpen};
 use rustcraft::sky::{
     atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, FOG_MAX_OPACITY,
 };
@@ -49,8 +48,9 @@ fn setup_scene(
     mut murk_materials: ResMut<Assets<MurkMaterial>>,
     clouds: Res<CloudLayer>,
     curvature: Res<Curvature>,
+    settings: Res<Settings>,
+    world: Res<World>,
 ) {
-    let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
     let layout = renderer.lod_layout();
     let render_distance = layout.render_distance() as u32;
@@ -59,42 +59,12 @@ fn setup_scene(
         layout.max_level
     );
 
-    let dir = worlds_dir().join(world_name());
-    let (save, saved, edits) = WorldSave::open(dir.clone(), World::requested_seed())
-        .unwrap_or_else(|error| panic!("couldn't open the world in {}: {error}", dir.display()));
-    let game_world = World::from_save(saved.seed, edits, layout.region_reach() as u32);
-    let world_height = game_world.height;
-    info!(
-        "playing the world in {}, with seed {}",
-        dir.display(),
-        saved.seed
-    );
-    let arrival = saved
-        .player
-        .unwrap_or_else(|| PlayerState::arriving_at(game_world.spawn()));
-    commands.insert_resource(game_world);
-    commands.insert_resource(save);
-    commands.insert_resource(TimeOfDay(start_time().unwrap_or(saved.time_of_day)));
-
-    let [x, y, z] = arrival.position;
-    info!("spawned at {x:?}, {y:?}, {z:?}");
-
-    let mut body = Player::default();
-    body.movement = arrival.movement;
-    let player = commands
-        .spawn((
-            body,
-            arrival.look(),
-            arrival.game_mode,
-            arrival.hotbar,
-            arrival.body(),
-        ))
-        .id();
+    let world_height = world.height;
 
     let fog_distance = render_distance as f32 * 16.0;
+    // hung from the local player's eyes once it's spawned, see `ClientPlugin`
     let camera = commands
         .spawn((
-            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
             Camera3d { ..default() },
             atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
@@ -135,7 +105,6 @@ fn setup_scene(
             dry_color_grading(),
         ))
         .id();
-    commands.entity(player).add_children(&[camera]);
     let (murk, murk_handle) = murk(&mut meshes, &mut murk_materials);
     commands.spawn((murk, ChildOf(camera)));
     commands.insert_resource(murk_handle);
@@ -181,7 +150,6 @@ fn setup_scene(
         &mut chunk_materials,
         &mut water_materials,
     );
-    commands.spawn(settings);
 }
 
 // the stats runs are unfocused, which Bevy otherwise throttles to 60 fps
@@ -205,6 +173,13 @@ fn start_time() -> Option<f32> {
 }
 
 fn main() {
+    let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
+    let world = WorldToOpen {
+        dir: worlds_dir().join(world_name()),
+        seed: World::requested_seed(),
+        time_of_day: start_time(),
+        region_distance: settings.renderer.lod_layout().region_reach() as u32,
+    };
     App::new()
         .add_plugins((
             DefaultPlugins
@@ -235,9 +210,17 @@ fn main() {
         // singleplayer: the server and client in one App, with no transport between them, so
         // replicon passes their messages straight across (§4.4)
         .add_plugins((RepliconPlugins, ProtocolPlugin, ServerPlugin, ClientPlugin))
+        .insert_resource(settings)
+        .insert_resource(world)
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
-        .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
+        .add_systems(
+            Startup,
+            (
+                spawn_atmosphere,
+                setup_scene.after(spawn_clouds).after(open_world),
+            ),
+        )
         // once the camera's moved, see `TransformSystems::Propagate`
         .add_systems(
             PostUpdate,

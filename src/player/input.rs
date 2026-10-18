@@ -15,7 +15,9 @@ use bevy::{
 
 use super::physics::{step, MoveInput};
 use super::{Movement, Player, PlayerLook};
-use crate::{chunks::chunk::ChunkCoordinate, game_mode::GameMode, world::World};
+use crate::{
+    chunks::chunk::ChunkCoordinate, client::player::LocalPlayer, game_mode::GameMode, world::World,
+};
 
 const FLY_TOGGLE_KEY: KeyCode = KeyCode::KeyF;
 // How far the mouse turns the view, per pixel it moves. Mouse motion is already a distance, so
@@ -27,7 +29,7 @@ const LOOK_SENSITIVITY: f32 = 0.1_f32.to_radians();
 pub fn player_move(
     time: Res<Time>,
     world: Res<World>,
-    mut players: Query<(&mut Transform, &mut Player, &PlayerLook, &GameMode)>,
+    mut players: Query<(&mut Transform, &mut Player, &PlayerLook, &GameMode), With<LocalPlayer>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let (mut transform, mut player, look, mode) =
@@ -79,7 +81,7 @@ fn move_input(keys: &ButtonInput<KeyCode>) -> MoveInput {
 
 /// Turns the player's look with the mouse.
 pub fn player_look(
-    mut looks: Query<&mut PlayerLook, With<Player>>,
+    mut looks: Query<&mut PlayerLook, With<LocalPlayer>>,
     mut motion: MessageReader<MouseMotion>,
 ) {
     let mut look = looks.single_mut().expect("player does not exist");
