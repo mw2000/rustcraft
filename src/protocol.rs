@@ -20,7 +20,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// What netcode tells rustcraft's connections apart from other games' by.
 pub const NETCODE_PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustcraf");
@@ -141,10 +141,12 @@ pub struct PickBlock {
 }
 
 /// What a client joining is told as the server lets it in: the world's seed, to generate its
-/// terrain from (INV-1), and where its player is.
+/// terrain from (INV-1), the checksum of what the seed generates, which the client checks its
+/// own against (`world_checksum`, D-3), and where its player is.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Welcome {
     pub seed: u32,
+    pub checksum: u64,
     pub player: PlayerState,
 }
 

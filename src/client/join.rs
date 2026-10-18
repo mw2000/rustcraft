@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
 use bevy::state::state::StateTransitionEvent;
+use bevy::tasks::{futures, AsyncComputeTaskPool, Task};
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::netcode::{
     ClientAuthentication, ClientSocket, NativeSocket, NetcodeClientTransport, NetcodeError,
@@ -11,6 +12,7 @@ use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient};
 use bevy_replicon_renet2::RenetChannelsExt;
 
 use super::player::LocalPlayer;
+use crate::chunks::generate::checksum::world_checksum;
 use crate::edits::Edits;
 use crate::inventory::Inventory;
 use crate::player::{arriving, PlayerLook};
@@ -81,26 +83,78 @@ pub fn connect(
     Ok((client, transport))
 }
 
-/// Makes the world the server welcomes this client to, generating its terrain from the seed
-/// (INV-1), and spawns this client's player where the server has them.
+/// How this client works out the checksum of what a seed generates: `world_checksum`, unless a
+/// test swaps it to play a client that generates a different world from the server's.
+#[derive(Resource, Clone, Copy)]
+pub struct GenerationChecksum(pub fn(u32) -> u64);
+
+impl Default for GenerationChecksum {
+    fn default() -> Self {
+        Self(world_checksum)
+    }
+}
+
+/// The world a client's been welcomed to, while it works out whether it generates the same
+/// terrain from the seed as the server (D-3).
+#[derive(Resource)]
+pub(super) struct Checking {
+    seed: u32,
+    server: u64,
+    task: Task<u64>,
+}
+
+/// Spawns this client's player where the server has them, and starts checking the world it's
+/// welcomed to, on a task as that takes a fraction of a second (INV-7).
 pub(super) fn arrive(
     mut welcomes: MessageReader<Welcome>,
-    settings: Res<Settings>,
+    checksum: Res<GenerationChecksum>,
     mut commands: Commands,
 ) {
     let Some(welcome) = welcomes.read().last() else {
         return;
     };
-    // M0.6b checks the server's checksums of sample chunks against this world's here (D-3)
-    let region_distance = settings.renderer.lod_layout().region_reach() as u32;
-    let world = World::from_save(welcome.seed, Edits::default(), region_distance);
-    commands.insert_resource(world);
+    let (seed, GenerationChecksum(checksum)) = (welcome.seed, *checksum);
+    commands.insert_resource(Checking {
+        seed,
+        server: welcome.checksum,
+        task: AsyncComputeTaskPool::get().spawn(async move { checksum(seed) }),
+    });
     commands.spawn((arriving(&welcome.player), LocalPlayer));
     let [x, y, z] = welcome.player.position;
-    info!(
-        "joined a world with seed {}, at {x:?}, {y:?}, {z:?}",
-        welcome.seed
-    );
+    info!("joined a world with seed {seed}, at {x:?}, {y:?}, {z:?}");
+}
+
+/// Makes the world this client's welcomed to, generating its terrain from the seed (INV-1),
+/// once it's found that it generates the same as the server's. If it doesn't, it says so and
+/// leaves, rather than play on a world that isn't the one the others see.
+pub(super) fn check_world(
+    mut checking: ResMut<Checking>,
+    settings: Res<Settings>,
+    client: Option<ResMut<RenetClient>>,
+    mut output: MessageWriter<CommandOutput>,
+    mut commands: Commands,
+) {
+    let Some(checksum) = futures::check_ready(&mut checking.task) else {
+        return;
+    };
+    commands.remove_resource::<Checking>();
+    if checksum != checking.server {
+        let text = format!(
+            "Your copy of rustcraft generates a different world from the host's, so you can't \
+             play on it together (checksum {checksum:016x}, the host's {:016x}). The host may \
+             be on another kind of computer (D-3).",
+            checking.server
+        );
+        error!("{text}");
+        output.write(CommandOutput { text, error: true });
+        if let Some(mut client) = client {
+            client.disconnect();
+        }
+        return;
+    }
+    let region_distance = settings.renderer.lod_layout().region_reach() as u32;
+    let world = World::from_save(checking.seed, Edits::default(), region_distance);
+    commands.insert_resource(world);
 }
 
 /// Puts the inventory the server says this client's player has on them.

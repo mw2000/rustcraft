@@ -31,3 +31,20 @@ jobs:
       # Release throughout, so clippy and the tests share one build of the dependencies.
       - run: cargo clippy --release --all-targets -- -D warnings
       - run: cargo test --release
+
+  # Whether generation agrees across platforms (D-3): multiplayer needs every client to generate
+  # the same world, and float functions such as `sin` and `exp` can differ between libms.
+  determinism:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libx11-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release --lib chunks::generate::checksum

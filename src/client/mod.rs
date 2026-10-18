@@ -23,6 +23,7 @@ pub struct ClientPlugin;
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TimeOfDay>()
+            .init_resource::<join::GenerationChecksum>()
             .add_observer(player::mark_local_player)
             .add_systems(
                 PostStartup,
@@ -33,11 +34,12 @@ impl Plugin for ClientPlugin {
             .add_observer(join::refused)
             .add_systems(
                 PostUpdate,
-                // a client joining a server has its world and player once it's welcomed, with
-                // the camera on them before transforms propagate, so the next frame finds it
-                // where the player is
+                // a client joining a server has its player once it's welcomed, with the camera
+                // on them before transforms propagate, so the next frame finds it where the
+                // player is, and its world once it's checked it
                 (
                     join::arrive.run_if(on_message::<Welcome>),
+                    join::check_world.run_if(resource_exists::<join::Checking>),
                     (player::attach_camera, join::follow_inventory),
                 )
                     .chain()
@@ -52,7 +54,7 @@ impl Plugin for ClientPlugin {
                 (edits::apply_block_changes, rebuild_groups)
                     .chain()
                     .after(ServerSystems::Send)
-                    .after(join::arrive)
+                    .after(join::check_world)
                     .run_if(resource_exists::<World>),
             )
             // after replicon hands over the server's syncs, which over a network it does in

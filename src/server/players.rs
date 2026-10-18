@@ -1,18 +1,46 @@
 use bevy::prelude::*;
+use bevy::tasks::{block_on, AsyncComputeTaskPool, Task};
 use bevy_replicon::prelude::*;
 
 use super::edits::EditAllowances;
+use crate::chunks::generate::checksum::world_checksum;
 use crate::inventory::Inventory;
 use crate::player::{arriving, PlayerLook, PlayerOwner};
 use crate::protocol::{InventoryChanged, PlayerPose, Welcome};
 use crate::save::PlayerState;
 use crate::world::World;
 
+/// The checksum of what the world's seed generates, for clients to check theirs against (D-3).
+/// Worked out on a task as the world opens, which is done long before anyone joins.
+#[derive(Resource)]
+pub(super) enum WorldChecksum {
+    Working(Task<u64>),
+    Done(u64),
+}
+
+impl WorldChecksum {
+    pub(super) fn of(seed: u32) -> Self {
+        Self::Working(AsyncComputeTaskPool::get().spawn(async move { world_checksum(seed) }))
+    }
+
+    // Waits for the task if it's still going, which it only is for a client joining just as
+    // the world's opened, as in tests.
+    fn get(&mut self) -> u64 {
+        let checksum = match self {
+            Self::Working(task) => block_on(task),
+            Self::Done(checksum) => *checksum,
+        };
+        *self = Self::Done(checksum);
+        checksum
+    }
+}
+
 /// Welcomes a client the server has let in, its versions matching: spawns its player at the
-/// world's spawn, and tells it the seed and where its player is.
+/// world's spawn, and tells it the seed, its checksum and where its player is.
 pub(super) fn welcome(
     authorized: On<Add<AuthorizedClient>>,
     world: Res<World>,
+    mut checksum: ResMut<WorldChecksum>,
     mut commands: Commands,
     mut welcomes: MessageWriter<ToClients<Welcome>>,
 ) {
@@ -24,6 +52,7 @@ pub(super) fn welcome(
         targets: SendTargets::Single(client),
         message: Welcome {
             seed: world.seed(),
+            checksum: checksum.get(),
             player,
         },
     });

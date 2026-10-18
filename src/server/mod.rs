@@ -121,6 +121,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     info!("spawned at {x:?}, {y:?}, {z:?}");
     commands.spawn((arriving(&arrival), PlayerOwner(ClientId::Server)));
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
+    commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
     commands.insert_resource(save);
     commands.remove_resource::<WorldToOpen>();

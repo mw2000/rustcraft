@@ -393,8 +393,8 @@ The world's state beyond the seed (INV-1).
     with it as a `TimeSync`, rate and all. The client's `join::arrive` (in `PostUpdate`, before
     transforms propagate) builds its own `World` from the seed with no edits, spawns its
     `LocalPlayer` from the state, and hangs the camera from it; the loaders then generate
-    terrain around it as in singleplayer. M0.6b's checksums go in `Welcome` and are checked in
-    `arrive`. When a client disconnects, `players::see_off` despawns its player and forgets its
+    terrain around it as in singleplayer (since M0.6b, once it's checked the world). When a
+    client disconnects, `players::see_off` despawns its player and forgets its
     `EditAllowances`.
   - **Playing:** a client sends `PlayerPose { position, yaw, pitch }`, unreliable, every 50 ms
     while connected, and the server's `move_players` puts its player there before keeping
@@ -428,6 +428,22 @@ The world's state beyond the seed (INV-1).
     it, its inventory follows the server's, the item a block it breaks in survival drops
     reaches it, leaving despawns its player, and a client of another version is refused and
     told so.
+- **Built (M0.6b):** the determinism handshake (D-3). `world_checksum(seed)`
+  (`src/chunks/generate/checksum.rs`) generates 24 sample chunks with `generate_chunk` from a
+  `RegionStore` of its own: in the spawn's column and three thousands of blocks out (one far
+  north, cold and wooded), the chunks over, at and two under the ground and layers 1, 6 and
+  20, so plants, trees, water, caves and all three ores are in them (a test checks). It's
+  64-bit FNV-1a over each block's name, so the block table's order doesn't matter, and each
+  column's roof; tree tints, floats that only colour leaves, are left out. It takes 150 to 250
+  ms on one core. The server starts it on a task as the world opens (`WorldChecksum`) and puts
+  it in `Welcome { seed, checksum, player }`, waiting for it only if someone joins sooner.
+  The client's `join::arrive` spawns its player at once (so its inventory has somewhere to go)
+  and works its own out on a task; `check_world` makes the `World` once they match, or says
+  "Your copy of rustcraft generates a different world from the host's…" in the command bar
+  and the log and disconnects. `GenerationChecksum` holds the function the client uses, which
+  a test swaps for one that disagrees. `PROTOCOL_VERSION` is 2. A golden test pins seed 3's
+  checksum, so any change to what's generated fails it until the value is updated
+  deliberately (§8), and CI's `determinism` job runs it on Linux, Windows and macOS.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, `host.rs`, `players.rs`); `src/save/`
   under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup,
@@ -747,7 +763,7 @@ and loads.**
   - ☑ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
     two-App tests over the memory transport. `EditAllowances` forgets a client when it
     disconnects.
-  - ☐ **M0.6b Determinism handshake**, with golden checksums and a CI matrix of Windows, macOS
+  - ☑ **M0.6b Determinism handshake**, with golden checksums and a CI matrix of Windows, macOS
     and Linux (D-3).
   - ☐ **M0.6c Edit sync**: `ChunkEdits` on joining and moving, `BlockChanged` by area, client
     prediction with rollback.
@@ -813,7 +829,10 @@ Done when: **the world feels inhabited, and night is dangerous.**
 - **D-3 Cross-platform determinism.** Is same-version determinism enough, or does generation need
   to avoid platform-dependent float functions (`sin`, `exp` and the like differ across libm
   implementations) so Windows, macOS and Linux agree? Test early, in M0.6, by comparing chunk
-  checksums across platforms. If they differ, switch the noise to deterministic math.
+  checksums across platforms. If they differ, switch the noise to deterministic math. Since
+  M0.6b CI's `determinism` job runs the golden checksum test (§4.4) on `ubuntu-latest`,
+  `windows-latest` and `macos-latest`: if they all pass, same-version determinism holds there
+  for now and this can be decided; a platform that fails shows where it doesn't.
 - **D-4 Crafting model.** Minecraft-style shaped grid, or ingredient lists at stations. Leaning
   towards ingredient lists: simpler, clearer, and less of a copy.
 
@@ -858,7 +877,9 @@ For agents and contributors:
   and ☑ when it's done, and record any decision it settles in §7.
 - **Tests:** `cargo test`. Generation changes need tests that the output is deterministic and,
   where it applies, that full-detail chunks and LODs agree (see `src/chunks/lod/tests.rs` and
-  `generator/tests.rs`).
+  `generator/tests.rs`). A change to what's generated also fails the golden checksum test in
+  `src/chunks/generate/checksum.rs`: update its value deliberately, and say so in the PR, as
+  older games can no longer join and saved edits sit on new terrain.
 - **Quality:** `cargo fmt` and `cargo clippy` clean.
 - **Performance:** for anything touching generation, meshing, LODs or per-frame systems, measure
   with the `profile` skill and `examples/lod_sim.rs`, and report the numbers in the PR (INV-7).

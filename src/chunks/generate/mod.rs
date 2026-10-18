@@ -1,5 +1,6 @@
 pub mod biome;
 pub mod caves;
+pub mod checksum;
 pub mod columns;
 pub mod fractal;
 pub mod generator;

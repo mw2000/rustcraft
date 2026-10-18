@@ -16,8 +16,9 @@ use bevy_replicon_renet2::RepliconRenetPlugins;
 use rustcraft::block::BlockType;
 use rustcraft::chunks::chunk::ChunkCoordinate;
 use rustcraft::chunks::chunk_loader::ChunkLoader;
+use rustcraft::chunks::generate::checksum::world_checksum;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
-use rustcraft::client::join::connect;
+use rustcraft::client::join::{connect, GenerationChecksum};
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
 use rustcraft::game_mode::GameMode;
@@ -37,6 +38,15 @@ const FRAME: Duration = Duration::from_millis(20);
 // end of an in-memory socket. The client is given `version` too, as a game of another version
 // would have.
 fn server_and_client(dir: &std::path::Path, version: Option<&str>) -> (App, App) {
+    server_and_client_with(dir, version, GenerationChecksum::default())
+}
+
+// The same, with a client that works out what seeds generate with `checksum`.
+fn server_and_client_with(
+    dir: &std::path::Path,
+    version: Option<&str>,
+    checksum: GenerationChecksum,
+) -> (App, App) {
     let mut server = App::new();
     server
         .add_plugins((
@@ -75,7 +85,8 @@ fn server_and_client(dir: &std::path::Path, version: Option<&str>) -> (App, App)
             Handle::default(),
             Handle::default(),
         ))
-        .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
+        .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME))
+        .insert_resource(checksum);
     if let Some(version) = version {
         client
             .world_mut()
@@ -269,5 +280,27 @@ fn test_a_client_of_another_version_is_refused() {
     });
     assert!(!joined(&client));
     assert_eq!(vec![ClientId::Server], owners(&mut server));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_client_generating_a_different_world_is_refused() {
+    let dir = temp_dir("different-world");
+    // as a game on a machine whose floating point differs might
+    let checksum = GenerationChecksum(|seed| world_checksum(seed) ^ 1);
+    let (mut server, mut client) = server_and_client_with(&dir, None, checksum);
+    let mut output = MessageCursor::<CommandOutput>::default();
+    let mut said = Vec::new();
+    update_until(&mut server, &mut client, |_, client| {
+        let messages = client.world().resource::<Messages<CommandOutput>>();
+        said.extend(output.read(messages).map(|line| line.text.clone()));
+        said.iter()
+            .any(|text| text.contains("generates a different world"))
+    });
+    // and leaves, with no world to play on
+    update_until(&mut server, &mut client, |server, _| {
+        owners(server) == [ClientId::Server]
+    });
+    assert!(!joined(&client));
     std::fs::remove_dir_all(&dir).unwrap();
 }
