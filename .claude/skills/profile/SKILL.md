@@ -13,6 +13,7 @@ Measure before changing anything, and A/B every change against the binary before
 - Bevy needs `libudev-dev` and `pkg-config` to build on Linux.
 - perf: `apt-get install -y linux-tools-generic`, then run `/usr/lib/linux-tools/*/perf` directly, as the `perf` wrapper refuses a kernel it doesn't know. Use `-e cpu-clock`, since containers often lack hardware counters.
 - A cold release build compiles all of Bevy (10-20 minutes). A second target directory starts cold too, so copy `target/release` into it first.
+- Binaries run straight from `target/` (not through `cargo run`) look for `assets/` next to the executable, as release builds do, so set `BEVY_ASSET_ROOT` to the repo: `BEVY_ASSET_ROOT=$PWD ./target/release/examples/lod_sim ...`. Without it they can't read `assets/settings.toml`, and the game itself draws without its shaders.
 
 ## Time each stage
 
