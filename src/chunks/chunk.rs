@@ -234,10 +234,19 @@ impl ChunkData {
 
     /// Writes every cell's block to `out`, in `linear_index` order.
     pub fn decode_into(&self, out: &mut [BlockType; CELLS]) {
+        // Short runs, which layers of soil and veins of ore cut columns into, are written as a
+        // whole stride in one store rather than a call to fill them. The stride runs on past
+        // the run's end, into cells the runs after it then write over.
+        const STRIDE: usize = 16;
         let mut start = 0;
         for run in &self.runs {
             let end = start + run.length as usize;
-            out[start..end].fill(run.block);
+            match out.get_mut(start..start + STRIDE) {
+                Some(stride) if end - start <= STRIDE => {
+                    stride.copy_from_slice(&[run.block; STRIDE]);
+                }
+                _ => out[start..end].fill(run.block),
+            }
             start = end;
         }
     }
