@@ -60,7 +60,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Area | What's there | Where |
 |---|---|---|
 | World | 1024 blocks tall, sea level 448, 16³ chunks stored run-length encoded, seeded with `RC_SEED` | `src/world.rs`, `src/chunks/chunk.rs`, `src/chunks/generate/mod.rs` |
-| Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`) |
+| Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it and ores in its stone (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`, `ores.rs`) |
 | Biomes | Climate-driven desert, forest, foothills, glacier; tinted grass and leaves | `src/chunks/generate/biome/` |
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
@@ -79,8 +79,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits and the player (`src/save/`).
 
-Not there yet: inventory, crafting, health, ores in the world, block
-light, structures, mobs, networking.
+Not there yet: inventory, crafting, health, block light, structures, mobs, networking.
 
 ---
 
@@ -407,7 +406,26 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   only seen from in the caves, so it's meshed only near the camera: within 9 chunks from under
   ground, further than sight reaches along a cave, and 3 from the open. On the surface the caves
   under the rest of the full-detail area cost nothing to draw.
-- Ores are placed by depth band and region, in veins, deterministically (INV-2, INV-3).
+- Ores (`src/chunks/generate/ores.rs`) turn stone to coal, copper and iron in veins: lumpy
+  clumps grown a block at a time from starts hashed from the seed on a grid of chunk-sized cells,
+  each staying within 2 blocks of its start, so a chunk takes them from its own cell and the 26
+  around it (INV-2, INV-3). They replace only stone, after caves are carved, so they show on cave
+  walls and bare cliffs. They're full detail only: LODs don't draw underground, so their output
+  is unchanged. They add about 2 µs to a chunk underground, 2–3% of generating one, and the
+  extra runs they split the stone into make meshing the chunks round them a few percent dearer.
+  The bands, by absolute height (sea level 448), each thinning out over 32 blocks inside its
+  ends, and the rates in the thick of them, tuned in the `ORES` table:
+
+  | Ore | Heights | Veins per 16³ | Blocks a vein | Share of stone |
+  |---|---|---|---|---|
+  | Coal | 192 to the top | 3 | 3–12 | ~0.55% |
+  | Copper | 128–456 | 2.5 | 3–8 | ~0.35% |
+  | Iron | 16–392 | 1.5 | 2–6 | ~0.15% |
+
+  Coal is in the stone from just under the surface; copper is a short dig under lowland ground;
+  iron starts fifty or more blocks down, a deep dig or a walk down the caves. A tunnel through
+  the thick of the bands passes a vein of coal or copper every thirty blocks or so, and of iron
+  every sixty. Regional ores (M2.5) join the same table, by climate as well as depth.
 - Underground structures (mineshafts, dungeons) come with §5.6.
 
 ### 5.5 Survival
@@ -531,7 +549,7 @@ Done when: **you can start with nothing and make iron tools.**
 - ☐ **M1.1 Hotbar, inventory and items.** Data-driven items, stacks, dropped items (§5.2).
 - ☐ **M1.2 Survival breaking.** Break time from hardness and tool, drops (§5.1).
 - ☑ **M1.3 Caves.** 3D carving underground, cave mouths, buried-chunk skipping updated (§5.4).
-- ☐ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).
+- ☑ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).
 - ☐ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,
   copper and iron tools (§5.3).
 - ☐ **M1.6 Furnace.** Smelting ores, with containers (§5.2).

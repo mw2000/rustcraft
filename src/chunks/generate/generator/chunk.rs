@@ -9,6 +9,7 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::ores::place_ores;
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
@@ -59,6 +60,12 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     if let Some(carved) = caves.chunk(origin, |x, z| columns.cave_top(x, z), columns.cave_highest) {
         carved.carve(&mut cells);
     }
+    place_ores(
+        regions.noise().seed(),
+        origin,
+        ground_top(highest),
+        &mut cells,
+    );
     let mut chunk_data = ChunkData::from_cells(cells);
 
     // the sky's light is kept out of the chunks below wherever it can't reach down past this one
