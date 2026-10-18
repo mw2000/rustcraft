@@ -2505,6 +2505,20 @@ both sides built the same thing they're merged into one system keeping the best 
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
   silent and audio-free. Built: synthesised, with upstream's recorded ambience and wind merged
   in (#77), §5.10.
+- ☐ **M-A4 Player view and skins.**
+  - **First person:** the player's own arm and held item drawn in view (a separate view-model
+    pass so they never clip into walls), with swing for breaking, placing, attacking and eating,
+    a bob while walking, and a lowered-and-raised swap when changing slots; blocks held as small
+    cubes, tools and items as their sprites given thickness.
+  - **Camera modes:** a bindable key (default F5) cycles first person, third person behind and
+    third person in front; the third-person camera pulls in rather than passing through blocks.
+    Your own full model is drawn in third person.
+  - **Skins:** players' models take the Minecraft skin *format* (a 64×64 PNG, and the older
+    64×32; classic 4-pixel or slim 3-pixel arms; the overlay layer), so any skin a player has
+    works. The model's proportions follow that layout. A player picks a PNG file in Settings;
+    it's validated (size, format, a byte limit), sent to the server and relayed to everyone, and
+    saved with the player. Default skins are our own, drawn by script (INV-8: Mojang's Steve
+    and Alex are not ours to ship); skins aren't fetched from Mojang's servers by username.
 - ☑ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
   every setting lives in menus rather than environment variables:
   - **Title screen:** Singleplayer, Multiplayer, Settings, Quit, over a slowly panning view of a
