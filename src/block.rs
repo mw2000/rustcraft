@@ -800,6 +800,15 @@ blocks! {
         hardness: 1.2, tool: Some(Shears), tier: 0,
         top: Tile::Wool, side: Tile::Wool, bottom: Tile::Wool, lod: Tile::Wool,
     },
+    // A dungeon's spawner (M3.3): an iron cage round a smoulder, which brings monsters out near
+    // it while someone's close and it's dark (`server::creatures`), so lighting it stops it.
+    // It's where a structure's `spawner` marker is, and drops nothing.
+    Spawner {
+        name: "spawner", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Nothing,
+        hardness: 10.0, tool: Some(Pickaxe), tier: 1,
+        top: Tile::Spawner, side: Tile::Spawner, bottom: Tile::Spawner, lod: Tile::Spawner,
+    },
 }
 
 impl BlockType {
@@ -1117,9 +1126,10 @@ pub enum Tile {
     Magma,
     ShortGrass,
     WildGrass,
+    Spawner,
 }
 
-pub const TILE_COUNT: usize = 84;
+pub const TILE_COUNT: usize = 85;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -1174,7 +1184,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::WildGrass as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Spawner as usize + 1);
     }
 
     #[test]

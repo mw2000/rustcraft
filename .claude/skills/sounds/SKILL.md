@@ -42,6 +42,10 @@ named `<name>_1.ogg` to `_4`; `src/client/sound/mod.rs` has the same count and t
   LFOs with whole cycles in the loop (`lfo`), events placed round the end (`place(..., wrap=True)`),
   reverb by circular convolution and IIR filters run round the loop (`around`). Keep to these, or
   the loop clicks where it repeats.
+- **Creatures:** animals have a call each (`bleat`, `moo`, `oink`, `cluck`), pitched up in the game
+  when hurt. The hostile kinds (M3.3: `gloamer`, `lurker`, `slinger`, `barrow_brute`, `HOSTILES`)
+  have four cries each, `<kind>_call`, `_hurt`, `_attack` and `_death`, from functions of those
+  names, voiced through `formants`, with `clicks` for the lurker and `crumble` for the brute.
 - **Music:** pads under a few plucked or bell notes wandering a pentatonic scale, in a big room,
   about a minute each, played rarely (`src/client/sound/ambience.rs`).
 

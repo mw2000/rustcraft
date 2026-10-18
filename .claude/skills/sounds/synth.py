@@ -513,6 +513,229 @@ def cluck(rng):
     return level(trim(np.concatenate(out)), -21)
 
 
+# --- hostile creatures (M3.3) -------------------------------------------------------------------
+
+
+def formants(x, table):
+    """`x` through a vocal tract: resonances at each frequency, with their quality and level."""
+    return sum(resonator(x, f, q) * a for f, q, a in table)
+
+
+def tick(rng, freq, decay=0.004):
+    """A dry click of a hard shell: a few struck modes and a snap of noise, a few ms long."""
+    n = samples(decay * 8)
+    snap = bandpass(rng.standard_normal(n), freq * 0.6, min(freq * 2.5, SR / 2 - 200)) * envelope(n, 0.0002, decay / 2)
+    return modes(n, rng, [freq, freq * 1.7, freq * 2.9], [decay, decay * 0.7, decay * 0.4], [1, 0.6, 0.3], 0.08) + snap * 0.6
+
+
+def clicks(seconds, rng, rate, freq, slowing=1.0):
+    """A run of `tick`s at about `rate` a second, each a little different, the gaps stretching by
+    `slowing` as it goes, ringing a small hollow body."""
+    out = np.zeros(samples(seconds))
+    at, gap = 0.0, 1 / rate
+    while at < seconds - 0.03:
+        place(out, tick(rng, freq * rng.uniform(0.8, 1.25)) * rng.uniform(0.4, 1.0), samples(at))
+        at += gap * rng.uniform(0.6, 1.4)
+        gap *= slowing
+    return out + formants(out, ((freq * 0.45, 6, 0.4),)) * 0.5
+
+
+def growl(n, rng, f0, rough=40.0):
+    """A rough voiced buzz on the pitch `f0`, its loudness shaken quickly, as a throat growls."""
+    shake = 1 + 0.7 * np.sin(2 * np.pi * np.cumsum(rough * rng.uniform(0.85, 1.15, n) / SR))
+    return voiced(f0, 40) * shake + bandpass(coloured(n, rng, -1), 200, 2000) * 0.25
+
+
+def gloamer_call(rng):
+    """A gloamer's call: a low breathy rasp of a growl that rises and thins into an eerie whine."""
+    seconds = rng.uniform(1.1, 1.45)
+    n = samples(seconds)
+    t = times(n) / seconds
+    rise = np.clip((t - 0.45) / 0.4, 0, 1)
+    f0 = rng.uniform(85, 105) * (1 + 6.0 * rise**1.5) * (1 + 0.015 * np.sin(2 * np.pi * 6 * times(n)))
+    low = formants(growl(n, rng, f0, 35) * (1 - rise), ((380, 4, 1.0), (900, 5, 0.5)))
+    whine = formants(voiced(f0, 12) * rise, ((1200, 5, 1.0), (2600, 8, 0.4)))
+    breath = bandpass(coloured(n, rng, -1), 500, 3000) * 0.12
+    x = (low + whine * 0.8 + breath) * envelope(n, 0.15, seconds / 3.5, hold=seconds * 0.5)
+    return level(trim(x), -20)
+
+
+def gloamer_hurt(rng):
+    """A gloamer hurt: a sharp yelp, high and nasal, falling fast."""
+    seconds = rng.uniform(0.25, 0.32)
+    n = samples(seconds)
+    f0 = rng.uniform(620, 720) * (1 - 0.45 * times(n) / seconds)
+    x = formants(voiced(f0, 15), ((1400, 5, 1.0), (2900, 7, 0.5))) * envelope(n, 0.004, seconds / 3)
+    return level(trim(x), -17)
+
+
+def gloamer_attack(rng):
+    """A gloamer lunging: a short snarling bark, a rough burst of throat opening and shutting."""
+    seconds = rng.uniform(0.35, 0.45)
+    n = samples(seconds)
+    f0 = rng.uniform(150, 190) * (1 + 0.4 * np.sin(np.pi * times(n) / seconds))
+    snarl = formants(growl(n, rng, f0, 55), ((500, 3, 1.0), (1300, 4, 0.7), (2800, 6, 0.3)))
+    x = snarl * envelope(n, 0.01, seconds / 3, hold=seconds * 0.25)
+    return level(trim(x), -17)
+
+
+def gloamer_death(rng):
+    """A gloamer dying: a whimper falling away and dissolving into a last breath."""
+    seconds = rng.uniform(1.2, 1.5)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(520, 600) * (1 - 0.6 * t) * (1 + 0.03 * np.sin(2 * np.pi * 7 * times(n)))
+    voice = formants(voiced(f0, 12), ((1100, 5, 1.0), (2400, 7, 0.4))) * np.clip(1.2 - t * 1.6, 0, 1)
+    breath = bandpass(coloured(n, rng, -1), 400, 2500) * np.clip((t - 0.25) * 2, 0, 1) * 0.8
+    x = (voice + breath) * envelope(n, 0.03, seconds / 3, hold=seconds * 0.35)
+    return level(trim(x), -18)
+
+
+def lurker_call(rng):
+    """A lurker's call: dry, resonant chittering, clicks in two or three quick runs."""
+    out = []
+    for _ in range(rng.integers(2, 4)):
+        d = rng.uniform(0.18, 0.32)
+        out.append(clicks(d, rng, rng.uniform(35, 55), rng.uniform(2200, 3000)) * envelope(samples(d), 0.01, d / 2, hold=d / 3))
+        out.append(np.zeros(samples(rng.uniform(0.08, 0.18))))
+    return level(trim(np.concatenate(out)), -21)
+
+
+def lurker_hurt(rng):
+    """A lurker hurt: a shrill squeal over a hiss."""
+    seconds = rng.uniform(0.3, 0.4)
+    n = samples(seconds)
+    f0 = rng.uniform(1700, 1950) * (1 + 0.15 * np.sin(np.pi * times(n) / seconds))
+    squeal = formants(voiced(f0, 5), ((3200, 6, 1.0),))
+    hiss = bandpass(rng.standard_normal(n), 3500, 8000) * 0.1
+    x = (squeal + hiss) * envelope(n, 0.005, seconds / 3, hold=seconds * 0.2)
+    return level(trim(x), -18)
+
+
+def lurker_attack(rng):
+    """A lurker dropping on its prey: a long hiss that ends in a burst of quick clicks."""
+    seconds = rng.uniform(0.55, 0.7)
+    n = samples(seconds)
+    hiss = bandpass(rng.standard_normal(n), 2500, 9000) * envelope(n, 0.04, seconds / 3, hold=seconds * 0.3)
+    burst = clicks(0.25, rng, 70, rng.uniform(2400, 3200))
+    x = hiss * 0.7
+    place(x, burst, samples(seconds - 0.3))
+    return level(trim(x), -17)
+
+
+def lurker_death(rng):
+    """A lurker dying: its clicks rattling on, slower and slower, to nothing."""
+    seconds = 1.3
+    x = clicks(seconds, rng, 45, rng.uniform(1900, 2500), slowing=1.12)
+    return level(trim(x * envelope(len(x), 0.005, 0.5, hold=0.2)), -18)
+
+
+def slinger_call(rng):
+    """A slinger's call: nasal gibbering, a few short high syllables up and down."""
+    out = []
+    for _ in range(rng.integers(3, 6)):
+        d = rng.uniform(0.06, 0.12)
+        n = samples(d)
+        f0 = rng.uniform(330, 480) * (1 + rng.uniform(-0.25, 0.25) * times(n) / d)
+        vowel = rng.choice([700, 1000, 500])
+        out.append(formants(voiced(f0, 20), ((vowel, 5, 1.0), (2200, 6, 0.6), (3000, 7, 0.3))) * envelope(n, 0.006, d / 3, hold=d * 0.3))
+        out.append(np.zeros(samples(rng.uniform(0.03, 0.09))))
+    return level(trim(np.concatenate(out)), -20)
+
+
+def slinger_hurt(rng):
+    """A slinger hurt: a quick squeak, rising."""
+    seconds = rng.uniform(0.15, 0.2)
+    n = samples(seconds)
+    f0 = rng.uniform(800, 950) * (1 + 0.35 * times(n) / seconds)
+    x = formants(voiced(f0, 10), ((1800, 5, 1.0), (3400, 7, 0.4))) * envelope(n, 0.004, seconds / 3, hold=seconds * 0.3)
+    return level(trim(x), -17)
+
+
+def slinger_attack(rng):
+    """A slinger throwing: a grunt of effort and the whoosh of the sling swung round and let go."""
+    seconds = 0.6
+    n = samples(seconds)
+    d = 0.16
+    grunt = formants(growl(samples(d), rng, rng.uniform(220, 260) * np.ones(samples(d)), 30), ((600, 4, 1.0), (1500, 5, 0.5)))
+    grunt *= envelope(samples(d), 0.01, d / 3)
+    t = times(n)
+    # the sling's whoosh, a band of noise swept up and swelling as it comes round
+    swish = np.clip((t - 0.12) / 0.35, 0, 1)
+    whoosh = bandpass(rng.standard_normal(n), 400, 1400) * (1 - swish) + bandpass(rng.standard_normal(n), 1400, 4500) * swish
+    whoosh *= np.sin(np.pi * np.clip((t - 0.1) / 0.45, 0, 1)) ** 2
+    x = whoosh * 0.7
+    place(x, grunt, 0)
+    return level(trim(x), -18)
+
+
+def slinger_death(rng):
+    """A slinger dying: a thin wail falling away."""
+    seconds = rng.uniform(0.9, 1.1)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(560, 640) * (1 - 0.55 * t) * (1 + 0.04 * np.sin(2 * np.pi * 6 * times(n)))
+    x = formants(voiced(f0, 15), ((900, 5, 1.0), (2300, 6, 0.5))) * envelope(n, 0.02, seconds / 3, hold=seconds * 0.4)
+    return level(trim(x), -18)
+
+
+def crumble(seconds, rng, count):
+    """Stone grinding and falling: low gritty grains and a few heavier knocks."""
+    n = samples(seconds)
+    grit = grains(n, rng, count, 150, 1500, length=(0.003, 0.012))
+    for _ in range(max(2, count // 25)):
+        place(grit, thump(samples(0.3), rng, rng.uniform(60, 110), 0.07) * rng.uniform(0.5, 1.0), samples(rng.uniform(0, seconds * 0.8)))
+    return grit
+
+
+def barrow_brute_call(rng):
+    """A barrow brute's call: a deep, slow groan, rumbling from far down a stone chest."""
+    seconds = rng.uniform(1.3, 1.6)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(55, 75) * (1 + 0.12 * np.sin(np.pi * t)) * (1 + 0.02 * np.sin(2 * np.pi * 3 * times(n)))
+    x = formants(growl(n, rng, f0, 18), ((250, 3, 1.0), (520, 4, 0.6), (1200, 6, 0.2)))
+    x = lowpass(x, 2000) * envelope(n, 0.25, seconds / 3, hold=seconds * 0.45)
+    return level(trim(x), -19)
+
+
+def barrow_brute_hurt(rng):
+    """A barrow brute hurt: a short deep grunt over the grind of stone."""
+    seconds = 0.45
+    n = samples(seconds)
+    f0 = rng.uniform(85, 105) * (1 - 0.25 * times(n) / seconds)
+    grunt = formants(growl(n, rng, f0, 25), ((300, 3, 1.0), (700, 4, 0.5))) * envelope(n, 0.01, 0.1, hold=0.08)
+    x = grunt + crumble(seconds, rng, 50) * 0.5
+    return level(trim(x), -17)
+
+
+def barrow_brute_attack(rng):
+    """A barrow brute's blow: a big heaving roar, swelling and breaking off."""
+    seconds = rng.uniform(0.8, 1.0)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(80, 95) * (1 + 0.5 * np.sin(np.pi * t))
+    roar = formants(growl(n, rng, f0, 30), ((420, 2.5, 1.0), (900, 3, 0.7), (2000, 5, 0.3)))
+    roar += bandpass(coloured(n, rng, -1), 300, 3000) * 0.4
+    x = roar * envelope(n, 0.18, seconds / 5, hold=seconds * 0.5)
+    return level(trim(x), -17)
+
+
+def barrow_brute_death(rng):
+    """A barrow brute dying: a long groan sinking down as its stone body crumbles apart."""
+    seconds = 1.6
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(70, 80) * (1 - 0.45 * t)
+    groan = formants(growl(n, rng, f0, 15), ((260, 3, 1.0), (560, 4, 0.5))) * np.clip(1.3 - t * 1.5, 0, 1)
+    x = lowpass(groan, 1800) + crumble(seconds, rng, 160) * np.clip(t * 2 - 0.3, 0, 1) * 0.7
+    x *= envelope(n, 0.08, 0.4, hold=1.0)
+    return level(trim(x), -18)
+
+
+HOSTILES = ["gloamer", "lurker", "slinger", "barrow_brute"]
+
+
 # --- ambience loops ------------------------------------------------------------------------------
 
 LOOP_DB = -27
@@ -644,6 +867,10 @@ def catalogue():
             out[f"{name}_{v + 1}"] = (make, 5000 + v)
     for name, make in (("death", death), ("chest_open", chest_open), ("chest_close", chest_close), ("click", click)):
         out[name] = (make, 7)
+    for h, kind in enumerate(HOSTILES):
+        for c, cry in enumerate(("call", "hurt", "attack", "death")):
+            for v in range(VARIATIONS):
+                out[f"{kind}_{cry}_{v + 1}"] = (globals()[f"{kind}_{cry}"], 9000 + 100 * h + 10 * c + v)
     # the other loops and the owl are recordings, levelled once and kept as they are, see
     # SKILL.md's Recordings
     out["ambience/cave"] = (cave, 11)

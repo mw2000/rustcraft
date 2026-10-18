@@ -99,6 +99,7 @@ TILES = [
     dict(name="Magma", drawn=True),
     dict(name="ShortGrass", drawn=True, grey=187),  # greyscale, tinted per climate like TallGrass
     dict(name="WildGrass", drawn=True, grey=187),
+    dict(name="Spawner", drawn=True),
 ]
 
 

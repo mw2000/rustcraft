@@ -779,6 +779,19 @@ def barrel_side(rng):
     return out
 
 
+def spawner(rng):
+    """A dungeon's spawner: a cage of dark iron bars round a dark hollow with a faint smoulder
+    of embers deep in it, bevelled as a solid block."""
+    y, x = np.mgrid[:16, :16]
+    heat = 1 - np.hypot(y - 7.5, x - 7.5) / 7 + noise(rng) * 0.5
+    hollow = np.array([(14, 10, 12), (30, 16, 14), (66, 24, 14), (120, 40, 16)], float)
+    out = hollow[levels(np.clip(heat, 0, None), 4)]
+    out[(x % 5 == 0) | (y % 5 == 0)] = IRON[2]  # the bars, meeting at the edges so neighbours share them
+    out[((x % 5 == 0) & (y % 5 == 1)) | ((y % 5 == 0) & (x % 5 == 1))] = IRON[1]  # each bar's shaded side
+    out[(x % 5 == 0) & (y % 5 == 0)] = IRON[3]  # rivets where they cross
+    return bevel(out, IRON[3], IRON[0])
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceFront=furnace_front,
             TallGrass=plant("TallGrass"), Poppy=plant("Poppy"), Dandelion=plant("Dandelion"), Cornflower=plant("Cornflower"), Torch=torch, BedTop=bed_top,
@@ -794,7 +807,7 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             BlueTerracotta=terracotta((70, 62, 94)), GreenTerracotta=terracotta((76, 83, 42)), DarkPlanks=dark_planks,
             LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end,
             Wool=wool, BasaltSide=basalt_side, BasaltTop=basalt_top, Magma=magma,
-            ShortGrass=plant("ShortGrass"), WildGrass=plant("WildGrass"))
+            ShortGrass=plant("ShortGrass"), WildGrass=plant("WildGrass"), Spawner=spawner)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

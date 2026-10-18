@@ -528,9 +528,11 @@ impl Savable<'_, '_> {
             }
         }
         // those near players as they are, and those asleep
+        // monsters never are, as they despawn
         let awake = self
             .creatures
             .iter()
+            .filter(|(creature, ..)| !creature.0.properties().despawns)
             .map(|(creature, body, health, life)| saved(creature, body, health, life));
         let asleep = self
             .dormant
@@ -967,6 +969,9 @@ mod tests {
             ..SavedCreature::grown(CreatureKind::Sheep, Vec3::new(5000.5, 466.0, 20.25))
         };
         app.world_mut().spawn(creature(lamb, 0.0));
+        // and a monster beside it, which isn't saved, as monsters despawn
+        let slinger = SavedCreature::grown(CreatureKind::Slinger, near + Vec3::X);
+        app.world_mut().spawn(creature(slinger, 0.0));
         app.world_mut().resource_mut::<Dormant>().0.insert(
             Region::containing(ChunkCoordinate::containing(far.position.as_i64vec3())),
             vec![far],

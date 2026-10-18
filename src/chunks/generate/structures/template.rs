@@ -20,6 +20,10 @@ const WEIGHT: char = '*';
 /// the server fills it from the loot table named after the structure the first time it's opened
 /// (`loot`, §5.6).
 pub const LOOT: &str = "loot";
+/// The kind of marker where a structure has a spawner (M3.3). Generation leaves it as the
+/// template has it, and the server builds a spawner there the first time anyone comes near
+/// (`server::creatures`), as loot is rolled the first time a chest's opened.
+pub const SPAWNER: &str = "spawner";
 
 /// How far above its floor any structure reaches, and how far under it the layers sunk into
 /// the ground go, so chunks and LOD nodes know how far up and down to look for them.

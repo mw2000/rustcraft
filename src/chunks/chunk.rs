@@ -257,6 +257,17 @@ impl ChunkData {
         })
     }
 
+    /// Where its blocks of `kind` are, found from its runs.
+    pub fn positions_of(&self, kind: BlockType) -> impl Iterator<Item = U16Vec3> + '_ {
+        let mut start = 0usize;
+        self.runs.iter().flat_map(move |run| {
+            let first = start;
+            start += run.length as usize;
+            let end = if run.block == kind { start } else { first };
+            (first..end).map(coord_from_index)
+        })
+    }
+
     /// Its blocks with a state other than none, and their states.
     pub fn states(&self) -> impl Iterator<Item = (U16Vec3, BlockState)> + '_ {
         let mut start = 0usize;

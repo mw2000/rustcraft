@@ -25,7 +25,7 @@ use rustcraft::chunks::chunk_loader::ChunkLoader;
 use rustcraft::chunks::generate::checksum::world_checksum;
 use rustcraft::chunks::generate::generator::generate_chunk;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
-use rustcraft::client::creatures::SeenCreature;
+use rustcraft::client::creatures::{Dying, Fading, SeenCreature};
 use rustcraft::client::join::{connect, GenerationChecksum, LeftServer};
 use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::LocalPlayer;
@@ -33,7 +33,7 @@ use rustcraft::client::ClientPlugin;
 use rustcraft::clock::TimeOfDay;
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
 use rustcraft::creatures::{
-    Condition, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature,
+    Condition, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature, Stance,
 };
 use rustcraft::farming::Crops;
 use rustcraft::game_mode::GameMode;
@@ -51,7 +51,7 @@ use rustcraft::server::creatures::{creature, Health, SpawnRate};
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, Console, DedicatedServerPlugins, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
-use rustcraft::survival::Vitals;
+use rustcraft::survival::{Bruise, Vitals};
 use rustcraft::world::{LeaveWorld, World};
 
 // A frame's worth, so replicon's fixed-rate server ticks, which send what's written, keep up.
@@ -1842,6 +1842,104 @@ fn test_a_joiner_sees_the_creatures_near_it_moving_smoothly_and_hits_them() {
         let hurt = server.world().get::<Health>(near).unwrap().points == 7;
         hurt && client.world().get::<Flinches>(shown_sheep) == Some(&Flinches(1))
     });
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// What a client sees of the creature it's shown as `creature`.
+fn seen_of(client: &mut App, creature: Entity) -> Option<Entity> {
+    let mut seen = client.world_mut().query::<(Entity, &SeenCreature)>();
+    seen.iter(client.world())
+        .find(|(_, seen)| seen.0 == creature)
+        .map(|(entity, _)| entity)
+}
+
+#[test]
+fn test_a_joiner_sees_a_monster_wind_up_and_strike_and_one_vanish_without_dying() {
+    let dir = temp_dir("monsters");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    server.insert_resource(SpawnRate(None));
+    server.world_mut().resource_mut::<TimeOfDay>().0 = 0.0;
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let guest = guests_player(&mut server);
+    let spawn = server.world().get::<Transform>(guest).unwrap().translation;
+    update_until(&mut server, &mut client, |server, _| {
+        let world = server.world().resource::<World>();
+        let below = (spawn - Vec3::Y * 16.0).floor().as_i64vec3();
+        world.is_chunk_generated(ChunkCoordinate::containing(below))
+    });
+    let ground = |server: &mut App, at: Vec3| {
+        let world = server.world().resource::<World>();
+        let mut block = at.floor().as_i64vec3() + I64Vec3::Y * 12;
+        while !world.get_block_at(block).is_solid() {
+            block.y -= 1;
+        }
+        block.as_vec3() + Vec3::new(0.5, 1.0, 0.5)
+    };
+    let feet = ground(&mut server, spawn);
+    teleport(&mut client, feet);
+    update_until(&mut server, &mut client, |server, _| {
+        let at = server.world().get::<Transform>(guest).unwrap().translation;
+        at.distance(feet) < 1e-3
+    });
+
+    // a brute beside the guest, which the client's shown winding up, and then the blow lands:
+    // the guest's hurt, and their game's told of it to feel
+    let beside = ground(&mut server, feet + Vec3::X * 2.0);
+    let brute = SavedCreature::grown(CreatureKind::BarrowBrute, beside);
+    let brute = server.world_mut().spawn(creature(brute, 0.0)).id();
+    let local = local_player(&mut client);
+    let mut wound = false;
+    update_until(&mut server, &mut client, |_, client| {
+        let shown = creatures_shown(client);
+        wound |= shown.iter().any(|&(creature, _)| {
+            client
+                .world()
+                .get::<Stance>(creature)
+                .is_some_and(|s| s.winding)
+        });
+        let world = client.world();
+        world.get::<Vitals>(local).unwrap().health < 20
+            && world.get::<Bruise>(local).unwrap().count > 0
+    });
+    assert!(wound);
+    // 8, through no armour
+    assert_eq!(12, client.world().get::<Vitals>(local).unwrap().health);
+
+    // killed, it's seen dying
+    let (shown_brute, _) = creatures_shown(&mut client)[0];
+    let seen_brute = seen_of(&mut client, shown_brute).unwrap();
+    server.world_mut().get_mut::<Health>(brute).unwrap().points = 1;
+    let here = server.world().get::<Transform>(guest).unwrap().translation;
+    server
+        .world_mut()
+        .get_mut::<Transform>(brute)
+        .unwrap()
+        .translation = ground(&mut server, here + Vec3::X * 2.0);
+    client.world_mut().write_message(HitCreature {
+        creature: shown_brute,
+    });
+    update_until(&mut server, &mut client, |_, client| {
+        client.world().get::<Dying>(seen_brute).is_some()
+    });
+    assert!(client.world().get::<Fading>(seen_brute).is_none());
+
+    // and a gloamer at sunrise vanishes, which it's shown fading, not dying
+    let gloamer = SavedCreature::grown(
+        CreatureKind::Gloamer,
+        ground(&mut server, here + Vec3::Z * 3.0),
+    );
+    let gloamer = server.world_mut().spawn(creature(gloamer, 0.0)).id();
+    update_until(&mut server, &mut client, |_, client| {
+        creatures_shown(client).len() == 1
+    });
+    let (shown_gloamer, _) = creatures_shown(&mut client)[0];
+    let seen_gloamer = seen_of(&mut client, shown_gloamer).unwrap();
+    server.world_mut().resource_mut::<TimeOfDay>().0 = 0.5;
+    update_until(&mut server, &mut client, |server, client| {
+        server.world().get_entity(gloamer).is_err()
+            && client.world().get::<Dying>(seen_gloamer).is_some()
+    });
+    assert!(client.world().get::<Fading>(seen_gloamer).is_some());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -56,6 +56,7 @@ impl Plugin for ClientPlugin {
             )
             .add_observer(join::refused)
             .add_observer(creatures::see_off)
+            .add_observer(creatures::see_vanish)
             .add_systems(
                 PostUpdate,
                 // a client joining a server has its player once it's welcomed, with the camera

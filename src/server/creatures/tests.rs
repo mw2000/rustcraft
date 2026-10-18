@@ -1,3 +1,5 @@
+mod monsters;
+
 use std::time::{Duration, Instant};
 
 use bevy::math::I64Vec3;
@@ -8,8 +10,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use super::{
-    breed, creature, grow, move_creatures, receive_hits, receive_uses, sleep, spawn, take_paths,
-    think, wake, Doing, Dormant, Health, Life, Mind, Route, SpawnRate,
+    breed, creature, despawn, fight, fly_missiles, grow, move_creatures, receive_hits,
+    receive_uses, sleep, spawn, take_paths, think, vanish, wake, Doing, Dormant, Health, Life,
+    Mind, Route, SpawnRate, Spawners,
 };
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
@@ -23,7 +26,7 @@ use crate::player::{Player, PlayerOwner};
 use crate::protocol::{HitCreature, UseCreature};
 use crate::server::drops::{Chance, DroppedItem};
 use crate::server::survival::{Combat, Footing};
-use crate::server::HeldItem;
+use crate::server::{Blow, HeldItem};
 use crate::world::World;
 
 const FRAME: f32 = 0.05;
@@ -69,8 +72,11 @@ fn field(surface: BlockType, centre: I64Vec3) -> App {
         .insert_resource(TimeOfDay(0.5))
         .insert_resource(SpawnRate(None))
         .init_resource::<Dormant>()
+        .init_resource::<Spawners>()
+        .init_resource::<Blows>()
         .add_message::<FromClient<HitCreature>>()
         .add_message::<FromClient<UseCreature>>()
+        .add_message::<Blow>()
         .add_systems(
             Update,
             (
@@ -80,14 +86,28 @@ fn field(surface: BlockType, centre: I64Vec3) -> App {
                 grow,
                 think,
                 move_creatures,
+                fight,
+                fly_missiles,
                 breed,
+                despawn,
+                vanish,
                 sleep,
                 receive_hits,
                 receive_uses,
+                keep_blows,
             )
                 .chain(),
         );
     app
+}
+
+// The blows creatures have struck at players, kept as they come, as the players' survival,
+// which lands them, isn't part of these tests.
+#[derive(Resource, Default)]
+struct Blows(Vec<Blow>);
+
+fn keep_blows(mut blows: MessageReader<Blow>, mut kept: ResMut<Blows>) {
+    kept.0.extend(blows.read().copied());
 }
 
 // The nearest chunk to the origin, of those on a coarse grid, whose land within 60 blocks is
@@ -233,6 +253,10 @@ fn kill(app: &mut App, creature: Entity) {
     hit(app, creature);
     app.update();
     assert!(app.world().get_entity(creature).is_err());
+}
+
+fn is_monster(kind: CreatureKind) -> bool {
+    kind.properties().attack.is_some()
 }
 
 fn kinds(app: &mut App) -> Vec<CreatureKind> {
@@ -463,6 +487,7 @@ fn animals_appear_in(biome: &str) {
     for &kind in CreatureKind::ALL {
         let spawns = kind.properties().spawns.as_ref().unwrap();
         let count = kinds.iter().filter(|&&k| k == kind).count();
+        // and no monsters, by day
         let expected = if spawns.biomes.contains(&biome) {
             spawns.cap
         } else {
@@ -480,7 +505,8 @@ fn test_animals_dont_appear_at_night_away_from_grass_or_in_deserts() {
             .insert_resource(TimeOfDay(time));
         player(&mut app, Vec3::new(0.5, FEET, 0.5), None);
         run(&mut app, 3.0);
-        assert!(creatures(&mut app).is_empty(), "{surface:?} at {time}");
+        let animals = kinds(&mut app).into_iter().filter(|k| !is_monster(*k));
+        assert_eq!(0, animals.count(), "{surface:?} at {time}");
     }
     // nor in a desert, even on grass
     let chunk = chunk_in("desert");

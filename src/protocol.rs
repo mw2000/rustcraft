@@ -14,8 +14,11 @@
 //! Creatures are replicated to the clients whose players are near them (M3.1): their kind,
 //! their pose, which the server sets 20 times a second as they move, how many times they've
 //! been hurt, and whether they're young, shorn or in love. Clients hit them with `HitCreature`
-//! and feed or shear them with `UseCreature` (M3.2). A client's told of the blows its player
-//! takes as `Struck`, and players' armour is replicated with what they hold (M3.3).
+//! and feed or shear them with `UseCreature` (M3.2). Monsters' stances (winding up a blow,
+//! hanging from a ceiling) are replicated too, a creature taken away for anything but dying is
+//! marked `Vanishing` the frame before, and missiles are replicated as they're thrown. A
+//! client's told of the blows its player takes as `Struck`, and players' armour is replicated
+//! with what they hold (M3.3).
 
 use std::time::Duration;
 
@@ -33,7 +36,7 @@ use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::chunks::lod::CellEdits;
 use crate::containers::Container;
 use crate::crafting::Recipe;
-use crate::creatures::{Condition, Creature, CreaturePose, Flinches};
+use crate::creatures::{Condition, Creature, CreaturePose, Flinches, Missile, Stance, Vanishing};
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
 use crate::items::Item;
@@ -51,7 +54,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -124,6 +127,9 @@ impl Plugin for ProtocolPlugin {
             .replicate::<CreaturePose>()
             .replicate::<Flinches>()
             .replicate::<Condition>()
+            .replicate::<Stance>()
+            .replicate::<Vanishing>()
+            .replicate::<Missile>()
             .add_visibility_filter::<Whereabouts>()
             .add_mapped_client_message::<HitCreature>(Channel::Ordered)
             .add_mapped_client_message::<UseCreature>(Channel::Ordered)

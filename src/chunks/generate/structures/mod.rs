@@ -15,7 +15,7 @@ use super::trees::{hash, Tree, TREE_REACH};
 use super::WATER_LEVEL;
 use crate::block::{Block, BlockType};
 pub use template::{
-    Choice, Placement, Structure, Template, LOOT, STRUCTURE_DEPTH, STRUCTURE_HEIGHT,
+    Choice, Placement, Structure, Template, LOOT, SPAWNER, STRUCTURE_DEPTH, STRUCTURE_HEIGHT,
 };
 
 // Each structure type's file, built into the game. Where two would stand together the one listed

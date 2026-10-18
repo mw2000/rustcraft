@@ -240,9 +240,10 @@ impl Death {
         match self {
             Death::Fell => format!("{name} fell from a high place"),
             Death::Drowned => format!("{name} drowned"),
-            Death::Slain(kind) => {
-                format!("{name} was slain by a {}", kind.name().replace('_', " "))
-            }
+            Death::Slain(kind) => match &kind.properties().attack {
+                Some(attack) => format!("{name} {}", attack.slays),
+                None => format!("{name} was slain by a {}", kind.name().replace('_', " ")),
+            },
         }
     }
 }

@@ -1,16 +1,20 @@
 //! Creatures on the server (§5.8, INV-4): their bodies walking under gravity as players' do,
 //! their brains choosing what to do from their kind's behaviours, the ways they find
 //! (`creatures::path`), on the compute pool, and follow, being hit and dying, being tended
-//! (`tending`), and sleeping, saved, while nobody's near them. Clients draw them from the poses
+//! (`tending`), hunting players (`hunting`), and sleeping, saved, while nobody's near them, or
+//! for monsters despawning. Clients draw them from the poses
 //! the server sends (`client::creatures`), only those near their player.
 
+mod hunting;
 mod spawning;
 mod tending;
 #[cfg(test)]
 mod tests;
 
-pub(super) use spawning::spawn;
-pub use spawning::SpawnRate;
+pub(super) use hunting::{despawn, fight, fly_missiles, vanish};
+pub use hunting::{Fight, DESPAWN_DISTANCE};
+pub(super) use spawning::{build_spawners, spawn};
+pub use spawning::{SpawnRate, Spawners};
 pub use tending::Life;
 pub(super) use tending::{breed, grow, receive_uses};
 
@@ -32,7 +36,10 @@ use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::collision::Aabb;
 use crate::creatures::path::{find_path, Blocks, Limits, Path, Walker};
-use crate::creatures::{Behaviour, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature};
+use crate::creatures::{
+    Behaviour, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature, Stance,
+};
+use crate::game_mode::GameMode;
 use crate::inventory::{Hotbar, Inventory};
 use crate::items::{Item, ItemStack, HAND_COOLDOWN};
 use crate::player::physics::{walk, Momentum, GRAVITY, KNOCKBACK_LEFT, MAX_STEP};
@@ -125,8 +132,12 @@ pub enum Doing {
     Wander,
     /// Running from where it was hurt from.
     Flee { from: Vec3 },
-    /// Going after a player: one with something it wants, or, for a monster (M3.3), its prey.
+    /// Going after a player with something it wants.
     Follow(Entity),
+    /// Going after a player to attack them, as a monster does.
+    Hunt(Entity),
+    /// Hanging from the ceiling, waiting for someone to come under it.
+    Cling,
     /// Going to another of its kind in love, to breed.
     Mate(Entity),
 }
@@ -255,6 +266,8 @@ pub fn creature(saved: SavedCreature, yaw: f32) -> impl Bundle {
             yaw,
         },
         Flinches::default(),
+        Fight::default(),
+        Stance::default(),
         Whereabouts(view_cell(at)),
         Replicated,
     )
@@ -345,7 +358,7 @@ pub(super) fn wake(
 }
 
 /// Puts to sleep the creatures far from every player, or whose ground is no longer loaded, to
-/// be saved and woken when someone comes near again.
+/// be saved and woken when someone comes near again, or despawns them if they're monsters.
 pub(super) fn sleep(
     world: Res<World>,
     mut dormant: ResMut<Dormant>,
@@ -361,7 +374,9 @@ pub(super) fn sleep(
         if near && world.is_chunk_generated(chunk_of(at)) {
             continue;
         }
-        dormant.keep(saved(creature, body, health, life));
+        if !creature.0.properties().despawns {
+            dormant.keep(saved(creature, body, health, life));
+        }
         commands.entity(entity).despawn();
     }
 }
@@ -385,9 +400,21 @@ type Players<'w, 's> = Query<
         &'static Transform,
         &'static HeldItem,
         &'static Vitals,
+        &'static GameMode,
     ),
     With<Player>,
 >;
+
+type Thinking<'a> = (
+    Entity,
+    &'a Creature,
+    &'a Transform,
+    &'a Life,
+    &'a mut Mind,
+    &'a mut Route,
+    &'a mut Fight,
+    &'a mut Stance,
+);
 
 /// Each creature's brain choosing what to do, the first of its kind's behaviours that has
 /// something to do, and asking for a way to go if it needs one.
@@ -396,18 +423,32 @@ pub(super) fn think(
     world: Res<World>,
     players: Players,
     mut chance: ResMut<Chance>,
-    mut creatures: Query<(Entity, &Creature, &Transform, &Life, &mut Mind, &mut Route)>,
+    mut creatures: Query<Thinking>,
 ) {
     let now = time.elapsed_secs();
     // those looking for a mate, which there are seldom any of
     let lovers: Vec<_> = creatures
         .iter()
-        .filter(|(.., life, _, _)| life.love > 0.0 && life.is_grown())
+        .filter(|(_, _, _, life, ..)| life.love > 0.0 && life.is_grown())
         .map(|(entity, creature, body, ..)| (entity, creature.0, body.translation))
         .collect();
-    for (entity, creature, body, life, mut mind, mut route) in &mut creatures {
+    // and those going after someone, whom others of their kind near them join
+    let hunters: Vec<_> = creatures
+        .iter()
+        .filter_map(|(_, creature, body, _, mind, ..)| match mind.doing {
+            Doing::Hunt(prey) => Some((creature.0, body.translation, prey)),
+            _ => None,
+        })
+        .collect();
+    for (entity, creature, body, life, mut mind, mut route, mut fight, mut stance) in &mut creatures
+    {
         let at = body.translation;
-        let properties = creature.0.properties();
+        let kind = creature.0;
+        let properties = kind.properties();
+        let looking = now >= fight.looks_at;
+        if looking {
+            fight.looks_at = now + hunting::LOOK_INTERVAL;
+        }
         let mut doing = Doing::Idle;
         for behaviour in properties.behaviours {
             let chosen = match *behaviour {
@@ -427,7 +468,7 @@ pub(super) fn think(
                 Behaviour::Breed => None,
                 Behaviour::FollowLure => players
                     .iter()
-                    .filter(|(_, player, held, vitals)| {
+                    .filter(|(_, player, held, vitals, _)| {
                         held.0.is_some_and(|item| properties.food.contains(&item))
                             && !vitals.is_dead()
                             && player.translation.distance(at) <= LURE_RANGE
@@ -437,6 +478,70 @@ pub(super) fn think(
                         distance(a.1).total_cmp(&distance(b.1))
                     })
                     .map(|(player, ..)| Doing::Follow(player)),
+                Behaviour::Hunt => {
+                    let sight = properties.attack.as_ref().map_or(0.0, |a| a.sight);
+                    let prey = |player: Entity| {
+                        let (_, body, _, vitals, mode) = players.get(player).ok()?;
+                        let kept = hunting::is_prey(vitals, mode)
+                            && hunting::keeps_after(at, body.translation, sight);
+                        kept.then_some(body.translation)
+                    };
+                    let kept = match mind.doing {
+                        Doing::Hunt(player) => prey(player).map(|_| player),
+                        _ => None,
+                    };
+                    // looking about now and then, for someone in sight or a pack to join
+                    let found = || {
+                        let everyone = players.iter().map(|(player, body, _, vitals, mode)| {
+                            (player, body.translation, vitals, mode)
+                        });
+                        hunting::notice(&world, kind, at, sight, everyone).or_else(|| {
+                            hunters
+                                .iter()
+                                .find(|&&(other, there, player)| {
+                                    other == kind
+                                        && there.distance(at) <= hunting::PACK
+                                        && prey(player).is_some()
+                                })
+                                .map(|&(.., player)| player)
+                        })
+                    };
+                    let hunted = kept.or_else(|| looking.then(found).flatten());
+                    if looking {
+                        fight.sees = hunted.and_then(prey).is_some_and(|feet| {
+                            let chest = feet + Vec3::Y * hunting::CHEST;
+                            hunting::sees(&world, hunting::eye(kind, at), chest)
+                        });
+                    }
+                    hunted.map(Doing::Hunt)
+                }
+                Behaviour::Ambush if stance.clinging => {
+                    let under = players.iter().find(|(_, body, _, vitals, mode)| {
+                        let feet = body.translation;
+                        looking
+                            && hunting::is_prey(vitals, mode)
+                            && feet.y < at.y
+                            && (feet - at).xz().length() <= hunting::AMBUSH
+                            && hunting::sees(&world, at, feet + Vec3::Y * hunting::CHEST)
+                    });
+                    Some(match under {
+                        Some((player, ..)) => {
+                            stance.clinging = false;
+                            fight.sees = true;
+                            Doing::Hunt(player)
+                        }
+                        None => Doing::Cling,
+                    })
+                }
+                Behaviour::Ambush => None,
+                Behaviour::ShunLight if !stance.clinging => {
+                    if looking {
+                        let holding = players.iter().map(|(_, body, held, ..)| (body, held));
+                        fight.glare = hunting::glare(&world, at, holding);
+                    }
+                    fight.glare.map(|from| Doing::Flee { from })
+                }
+                Behaviour::ShunLight => None,
                 Behaviour::Wander => Some(match mind.doing {
                     Doing::Wander if route.is_going() => Doing::Wander,
                     Doing::Idle if now < mind.until => Doing::Idle,
@@ -486,6 +591,31 @@ pub(super) fn think(
                     route.chase(&world, from, goal, FOLLOW_NEAR, walker, now, ready);
                 }
             }
+            Doing::Hunt(player) => {
+                let Ok((_, target, ..)) = players.get(player) else {
+                    continue;
+                };
+                let goal = cell_of(target.translation);
+                let throws = properties.attack.as_ref().and_then(|a| a.throws.as_ref());
+                let Some(throw) = throws else {
+                    route.chase(&world, from, goal, 1, walker, now, ready);
+                    continue;
+                };
+                // between too near and too far to throw, and where it can see them
+                let across = (target.translation - at).xz();
+                if across.length() < throw.keep.start {
+                    if ready && route.cells.is_empty() {
+                        let away = -across.normalize_or(Vec2::X) * throw.keep.start;
+                        let goal = (at + Vec3::new(away.x, 0.0, away.y)).floor().as_i64vec3();
+                        route.plan(&world, from, goal, 1, walker, now);
+                    }
+                } else if across.length() > throw.keep.end - 1.0 || !fight.sees {
+                    route.chase(&world, from, goal, 2, walker, now, ready);
+                } else {
+                    route.stop();
+                }
+            }
+            Doing::Cling => {}
             // to beside it
             Doing::Mate(mate) => {
                 if let Some(&(.., there)) = lovers.iter().find(|lover| lover.0 == mate) {
@@ -521,13 +651,15 @@ type Moving<'a> = (
     &'a Mind,
     &'a mut Health,
     &'a Life,
+    &'a Stance,
 );
 
 /// Walks each creature along its way under gravity, as players walk: towards the middle of
 /// its next cell, jumping up a block where the way climbs or it's walked into one, and kept
 /// afloat in water, or fluttering down if it flutters, then hurts it for any fall it's landed
-/// from, unless it flutters. Creatures whose ground isn't loaded wait where they are, as
-/// they're soon put to sleep.
+/// from, unless it flutters or clings. A monster runs once it's near its prey, and goes
+/// straight at them once its way's brought it close. Creatures whose ground isn't loaded, or
+/// that hang from a ceiling, wait where they are.
 pub(super) fn move_creatures(
     time: Res<Time>,
     world: Res<World>,
@@ -543,16 +675,21 @@ pub(super) fn move_creatures(
             .is_chunk_generated(ChunkCoordinate::containing(at))
             .then(|| world.get(at))
     };
-    for (entity, creature, mut transform, mut body, mut route, mind, mut health, life) in
+    for (entity, creature, mut transform, mut body, mut route, mind, mut health, life, stance) in
         &mut creatures
     {
         let mut at = transform.translation;
-        if block(at.floor().as_i64vec3() - I64Vec3::Y).is_none() {
+        if stance.clinging || block(at.floor().as_i64vec3() - I64Vec3::Y).is_none() {
             continue;
         }
         let properties = creature.0.properties();
-        let speed = match mind.doing {
-            Doing::Flee { .. } => properties.run_speed,
+        let prey = match mind.doing {
+            Doing::Hunt(player) => players.get(player).ok().map(|p| p.translation),
+            _ => None,
+        };
+        let speed = match (mind.doing, prey) {
+            (Doing::Flee { .. }, _) => properties.run_speed,
+            (_, Some(prey)) if prey.distance(at) <= hunting::RUNS_FROM => properties.run_speed,
             _ => properties.walk_speed,
         };
 
@@ -586,6 +723,19 @@ pub(super) fn move_creatures(
             }
             break;
         }
+        // the last of the way to its prey straight at them, stopping short of its reach
+        if let (Some(prey), Some(attack)) = (prey, &properties.attack) {
+            let to = (prey - at).xz();
+            let near = (properties.width + crate::player::BODY.max.x * 2.0) / 2.0 + attack.reach;
+            if route.cells.is_empty() && attack.throws.is_none() && to.length() > near * 0.8 {
+                let direction = to.normalize_or_zero() * speed;
+                wanted = Vec3::new(direction.x, 0.0, direction.y);
+            }
+        }
+        // standing its ground as it winds up a blow, so the blow's seen coming
+        if stance.winding {
+            wanted = Vec3::ZERO;
+        }
 
         let middle = at + Vec3::Y * properties.height / 2.0;
         let in_water = block(middle.floor().as_i64vec3()).map(|b| b.kind) == Some(BlockType::Water);
@@ -610,9 +760,10 @@ pub(super) fn move_creatures(
         if transform.translation != at {
             transform.translation = at;
         }
-        // facing the way it's going, or the player it follows when it's caught them up
+        // facing the way it's going, or the player it follows or hunts when it's caught them
+        // up, or a monster its prey as it winds up
         let facing = match mind.doing {
-            Doing::Follow(player) if wanted == Vec3::ZERO => players
+            Doing::Follow(player) | Doing::Hunt(player) if wanted == Vec3::ZERO => players
                 .get(player)
                 .map_or(Vec3::ZERO, |player| player.translation - at),
             _ => wanted,
@@ -630,7 +781,7 @@ pub(super) fn move_creatures(
             let fell = body
                 .peak
                 .take()
-                .filter(|_| !in_water && !properties.flutters);
+                .filter(|_| !in_water && !properties.flutters && !properties.clings);
             if let Some(peak) = fell {
                 let damage = fall_damage(peak - at.y);
                 if damage > 0 {
@@ -692,9 +843,11 @@ type Hit<'a> = (
     &'a mut Flinches,
     &'a mut Route,
     &'a Life,
+    &'a mut Stance,
 );
 
 type Hitting<'a> = (
+    Entity,
     &'a PlayerOwner,
     &'a Transform,
     &'a Vitals,
@@ -706,8 +859,9 @@ type Hitting<'a> = (
 
 /// Hurts the creatures players hit, if they're alive, it's in their reach and they've swung
 /// again no sooner than what they hold lets them: as hard as it hits, half as hard again
-/// coming down from a jump, knocking it back away from them, and frightening it if it flees.
-/// What's held wears as it does breaking a block. One killed drops what its kind drops.
+/// coming down from a jump, knocking it back away from them, and frightening it if it flees,
+/// or turning a monster on them, off its ceiling if it hangs from one. What's held wears as it
+/// does breaking a block. One killed drops what its kind drops.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_hits(
     mut hits: MessageReader<FromClient<HitCreature>>,
@@ -719,16 +873,26 @@ pub(super) fn receive_hits(
 ) {
     let now = time.elapsed_secs();
     for FromClient { client_id, message } in hits.read() {
-        let Some((_, player, vitals, hotbar, mut inventory, mut combat, footing)) =
-            players.iter_mut().find(|(owner, ..)| owner.0 == *client_id)
+        let Some((hitter, _, player, vitals, hotbar, mut inventory, mut combat, footing)) = players
+            .iter_mut()
+            .find(|(_, owner, ..)| owner.0 == *client_id)
         else {
             continue;
         };
-        let Ok((creature, body, mut health, mut motion, mut mind, mut flinches, mut route, life)) =
-            creatures.get_mut(message.creature)
-        else {
+        let Ok(hit) = creatures.get_mut(message.creature) else {
             continue;
         };
+        let (
+            creature,
+            body,
+            mut health,
+            mut motion,
+            mut mind,
+            mut flinches,
+            mut route,
+            life,
+            mut stance,
+        ) = hit;
         let reach = creature.0.body(!life.is_grown());
         if vitals.is_dead()
             || !in_reach(player, body.translation, reach)
@@ -758,12 +922,8 @@ pub(super) fn receive_hits(
         if motion.momentum.grounded {
             motion.momentum.velocity.y = KNOCKBACK_LIFT;
         }
-        if creature
-            .0
-            .properties()
-            .behaviours
-            .contains(&Behaviour::Flee)
-        {
+        let behaviours = creature.0.properties().behaviours;
+        if behaviours.contains(&Behaviour::Flee) {
             route.stop();
             *mind = Mind {
                 doing: Doing::Flee {
@@ -771,6 +931,12 @@ pub(super) fn receive_hits(
                 },
                 until: now + FLEE_SECONDS,
             };
+        } else if behaviours.contains(&Behaviour::Hunt) {
+            stance.clinging = false;
+            if mind.doing != Doing::Hunt(hitter) {
+                route.stop();
+                mind.doing = Doing::Hunt(hitter);
+            }
         }
         if health.points == 0 {
             die(

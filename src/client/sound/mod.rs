@@ -102,15 +102,30 @@ pub enum SoundKind {
     Call(CreatureKind),
     /// A creature hurt.
     Yelp(CreatureKind),
+    /// A monster striking, as it winds up a blow.
+    Strike(CreatureKind),
+    /// A creature dying.
+    Perish(CreatureKind),
 }
 
-/// A creature of `kind` calling `at` where it is, or crying out as it's hurt: what the code
-/// drawing creatures sends, and anything else that wants one heard (M3.2's new creatures).
+/// A creature of `kind` crying out `at` where it is: what the code drawing creatures sends, and
+/// anything else that wants one heard (M3.2's new creatures).
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct CreatureSound {
     pub kind: CreatureKind,
-    pub hurt: bool,
+    pub cry: Cry,
     pub at: Vec3,
+}
+
+/// What a creature cries out for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cry {
+    /// Now and then, for nothing.
+    Call,
+    Hurt,
+    /// Winding up a blow.
+    Attack,
+    Death,
 }
 
 /// What a kind of sound plays: the files' name under `assets/sounds/`, how loud it's played
@@ -165,6 +180,23 @@ impl SoundKind {
             Self::Call(CreatureKind::Chicken) => takes("cluck".into(), 0.5, (0.9, 1.15)),
             // a startled squawk
             Self::Yelp(CreatureKind::Chicken) => takes("cluck".into(), 0.8, (1.4, 1.7)),
+            // an animal strikes at nothing, and dies with a lower, slower call
+            Self::Strike(kind) if kind.properties().attack.is_none() => Self::Yelp(kind).sound(),
+            Self::Perish(kind) if kind.properties().attack.is_none() => {
+                let Sound { file, volume, .. } = Self::Call(kind).sound();
+                takes(file, volume, (0.7, 0.8))
+            }
+            // and monsters each have four cries of their own, `<kind>_call` and so on, which
+            // a new kind needs files for (`test_every_sound_has_its_files`)
+            Self::Call(kind) | Self::Yelp(kind) | Self::Strike(kind) | Self::Perish(kind) => {
+                let (cry, volume) = match self {
+                    Self::Call(_) => ("call", 0.7),
+                    Self::Yelp(_) => ("hurt", 0.85),
+                    Self::Strike(_) => ("attack", 0.9),
+                    _ => ("death", 0.9),
+                };
+                takes(format!("{}_{cry}", kind.name()), volume, (0.92, 1.08))
+            }
         }
     }
 
@@ -184,7 +216,14 @@ impl SoundKind {
             Self::ChestClose,
             Self::Click,
         ];
-        let creatures = CreatureKind::ALL.iter().map(|&kind| Self::Call(kind));
+        let creatures = CreatureKind::ALL.iter().flat_map(|&kind| {
+            [
+                Self::Call(kind),
+                Self::Yelp(kind),
+                Self::Strike(kind),
+                Self::Perish(kind),
+            ]
+        });
         surfaces.chain(rest).chain(creatures)
     }
 }

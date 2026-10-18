@@ -4,12 +4,12 @@ use bevy::app::App;
 use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel, SystemSet};
 use bevy::prelude::Resource;
 use bevy::{
-    math::{I64Vec3, Vec3},
+    math::{I64Vec3, IVec3, Vec3},
     platform::collections::HashMap,
 };
 
 use crate::block::{Block, BlockType};
-use crate::chunks::generate::light::BLOCK_LIGHT_REACH;
+use crate::chunks::generate::light::{BlockLight, BLOCK_LIGHT_REACH};
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 use crate::chunks::generate::WORLD_HEIGHT;
@@ -392,6 +392,50 @@ impl World {
             || (local.y + 1..CHUNK_SIZE).any(|y| data.get_block_at(local.with_y(y)).blocks_light())
     }
 
+    /// The blocks in the loaded chunks giving off light near enough `block` to light it, each
+    /// with the level it gives off, nearest first.
+    pub fn emitters_near(&self, block: I64Vec3) -> Vec<(I64Vec3, u8)> {
+        let reach = I64Vec3::splat(BLOCK_LIGHT_REACH as i64);
+        let (first, last) = (
+            ChunkCoordinate::containing(block - reach).0,
+            ChunkCoordinate::containing(block + reach).0,
+        );
+        let size = CHUNK_SIZE as i64;
+        let mut near = Vec::new();
+        for x in first.x..=last.x {
+            for y in first.y..=last.y {
+                for z in first.z..=last.z {
+                    let coord = I64Vec3::new(x, y, z);
+                    let Some(data) = self.chunk(ChunkCoordinate(coord)) else {
+                        continue;
+                    };
+                    near.extend(data.emitters().filter_map(|(local, level)| {
+                        let from = coord * size + local.as_i64vec3();
+                        let lights = (from - block).abs().element_sum() < level as i64;
+                        lights.then_some((from, level))
+                    }));
+                }
+            }
+        }
+        near.sort_by_key(|(from, _)| (*from - block).abs().element_sum());
+        near
+    }
+
+    /// The light the blocks giving it off cast on `block` (§5.5), spread round walls as meshes
+    /// are lit, and 0 where none are near, which is all that's looked at then.
+    pub fn block_light(&self, block: I64Vec3) -> u8 {
+        let emitters: Vec<(IVec3, u8)> = self
+            .emitters_near(block)
+            .into_iter()
+            .map(|(from, level)| ((from - block).as_ivec3(), level))
+            .collect();
+        if emitters.is_empty() {
+            return 0;
+        }
+        let opacity = |at: IVec3| self.get_block_at(block + at.as_i64vec3()).light_opacity();
+        BlockLight::new(IVec3::ZERO, IVec3::ONE, &emitters, opacity).level(IVec3::ZERO)
+    }
+
     /// Whether the chunk and the chunks against its faces are all opaque, so it has no faces to draw.
     pub fn is_chunk_buried(&self, coord: ChunkCoordinate) -> bool {
         let opaque = |c| self.chunk(c).is_some_and(|data| data.opaque());
@@ -457,6 +501,44 @@ mod tests {
         // nor is a chunk buried by one not generated yet
         world.release(ChunkCoordinate(I64Vec3::Y), Holder::Client);
         assert!(!world.is_chunk_buried(centre));
+    }
+
+    #[test]
+    fn test_block_light_spreads_from_torches_round_walls_and_fades_out() {
+        let mut world = World::new(16);
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let coord = ChunkCoordinate(I64Vec3::new(x, y, z));
+                    world.insert_chunk(coord, ChunkData::default());
+                }
+            }
+        }
+        assert_eq!(0, world.block_light(I64Vec3::ZERO));
+        world.edit(I64Vec3::ZERO, BlockType::Torch);
+        let light = |at: [i64; 3]| world.block_light(I64Vec3::from_array(at));
+        assert_eq!(
+            (14, 13, 1, 0),
+            (
+                light([0; 3]),
+                light([1, 0, 0]),
+                light([7, 6, 0]),
+                light([7, 7, 0])
+            )
+        );
+        // and across chunk borders, and round a wall, the long way
+        assert_eq!(10, light([-2, 0, -2]));
+        let mut world = world;
+        for y in -3..=3 {
+            for z in -3..=3 {
+                world.edit(I64Vec3::new(2, y, z), BlockType::Stone);
+            }
+        }
+        assert!(world.block_light(I64Vec3::new(3, 0, 0)) < 13 - 2);
+        assert_eq!(
+            vec![(I64Vec3::ZERO, 14)],
+            world.emitters_near(I64Vec3::new(3, 0, 0))
+        );
     }
 
     #[test]

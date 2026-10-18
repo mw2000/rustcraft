@@ -4,10 +4,13 @@
 //! They live as they go (M-A2, `client::animation`): turning smoothly, legs swinging and easing
 //! with their speed, breathing, blinking, looking at players near them, grazing, swaying their
 //! tails, flapping as they flutter, flinching and flashing red as they're hurt, and tipping over
-//! and fading as they die. Every creature of a kind shares its meshes and materials, so Bevy
-//! draws them batched, and each frame changes only their parts' transforms.
+//! and fading as they die. Monsters' eyes glow, they rear back and raise their arms as they wind
+//! up a blow and lunge into it, they hang upside down from ceilings, and those that vanish
+//! rather than die just fade (M3.3); their missiles fly where they were thrown. Every creature
+//! of a kind shares its meshes and materials, so Bevy draws them batched, and each frame changes
+//! only their parts' transforms.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -20,9 +23,11 @@ use super::others::{move_seen, Pose, Poses, SeenPlayer};
 use super::player::LocalPlayer;
 use crate::collision::{ray_distance, Aabb};
 use crate::creatures::{
-    Condition, Creature, CreatureKind, CreaturePose, Flinches, Joint, Look, Part, YOUNG_SCALE,
+    Condition, Creature, CreatureKind, CreaturePose, Flinches, Joint, Look, Missile, Part, Stance,
+    Vanishing, YOUNG_SCALE,
 };
 use crate::player::{PlayerLook, EYE_HEIGHT};
+use crate::server::is_authority;
 
 // How long a creature flashes red when it's hurt, in seconds.
 const FLASH: f32 = 0.3;
@@ -59,6 +64,20 @@ const HEART: Color = Color::srgb(0.9, 0.18, 0.26);
 const DEATH_RANGE: f32 = 48.0;
 // How many steps a dying creature fades out in, each a material of its own.
 const FADE_STEPS: usize = 4;
+// How much of a leg's swing an arm swings, against it, as a creature walks.
+const ARM_SWING: f32 = 0.6;
+// Winding up a blow: how far the body rears back and the arms rise, in radians, and how
+// quickly, as `animation::ease` takes it; and the blow itself, how far the body lunges into it
+// and the arms come down past hanging, and how long it takes, in seconds.
+const WIND_REAR: f32 = 0.3;
+const WIND_ARMS: f32 = 2.5;
+const WINDING: f32 = 8.0;
+const STRIKE_LUNGE: f32 = 0.35;
+const STRIKE_ARMS: f32 = 0.5;
+const STRIKE: f32 = 0.25;
+// How big a missile's drawn, in blocks, and its colour, a stone's.
+const MISSILE: f32 = 0.2;
+const STONE: Color = Color::srgb(0.48, 0.47, 0.46);
 
 /// A creature as this client sees it, drawn where its poses put it, on an entity of its own.
 /// Its look's pitch is always level.
@@ -77,6 +96,19 @@ pub struct CreatureSeen(Entity);
 #[derive(Component, Debug, Default)]
 pub struct Dying(pub f32);
 
+/// On what's seen of a creature, its kind, which stays as it dies.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeenKind(pub CreatureKind);
+
+/// On what's seen of a creature that's vanishing rather than dying (`Vanishing`), so it only
+/// fades away where it was, without tipping over or a cry.
+#[derive(Component, Debug, Default)]
+pub struct Fading;
+
+/// A missile this client's drawing, and how many seconds ago it saw it thrown.
+#[derive(Component, Debug, Default)]
+pub struct Thrown(f32);
+
 /// A creature seen that's just been hurt, and for how much longer it flashes.
 #[derive(Component)]
 struct Flash(f32);
@@ -90,16 +122,30 @@ fn pose(pose: &CreaturePose) -> Pose {
     }
 }
 
+// Creatures just arrived, unless they're already vanishing.
+type Arrived = (Added<Creature>, Without<Vanishing>);
+
 /// Sees each creature that arrives, as the server spawns it or it's shown to this client, from
-/// where it is then.
+/// where it is then, unless it's already vanishing.
 pub(super) fn see_creatures(
-    arrived: Query<(Entity, &CreaturePose), Added<Creature>>,
+    arrived: Query<(Entity, &Creature, &CreaturePose), Arrived>,
     mut commands: Commands,
 ) {
-    for (creature, now) in &arrived {
+    for (creature, &Creature(kind), now) in &arrived {
         let mut poses = Poses::default();
         poses.add(pose(now));
-        commands.spawn((SeenCreature(creature), poses));
+        commands.spawn((SeenCreature(creature), SeenKind(kind), poses));
+    }
+}
+
+/// Marks what's seen of a creature that's vanishing as only fading, once it goes.
+pub(super) fn see_vanish(
+    vanishing: On<Add<Vanishing>>,
+    creatures: Query<&CreatureSeen>,
+    mut commands: Commands,
+) {
+    if let Ok(seen) = creatures.get(vanishing.entity) {
+        commands.entity(seen.0).try_insert(Fading);
     }
 }
 
@@ -121,8 +167,8 @@ pub(super) fn follow_creatures(
     }
 }
 
-/// Lets what's seen of a creature that's gone die where it was, if it was near this client's
-/// player, and otherwise takes it away with it.
+/// Lets what's seen of a creature that's gone die where it was, or fade if it vanished, if it
+/// was near this client's player, and otherwise takes it away with it.
 pub(super) fn see_off(
     gone: On<Remove<SeenCreature>>,
     seen: Query<&Transform>,
@@ -183,6 +229,7 @@ impl Plugin for DrawCreaturesPlugin {
                 (
                     (animate, show_death).after(move_seen),
                     (flash, show_condition),
+                    (show_missiles, fly_missiles.run_if(not(is_authority))).chain(),
                 ),
             );
     }
@@ -194,6 +241,8 @@ struct CreatureLooks {
     kinds: HashMap<CreatureKind, KindLook>,
     heart: Handle<Mesh>,
     heart_colour: Handle<StandardMaterial>,
+    missile: Handle<Mesh>,
+    stone: Handle<StandardMaterial>,
 }
 
 // A kind's parts, where the middle of its body breathes from, and how far over its feet the
@@ -230,6 +279,7 @@ struct Model {
     trunk: Entity,
     head: Entity,
     legs: Vec<(Entity, f32)>,
+    arms: Vec<(Entity, f32)>,
     tails: Vec<Entity>,
     wings: Vec<(Entity, f32)>,
     eyes: Vec<Entity>,
@@ -242,6 +292,11 @@ struct Model {
     stride: f32,
     swing: f32,
     flutter: f32,
+    // how far it's wound up a blow, from 0 to 1, whether it was winding one up last frame, and
+    // how long ago the blow it wound up came
+    wound: f32,
+    winding: bool,
+    struck: Option<f32>,
     last: Vec3,
     // which way its body's shown facing, and its head turned from that, across and up
     yaw: Option<f32>,
@@ -259,7 +314,7 @@ fn pivot(part: &Part) -> Vec3 {
     part.centre
         + match part.joint {
             Joint::Body | Joint::Head => Vec3::ZERO,
-            Joint::Leg(_) => Vec3::Y * half.y,
+            Joint::Leg(_) | Joint::Arm(_) => Vec3::Y * half.y,
             Joint::Tail => Vec3::new(0.0, half.y, -half.z),
             Joint::Wing(side) => Vec3::new(-side * half.x, half.y, 0.0),
         }
@@ -275,8 +330,9 @@ fn make_looks(
         Handle<StandardMaterial>,
         [Handle<StandardMaterial>; FADE_STEPS],
     );
-    let mut colours: HashMap<[u32; 3], Materials> = HashMap::new();
-    let mut plain = |colour: Color| {
+    let mut colours: HashMap<([u32; 3], bool), Materials> = HashMap::new();
+    // glowing ones are drawn as bright as they are whatever the light
+    let mut plain = |colour: Color, unlit: bool| {
         let alpha_mode = if colour.alpha() < 1.0 {
             AlphaMode::Blend
         } else {
@@ -286,6 +342,7 @@ fn make_looks(
             base_color: colour,
             perceptual_roughness: 1.0,
             alpha_mode,
+            unlit,
             ..default()
         })
     };
@@ -310,16 +367,17 @@ fn make_looks(
             };
             let mesh = Mesh::from(Cuboid::from_size(part.size)).translated_by(part.centre - pivot);
             let [r, g, b] = part.colour;
+            let glows = part.look == Look::Glow;
             let (material, hurt, fading) = colours
-                .entry(part.colour.map(f32::to_bits))
+                .entry((part.colour.map(f32::to_bits), glows))
                 .or_insert_with(|| {
                     let colour = Color::srgb(r, g, b);
                     let red = colour.mix(&Color::srgb(1.0, 0.1, 0.1), FLASH_RED);
                     let fading = std::array::from_fn(|step| {
                         let left = 1.0 - (step + 1) as f32 / (FADE_STEPS + 1) as f32;
-                        plain(colour.with_alpha(left))
+                        plain(colour.with_alpha(left), glows)
                     });
-                    (plain(colour), plain(red), fading)
+                    (plain(colour, glows), plain(red, glows), fading)
                 })
                 .clone();
             parts.push(PartLook {
@@ -362,6 +420,12 @@ fn make_looks(
             unlit: true,
             ..default()
         }),
+        missile: meshes.add(Cuboid::from_length(MISSILE)),
+        stone: materials.add(StandardMaterial {
+            base_color: STONE,
+            perceptual_roughness: 1.0,
+            ..default()
+        }),
     });
 }
 
@@ -401,6 +465,7 @@ fn draw_creature(
         trunk,
         head,
         legs: Vec::new(),
+        arms: Vec::new(),
         tails: Vec::new(),
         wings: Vec::new(),
         eyes: Vec::new(),
@@ -412,6 +477,9 @@ fn draw_creature(
         stride: 0.0,
         swing: 0.0,
         flutter: 0.0,
+        wound: 0.0,
+        winding: false,
+        struck: None,
         last: Vec3::ZERO,
         yaw: None,
         look: Vec2::ZERO,
@@ -443,12 +511,13 @@ fn draw_creature(
         model.parts.push(entity);
         match part.joint {
             Joint::Leg(side) => model.legs.push((entity, side)),
+            Joint::Arm(side) => model.arms.push((entity, side)),
             Joint::Tail => model.tails.push(entity),
             Joint::Wing(side) => model.wings.push((entity, side)),
             Joint::Body | Joint::Head => {}
         }
         match part.look {
-            Look::Eye => model.eyes.push(entity),
+            Look::Eye | Look::Glow => model.eyes.push(entity),
             Look::Fleece => model.fleece.push(entity),
             Look::Plain => {}
         }
@@ -470,6 +539,7 @@ type Watchers = Or<(With<LocalPlayer>, With<SeenPlayer>)>;
 type PartMut<'a> = (&'a mut Transform, &'a mut Visibility);
 
 type Live<'a> = (
+    &'a SeenCreature,
     &'a mut Model,
     &'a mut Transform,
     &'a PlayerLook,
@@ -479,16 +549,19 @@ type Live<'a> = (
 // Moves each creature's parts as it lives: turning its body smoothly the way it faces, swinging
 // its legs as it walks, more the faster, bobbing as it steps, breathing, blinking, looking at
 // the nearest player near enough, or else grazing now and then if it grazes, swaying its tail,
-// flapping its wings as it flutters down or runs, and rearing back as it flinches.
+// flapping its wings as it flutters down or runs, and rearing back as it flinches. A monster
+// rears back and raises its arms as it winds up a blow, and lunges into it as it comes, and
+// one hanging from a ceiling is drawn upside down from it.
 fn animate(
     time: Res<Time>,
     watchers: Query<&GlobalTransform, Watchers>,
-    mut models: Query<Live, (With<SeenCreature>, Without<CreaturePart>)>,
+    stances: Query<&Stance>,
+    mut models: Query<Live, Without<CreaturePart>>,
     mut parts: Query<PartMut, (With<CreaturePart>, Without<Model>)>,
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
-    for (mut model, mut body, look, flash) in &mut models {
+    for (seen, mut model, mut body, look, flash) in &mut models {
         let properties = model.kind.properties();
         let seed = model.seed;
         let at = body.translation;
@@ -512,14 +585,45 @@ fn animate(
         let yaw = ease_angle(model.yaw.unwrap_or(look.yaw), look.yaw, TURNING, dt);
         model.yaw = Some(yaw);
 
+        // winding up a blow, and the blow once it comes
+        let stance = stances.get(seen.0).copied().unwrap_or_default();
+        if model.winding && !stance.winding {
+            model.struck = Some(0.0);
+        }
+        model.winding = stance.winding;
+        let wanted = if stance.winding { 1.0 } else { 0.0 };
+        model.wound = ease(model.wound, wanted, WINDING, dt);
+        let strike = match model.struck {
+            Some(since) if since < STRIKE => {
+                model.struck = Some(since + dt);
+                (since / STRIKE * PI).sin()
+            }
+            _ => {
+                model.struck = None;
+                0.0
+            }
+        };
+        let rear = WIND_REAR * model.wound - STRIKE_LUNGE * strike;
+
         let flinched = flash.map_or(0.0, |flash| flinch(FLASH - flash.0));
-        body.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(flinched);
+        body.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(flinched + rear);
         body.translation.y += BODY_BOB * stride.sin().abs() * swing;
+        if stance.clinging {
+            // its back to the ceiling, its feet where its top would be
+            body.rotation *= Quat::from_rotation_z(PI);
+            body.translation.y += properties.height * body.scale.y;
+        }
 
         let angle = stride.sin() * swing * SWING;
         for &(leg, side) in &model.legs {
             if let Ok((mut leg, _)) = parts.get_mut(leg) {
                 leg.rotation = Quat::from_rotation_x(angle * side);
+            }
+        }
+        let raised = WIND_ARMS * model.wound - STRIKE_ARMS * strike;
+        for &(arm, side) in &model.arms {
+            if let Ok((mut arm, _)) = parts.get_mut(arm) {
+                arm.rotation = Quat::from_rotation_x(raised - angle * side * ARM_SWING);
             }
         }
         if let Ok((mut trunk, _)) = parts.get_mut(model.trunk) {
@@ -553,7 +657,8 @@ fn animate(
             .map(|watcher| watcher.translation() + Vec3::Y * EYE_HEIGHT)
             .filter(|watcher| watcher.distance(eye) <= LOOK_RANGE)
             .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)));
-        let wanted = match watcher.and_then(|watcher| head_look(yaw, eye, watcher)) {
+        let watched = watcher.filter(|_| !stance.clinging);
+        let wanted = match watched.and_then(|watcher| head_look(yaw, eye, watcher)) {
             Some(looking) => looking,
             None if properties.grazes => {
                 Vec2::new(0.0, grazing(t, seed) * (1.0 - swing) * GRAZE_PITCH)
@@ -587,16 +692,18 @@ fn animate(
     }
 }
 
-// Tips each dying creature onto its side, its eyes shut, and then fades it out.
+// Tips each dying creature onto its side, its eyes shut, and then fades it out, or just fades
+// one vanishing.
 fn show_death(
     looks: Res<CreatureLooks>,
-    mut dying: Query<(&mut Model, &Dying, &mut Transform), Without<CreaturePart>>,
+    mut dying: Query<(&mut Model, &Dying, &mut Transform, Has<Fading>), Without<CreaturePart>>,
     mut parts: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut Visibility), With<CreaturePart>>,
 ) {
-    for (mut model, dying, mut body) in &mut dying {
+    for (mut model, dying, mut body, fading) in &mut dying {
         let Some((tipped, left)) = death(dying.0) else {
             continue;
         };
+        let tipped = if fading { 0.0 } else { tipped };
         let yaw = model.yaw.unwrap_or_default();
         body.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(tipped);
         // onto its side, rather than into the ground
@@ -681,6 +788,34 @@ fn show_condition(
     }
 }
 
+// Draws each missile as it's first seen, a small stone, from where it was thrown.
+fn show_missiles(
+    thrown: Query<(Entity, &Missile), Added<Missile>>,
+    looks: Res<CreatureLooks>,
+    mut commands: Commands,
+) {
+    for (entity, missile) in &thrown {
+        commands.entity(entity).insert((
+            Thrown::default(),
+            Mesh3d(looks.missile.clone()),
+            MeshMaterial3d(looks.stone.clone()),
+            Transform::from_translation(missile.from),
+        ));
+    }
+}
+
+/// Flies each missile along its arc from where it was thrown, by this client's clock since it
+/// was seen thrown, until the server takes it away. A host's are its server's, which move them.
+pub(super) fn fly_missiles(
+    time: Res<Time>,
+    mut thrown: Query<(&Missile, &mut Thrown, &mut Transform)>,
+) {
+    for (missile, mut thrown, mut body) in &mut thrown {
+        thrown.0 += time.delta_secs();
+        body.translation = missile.at(thrown.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -688,9 +823,10 @@ mod tests {
     use bevy::prelude::*;
     use bevy::time::TimeUpdateStrategy;
 
-    use super::{die_away, see_off, Dying, SeenCreature};
+    use super::{die_away, see_off, see_vanish, Dying, Fading, SeenCreature};
     use crate::client::animation::DEATH;
     use crate::client::player::LocalPlayer;
+    use crate::creatures::Vanishing;
 
     #[test]
     fn test_a_creature_gone_near_dies_where_it_was_and_then_goes_and_one_far_off_just_goes() {
@@ -726,5 +862,26 @@ mod tests {
             app.update();
         }
         assert!(app.world().get_entity(dying).is_err());
+    }
+
+    #[test]
+    fn test_a_creature_that_vanishes_near_only_fades() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_observer(see_off)
+            .add_observer(see_vanish);
+        app.world_mut().spawn((LocalPlayer, Transform::default()));
+        let creature = app.world_mut().spawn_empty().id();
+        let at = Transform::from_xyz(3.0, 0.0, 0.0);
+        let seen = app.world_mut().spawn((SeenCreature(creature), at)).id();
+        app.update();
+        app.world_mut().entity_mut(creature).insert(Vanishing);
+        app.update();
+        assert!(app.world().get::<Fading>(seen).is_some());
+        app.world_mut().despawn(creature);
+        app.update();
+        // fading away where it was, which `show_death` draws without tipping it over
+        assert!(app.world().get::<Dying>(seen).is_some());
+        assert!(app.world().get::<Fading>(seen).is_some());
     }
 }

@@ -77,7 +77,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | The renderer's defaults, and the player's own settings over them, volumes too, from the Settings screen | `assets/settings.toml`, `src/settings.rs`, `src/preferences.rs`, `src/client/sound/volume.rs` |
-| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; so far sheep, which give mutton (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
+| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; sheep, cows, pigs and chickens, and four monsters out in the dark that hunt players, despawning unsaved (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
 | Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time from recordings and synthesis, rare music (§5.10) | `src/client/sound/`, `assets/sounds/` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
 
@@ -94,7 +94,8 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits, containers, crops and the player (`src/save/`).
 
-Not there yet: hostile mobs and combat (M3.3).
+Combat came with M3.3: swords and armour (§5.3), blows and critical hits (§5.5), and monsters
+(§5.8).
 
 ---
 
@@ -1757,7 +1758,8 @@ landmarks visible from far away (P1).
     furnace, heaps of ore and the chests. 48 × 48 and 13 layers.
   - **Dungeon** (underground, deep): a mossy cobblestone vault nine blocks square, a ring of
     stone brick under its ceiling, pillars of cobblestone wall, two chests, one lantern, short
-    passages out into the rock, and a `spawner` marker in its middle for M3.3.
+    passages out into the rock, and a `spawner` marker in its middle, where M3.3's server builds a
+    spawner.
   - **Seeded variation.** A palette entry can be a weighted choice, made afresh for each cell
     (`stone_bricks*6|mossy_stone_bricks*2|cracked_stone_bricks*2`, weathering, holes with
     `air`, vines here and there) or once for the whole structure (`terracotta/red_terracotta`),
@@ -2128,6 +2130,120 @@ from high places.
     Leaving a world puts away the creatures seen and any still dying with the rest
     (`client::clear_world`), and the arm's swings come from the `Break` and `Place` actions.
 
+- **Built (M3.3): monsters** (`src/server/creatures/hunting.rs`, `spawning.rs`), our own rather
+  than Minecraft's, each with its own shape, colours, way of fighting and answer to it:
+
+  | Kind | Looks | Where | Health | Fights | Beaten by |
+  |---|---|---|---|---|---|
+  | **Gloamer** | Lean, long-legged and slate dark, pale spines down a hunched back, a long thin tail, eyes glowing pale green | Open ground under the sky at night, 1–2, 3 round a player | 16 | Stalks at a walk (2), runs (5) within 8 blocks, and leaps the last 4½ (9 across, 6 up); 3 a blow, 0.3 s wind-up, 1.3 s cooldown; sees 24 | Light, walls, or fighting back: 4 wooden sword hits, 3 critical. Fades at sunrise under the sky |
+  | **Lurker** | Flat, pale and plated, six short legs, mandibles, four small blue glowing eyes | Hanging from cave ceilings in the dark, 1, 3 round a player | 12 | Clings until a player in sight is within 3 blocks under it, then drops (unhurt) and bites: 4, 0.25 s wind-up, 1.1 s cooldown | Torches: runs from block light of 8 or more, and from a player within 6 holding a torch, lantern or anything else that gives that much |
+  | **Slinger** | Small and hunched in a ragged brown cloak and hood, mossy green skin, long arms, big ears, amber eyes | Anywhere dark, at night outside or in caves, 1–2, 2 round a player | 10 | Keeps 5–13 blocks off, backing away and closing in, and throws a stone in an arc (16 blocks a second, 3 a hit) after a 0.6 s wind-up, every 2.4 s, only at someone it sees | Rushing it, or ducking behind something: it won't throw blind, and stones stop at blocks. Drops cobblestone and coal |
+  | **Barrow brute** | A hulk of grey stone, huge mossy shoulders, arms nearly to the ground, a small head under a heavy brow, ember eyes | Deep caves in the dark, below 400 (48 under the sea), 1 round a player; and dungeons' spawners | 40 | Slow (1.3, running 2.4); 8 a blow with 9 of knockback, raising its arms a full second first, 2.2 s cooldown; reach 1.8 | Stepping back as it winds up, which makes it miss, then hitting it: 10 wooden sword hits, 5 of bright steel. Drops coal and sometimes iron |
+
+  - **The table:** `Properties` gains `attack` (`Attack`: damage, reach between the bodies,
+    wind-up, cooldown, knockback, sight, `lunge`, `throws` and what's said of someone it kills:
+    "was run down by a gloamer", "was ambushed by a lurker", "was brought down by a slinger's
+    stone", "was crushed by a barrow brute"),
+    `despawns`, `fades_by_day`, `clings` and `guards` (how often a spawner is of its kind).
+    `Spawns` gains `ceiling` (hanging under one of its blocks), `dark`, `below`, and empty
+    `biomes` meaning all of them. Models gain `Joint::Arm` (swinging against the legs, raised
+    as a blow's wound up) and `Look::Glow`, eyes drawn unlit so they show in the dark.
+  - **Brains:** three new behaviours. `Hunt` notices the nearest player in survival within its
+    sight that it can see (a line from its eyes to their chest with nothing blocking light on it,
+    `sees`, so glass doesn't hide them), looking twice a second; keeps after them to 1.5 times its
+    sight (the leash), whether it sees them or not; joins another of its kind within 10 blocks
+    already hunting; and turns on whoever hits it. It chases with the same A* ways as following
+    (`Doing::Hunt`), going straight at its prey over the last of the way, or, for a thrower,
+    holds between its distances where it can see them. `Ambush` hangs (`Doing::Cling`, still
+    and upside down, `Stance::clinging`) until someone comes under it, or it's hit. `ShunLight`
+    flees from the nearest torch lighting it (`World::emitters_near`) or the player holding one.
+  - **Fighting** (`fight`, after moving): once its prey is in reach, or in throwing range, its
+    cooldown's over and it saw them at its last look, a monster winds up (`Stance::winding`,
+    standing still and facing them, which clients draw rearing back with arms raised, and hear
+    as its attack cry), and at the end of the wind-up it lands a `Blow` if they're still within
+    reach and 0.6 more and still in sight, or throws. A player who steps back as it winds up is
+    missed. Blows land through the player's armour and grace as §5.5 says.
+  - **Missiles:** a stone is an entity of its own, `Missile { from, velocity }`, replicated once,
+    falling under 20 blocks a second a second (less than bodies, so the arc reads), aimed on the
+    lower of the two arcs that land on the player's chest (`aim`). The server flies it in steps
+    of a quarter block, striking the first player it passes within 0.15 of, and gone at the first
+    solid block, unloaded ground or after 5 s; clients draw it from `from` and `velocity` by
+    their own clock, so it costs nothing to send while it flies.
+  - **Spawning:** as animals do, every 2 s round each player, 24 to 48 blocks off and out of
+    sight, under each kind's own cap within 64 blocks; then a monster's place must be **dark**:
+    no block light at all where its feet go (`World::block_light`, spread round walls as meshes
+    are lit, from the emitters in the chunks loaded), and under the sky only at night. So no
+    monster ever appears within a torch's reach (13 blocks), and a lit base is safe from
+    spawning however big it is; walls keep out what comes from further. Ceiling kinds look for
+    the underside of their blocks with room under them, and kinds not bound to the sky take any
+    of the places in the column within 16 of the player's feet, chosen at random, so the caves
+    under a player fill as the surface does. At night the open has gloamers and slingers, up to
+    5 round a player; the caves always have lurkers and slingers, and below 400 a brute too, up
+    to 6, so deeper is harder.
+  - **Spawners** (`BlockType::Spawner`, an iron cage round a smoulder, hardness 10, needs a
+    wooden pickaxe, drops nothing, made by nothing) stand at structures' `spawner` markers, the
+    dungeon's so far. Generation leaves the marker as its template has it (air, M2.4b), and the
+    server builds the spawner there as an edit the first time a player comes within 32 blocks
+    with its ground loaded (`build_spawners`, finding markers through
+    `RegionStore::structures_near` as loot does), as a chest's loot is rolled only when it's first
+    opened: so what's generated, and the golden checksum, are as they were, and an edit there
+    already, such as the air of one broken, means it's been built or taken and isn't again. The
+    authoring table `MARKERS` has the block as its own marker, so `/structure place` and `save`
+    round-trip it. Each one's kind is chosen from a hash of the seed and its position by the
+    kinds' `guards` (lurkers and slingers 2, brutes 1), so it's always the same. While a player is
+    within 16 blocks, every 10–20 s it brings out 1–2 of its kind on floors within 4 blocks
+    across and 2 up or down, unless there are 3 of its kind within 12 of it already, or the
+    block over it is lit at all, so a torch on it stops it. The server finds them in the chunks
+    round each player from their runs (`ChunkData::positions_of`) every 2 s, so one a player
+    makes in creative works too, and keeps when each is next due (`Spawners`).
+  - **Despawning:** monsters (`despawns`) further than 64 blocks from every player are taken
+    away, and those whose ground is unloaded too, never to `Dormant`, and saves leave them out,
+    so a world is saved without them and reopens with none.
+    A gloamer out under the sky by day **vanishes**: the server marks it `Vanishing`, replicated,
+    and despawns it the next frame, and clients seeing it go only fade it out where it stands,
+    with no death cry, nor tipping over (`Fading`). Far despawns need no reason, as they're
+    beyond the 48 blocks a client shows deaths within. This is the reason M-A2 wanted sent.
+  - **Balance**, by the numbers above and §5.5's: a first night in the open meets a gloamer or
+    two at a time and a slinger. A gloamer deals 3 every 1.6 s at best; a wooden sword kills it in
+    4 hits at 0.6 s (3 critical, jumping), about 2.5 s in reach, so a fair fight costs 3 to 6 of
+    20 health, which a full food bar heals back in under half a minute; two at once cost about
+    twice that, so a night of them is survivable with a sword and food, and dangerous without.
+    A lit, walled base is safe: nothing spawns in light, monsters can't break blocks, and a roof
+    stops stones. Caves are worse the deeper and darker they are: lurkers punish walking
+    unlit, a brute's 8 is 40% of a player's health through no armour (4 through full iron),
+    and spawners keep coming until they're lit or broken.
+  - **Protocol:** `Stance`, `Vanishing` and `Missile` are replicated, the first two on creatures.
+    `PROTOCOL_VERSION` is 20. Saves are unchanged: monsters are never in them.
+  - **Cost:** 50 gloamers hunting a player walking in circles on a field, at night, cost the
+    server's creature systems 0.42 ms a frame on the main thread (median; p99 0.78), against 0.15
+    ms with none (the same schedule, empty), so 0.27 ms for the 50, most of it their lines of
+    sight and ways being asked for twice a second. A hunter's way 20 blocks across takes 0.05 ms
+    on the compute pool (the slowest 0.2 ms). Lines of sight are a block lookup every 0.3 blocks;
+    block light is worked out only where a spawn's tried and a torch is in reach. (Measured with
+    a load average of 14.)
+  - **Tests** (`server::creatures::tests::monsters`): monsters appearing at night out of reach
+    up to their caps, none by day, and gloamers vanishing at dawn; none where torches light the
+    ground; lurkers on cave ceilings and brutes deep down, by day, but not lit; a spawner bringing
+    out its kind in the dark up to a few, not lit, and not once broken; a gloamer hunting a player
+    in survival it sees and striking after its cooldown, but not one in creative; a brute's wind-up
+    of a second and its blow missing a player who steps away; a slinger backing off and throwing
+    stones that fly and strike, but not at someone out of sight; a lurker hanging until someone
+    comes under it, then dropping unhurt and striking; a lurker running from torchlight and from a
+    torch held near; gloamers joining a pack on a hunt and giving up on someone far off; a monster
+    hit turning on whoever hit it and dropping off its ceiling; critical hits; monsters despawning
+    far from everyone, unsaved, while animals sleep; throws aimed to land where they're aimed and
+    lines of sight stopping at walls but not glass. Also block light round walls and across
+    chunks (`world`), a dungeon's spawner built as someone comes near and not again once broken,
+    spawners choosing kinds by weight, saves
+    leaving monsters out, a creature vanishing near only fading (`client::creatures`), and a
+    joined client seeing a brute wind up and strike, taking the blow and feeling it, seeing one
+    killed die and a gloamer at sunrise fade without dying (`tests/multiplayer.rs`).
+  - **Later:** monsters drawn darker than the land at night: creatures and players are lit by
+    Bevy's own lights, which the moon barely lights (the world's shaders raise its light 400
+    times, `MOON_BOOST`), so at night they're black shapes with glowing eyes, which suits
+    monsters but hides animals and friends, and wants their light from the sky and block light
+    where they stand; monsters swimming after players; more dungeons' kinds by structure.
+
 ### 5.9 Distribution
 
 - Release builds for Windows, macOS and Linux, published on GitHub, that run without installing
@@ -2209,12 +2325,14 @@ README and licences but no assets, which it doesn't read.
     `Volumes` follows them as `Bindings` does. Every button's press clicks, as before.
   - **Creatures** (M3.1) are heard where they're drawn: footsteps as players' are, a call now and
     then (every 25 seconds or so each), and a higher, sharper one as `Flinches` counts a hit;
-    sheep bleat. Each goes through `CreatureSound { kind, hurt, at }`, the hook for whatever
+    sheep bleat. Each goes through `CreatureSound { kind, cry, at }`, the hook for whatever
     else wants a creature heard, and `SoundKind::sound` names each `CreatureKind`'s calls, so a
-    new kind (M3.2) won't build until it's given some.
+    new kind (M3.2) won't build until it's given some. Since M3.3 a `Cry` is a call, being hurt,
+    attacking (as a monster starts winding up a blow) or dying (as what's seen of one starts
+    to, but not as one vanishes); monsters have four cries of their own (`<kind>_call`,
+    `_hurt`, `_attack`, `_death`, 64 files, 0.96 MB), and animals die with a lower, slower call.
   - **Later:** furnaces crackling while lit, which the client only knows of the one open;
-    other players' blows while breaking, hurt and eating, which they aren't told of; creatures
-    dying; occlusion, so a cave next door is quieter through rock; rain (M3.5).
+    other players' blows while breaking, hurt and eating, which they aren't told of; occlusion, so a cave next door is quieter through rock; rain (M3.5).
 
 ---
 
@@ -2337,7 +2455,8 @@ Done when: **the world feels inhabited, and night is dangerous.**
 - ☑ **M3.1 Entity system and pathfinding.** (§5.8)
 - ☑ **M3.2 Passive animals.** Sheep, cows, pigs and chickens, shearing, wool and breeding
   (§5.8).
-- ☐ **M3.3 Hostile mobs and combat.**
+- ☑ **M3.3 Hostile mobs and combat.** Four monsters of our own, spawners in dungeons, swords,
+  armour and blows (§5.3, §5.5, §5.8).
 - ☐ **M3.4 Villages and villagers.**
 - ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
 

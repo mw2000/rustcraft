@@ -738,10 +738,12 @@ mod tests {
             assert_eq!(made_of, recipe.ingredients()[0].1, "{}", recipe.name());
             assert_eq!(makes, recipe.output().count, "{}", recipe.name());
         }
-        // and every new building block is made somehow, but for what's only for authoring
+        // and every new building block is made somehow, but for what's only for authoring, and
+        // spawners, found only in dungeons
         for block in BlockType::ALL
             .iter()
             .skip(BlockType::LootMarker as usize + 1)
+            .filter(|&&block| block != BlockType::Spawner)
         {
             made(*block);
         }

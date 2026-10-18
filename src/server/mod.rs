@@ -45,7 +45,7 @@ use bevy_replicon_renet2::RepliconRenetPlugins;
 
 use crate::clock::TimeOfDay;
 use crate::containers::Containers;
-use crate::creatures::Creature;
+use crate::creatures::{Creature, Missile};
 use crate::farming::Crops;
 use crate::game_mode::GameModePlugin;
 use crate::player::name::PlayerName;
@@ -73,6 +73,7 @@ impl Plugin for ServerPlugin {
             .init_resource::<Operators>()
             .init_resource::<creatures::Dormant>()
             .init_resource::<creatures::SpawnRate>()
+            .init_resource::<creatures::Spawners>()
             .add_observer(players::welcome)
             .add_observer(survival::start_living)
             .add_observer(players::see_off)
@@ -93,12 +94,17 @@ impl Plugin for ServerPlugin {
                     (drops::fall, drops::merge, drops::pick_up).chain(),
                     (
                         creatures::wake,
+                        creatures::build_spawners,
                         creatures::spawn,
                         creatures::take_paths,
                         creatures::grow,
                         creatures::think,
                         creatures::move_creatures,
+                        creatures::fight,
+                        creatures::fly_missiles,
                         creatures::breed,
+                        creatures::despawn,
+                        creatures::vanish,
                         creatures::sleep,
                     )
                         .chain(),
@@ -325,11 +331,19 @@ fn disconnect_joiners(clients: Query<Entity, With<ConnectedClient>>, mut command
     commands.remove_resource::<RenetServer>();
 }
 
-// Puts away the world the server had open, once it's saved: its players, its creatures and the
-// items lying in it, and its resources as they were before it opened.
+// Puts away the world the server had open, once it's saved: its players, its creatures, the
+// missiles in flight and the items lying in it, and its resources as they were before it opened.
 #[allow(clippy::type_complexity)]
 fn close_world(
-    things: Query<Entity, Or<(With<Player>, With<Creature>, With<drops::DroppedItem>)>>,
+    things: Query<
+        Entity,
+        Or<(
+            With<Player>,
+            With<Creature>,
+            With<Missile>,
+            With<drops::DroppedItem>,
+        )>,
+    >,
     mut commands: Commands,
 ) {
     for thing in &things {
@@ -346,4 +360,5 @@ fn close_world(
     commands.insert_resource(chat::ChatAllowances::default());
     commands.insert_resource(Operators::default());
     commands.insert_resource(creatures::Dormant::default());
+    commands.insert_resource(creatures::Spawners::default());
 }

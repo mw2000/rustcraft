@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
-use crate::chunks::generate::structures::{LOOT, STRUCTURE_DEPTH, STRUCTURE_HEIGHT};
+use crate::chunks::generate::structures::{LOOT, SPAWNER, STRUCTURE_DEPTH, STRUCTURE_HEIGHT};
 
 /// The biggest box a structure can be saved from: as tall as a template can be, sunk layers and
 /// all, and four chunks across. That's room for any one building, as bigger structures are
@@ -15,8 +15,10 @@ use crate::chunks::generate::structures::{LOOT, STRUCTURE_DEPTH, STRUCTURE_HEIGH
 /// edit layer and the clients near it take in their stride.
 pub const MAX_SIZE: I64Vec3 = I64Vec3::new(64, STRUCTURE_HEIGHT + STRUCTURE_DEPTH, 64);
 
-/// The blocks standing for a template's markers, and the kind of marker each is.
-pub const MARKERS: [(BlockType, &str); 1] = [(BlockType::LootMarker, LOOT)];
+/// The blocks standing for a template's markers, and the kind of marker each is. A spawner is
+/// its own marker, being what the server builds there.
+pub const MARKERS: [(BlockType, &str); 2] =
+    [(BlockType::LootMarker, LOOT), (BlockType::Spawner, SPAWNER)];
 
 /// The box a player has selected to save as a structure, by its corners, each set or not yet,
 /// and the height of the floor of the structure last placed into it, while it's that box still.
