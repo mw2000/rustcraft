@@ -2286,7 +2286,32 @@ Done when: **the world feels inhabited, and night is dangerous.**
   (§5.8).
 - ☐ **M3.3 Hostile mobs and combat.**
 - ☐ **M3.4 Villages and villagers.**
-- ☐ **M3.5 Weather.**
+- ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
+
+### Upstream ports
+
+Changes merged upstream (rornic/rustcraft) since the fork, brought in one PR at a time, in this
+order, each re-implemented on this codebase with its original author kept on the commit. Where
+both sides built the same thing they're merged into one system keeping the best of each
+(§8). Last checked against upstream `25cf125`.
+
+- ☑ **U-77 Ambience** (Aymen Qader): CC0 recordings and synthesised wind, merged into §5.10.
+- ☑ **U-78 Flora** (Aymen Qader): swaying grasses, ferns and flowers, as breakable plant blocks.
+- ◐ **U-79 Critters** (Aymen Qader): butterflies, fireflies lighting the ground, starlings, geese.
+- ☐ **U-82 Perf** (Rory Nickolls): leaf faces meshed apart and drawn only near the camera; full
+  detail out to 24 chunks.
+- ☐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
+  shadows blurred so foliage stops flickering (`f785896`); level-2 trees drawn as leaf voxels
+  (`9a94413`); the ground cross-fading between LOD levels (`84b6290`) (Rory Nickolls).
+- ☐ **U-84 Integer clock** (Rory Nickolls, `08015ef`): `TimeOfDay` as a `u64` of ticks, 20 a
+  second, exact and the same on every machine, replacing our `f64` of days; extended through
+  the server-run clock, `TimeSync`, `world.toml` and crops' planting times (with a save
+  migration from days), and everything that reads the time.
+- ☐ **U-80 Weather** (Aymen Qader, with Rory Nickolls' tuning `fbd522d`, `9307035` and the rain
+  half of `7c970d4`): storms, rain, a rainbow, lightning and thunder on the integer clock,
+  replacing M3.5's paused WIP, with our extras on top: snow by climate, rain stopping under
+  roofs, an operator `/weather`, sleeping through storms, a daylight factor for the monsters'
+  darkness rule, and a particle setting. Completes M3.5.
 
 ### Throughout
 
