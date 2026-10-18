@@ -33,13 +33,14 @@ ctrlc = { version = "3.4", features = ["termination"] }
 
 [features]
 default = ["client"]
-# The game's window, rendering, input and UI, which the dedicated server is built without:
+# The game's window, rendering, input, UI and sound, which the dedicated server is built without:
 # `cargo build --release --bin rustcraft-server --no-default-features`. And Bevy's spans for
 # profiling, which would otherwise mark every line of the server's log.
 client = [
     "bevy/trace", "bevy/bevy_gilrs", "bevy/bevy_winit", "bevy/bevy_clipboard", "bevy/default_font",
     "bevy/x11", "bevy/custom_cursor", "bevy/common_api", "bevy/3d_bevy_render", "bevy/ui_api",
-    "bevy/ui_bevy_render", "bevy/bevy_ui_widgets", "bevy/ui_picking",
+    "bevy/ui_bevy_render", "bevy/bevy_ui_widgets", "bevy/ui_picking", "bevy/bevy_audio",
+    "bevy/vorbis",
 ]
 
 [[bin]]

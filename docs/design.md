@@ -75,9 +75,10 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
-| Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
+| Settings | Render distance, LOD scale, shadows; volumes, kept per player | `assets/settings.toml`, `src/settings.rs`, `src/client/sound/volume.rs` |
 | Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; so far sheep, which give mutton (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
-| Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures` and `structures` skills | `examples/`, `.claude/skills/` |
+| Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time, rare music, all synthesised (§5.10) | `src/client/sound/`, `assets/sounds/` |
+| Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
@@ -745,9 +746,9 @@ The world's state beyond the seed (INV-1).
     "Server" (`CONSOLE_NAME`), `stop` saves and exits, and `help` lists them. A server with
     stdin closed, as a service, reads nothing and runs on.
   - **The `client` feature**, on by default, gates Bevy's render, window, winit, gilrs, x11
-    and UI features and the modules that need them: `client`, `clouds`, `curvature`, `debug`,
-    `horizon`, `hotbar`, `hud`, `interaction`, `menu`, `picker`, `sky`, `sky_dome`, `tonemap`,
-    the inventory's screens, `player::{input, underwater}`, and the chunks' loaders, LOD
+    and UI features, and audio since M-A3, and the modules that need them: `client`, `clouds`,
+    `curvature`, `debug`, `horizon`, `hotbar`, `hud`, `interaction`, `menu`, `picker`, `sky`,
+    `sky_dome`, `tonemap`, the inventory's screens, `player::{input, underwater}`, and the chunks' loaders, LOD
     drawing, fades and materials (`TerrainPlugin` now in `chunks/terrain.rs`). What they held
     that the server needs moved out: `Hotbar` to `inventory`, `overlaps` to `collision`,
     `REACH` to `player`, and the command bar to `client::command_bar`, leaving `commands.rs`
@@ -1602,6 +1603,57 @@ The dedicated server (§4.4) is built beside it for each platform, with `--no-de
 it needs no GPU or display, and packed alone as `rustcraft-server-<version>-<target>/` with the
 README and licences but no assets, which it doesn't read.
 
+### 5.10 Sound
+
+- Footsteps by what's walked on, digging and building by material, the player's own noises,
+  other players heard where they are, ambience by place and time of day, and a little music,
+  rarely. Calm and grounded rather than busy, in the spirit of packs like Enhanced Audio, but
+  every sound made for rustcraft (INV-8, D-10). Only the client plays any.
+- **Built (M-A3):** `src/client/sound/`, from `SoundPlugin` in the game's App.
+  - **Audio:** Bevy's `bevy_audio` and `vorbis` (lewton) features, in the `client` feature, so
+    the dedicated server links no audio crate, which CI checks with `cargo tree`. With no audio
+    device Bevy plays nothing and the game runs on.
+  - **Sounds:** all synthesised by the sounds skill's `synth.py` (`.claude/skills/sounds/`) into
+    `assets/sounds/`: 110 Ogg Vorbis files, 3.5 MB. Footsteps and breaking for nine surfaces
+    (grass, dirt, sand, gravel, stone, wood, snow, leaves, ice), each four takes, and four of
+    swimming, splashing, picking up, eating, being hurt and a sheep-like bleat; dying, a chest
+    opening and closing and a click; seven ambience loops and three pieces of music. `Surface::of`
+    names a few blocks and goes by the breaking tool for the rest (pickaxe stone, axe wood,
+    shovel dirt, plants leaves), so a new block sounds right unasked. `analyse.py` checks levels,
+    clipping and loop seams and draws spectrograms, as they can't be listened to here.
+  - **Playing:** `PlaySound { kind, at }` plays a `SoundKind`, a random take at a random pitch in
+    its range. With `at` it's Bevy's spatial audio from there, which pans it and falls off as the
+    square of the distance from full within 6 blocks; beyond 32 it isn't played. With none it's
+    the player's own. At most 24 one-off sounds play at once; more are dropped. Bevy loads the
+    files on its I/O threads and decodes them on the audio thread (INV-7).
+  - **What plays:** footsteps every 1.7 blocks walked on the block underfoot (`Gait`), none
+    flying, a step pushing off to jump and a heavier one landing from over 0.6 blocks; strokes
+    swimming and a splash falling in; blows every 0.25 seconds while breaking, then the break,
+    and a lighter, higher break placing; chewing while eating; hurt and dying; picking up; chests
+    opening and closing; a click on every button. Other players' footsteps are heard from where
+    they're drawn, and their edits where they are: on a joiner from the server's `BlockChanged`
+    before it's put in the world, on the host from the joiners' requests before its server makes
+    them, and this player's own from its requests.
+  - **Ambience:** loops of wind, high wind, the sea, birds, crickets, a cave (a hum and drips
+    in a reverberant room) and being under water, faded over 2.5 seconds to what's wanted, which
+    is looked at twice a second from the eyes (`mix`, about 6 µs): under water only that, in a cave
+    (under ground and 3 blocks below the generated surface) only it, and otherwise wind rising
+    with height, the high wind on peaks and in the cold, the sea where land round about is under
+    sea level, birds by day where it's mild, more among trees, and crickets by night, both thinning
+    up the mountains. Biomes come in by climate and trees, so new ones need nothing here. Loops
+    faded out are paused.
+  - **Music:** the first piece 1½ to 4 minutes in, then 8 to 18 minutes of quiet between.
+  - **Volume:** master, effects, ambience and music, from − and + rows in the pause menu, kept in
+    `volume.toml` in the data directory beside `worlds/`, written off the main thread.
+  - **Creatures** (M3.1) are heard where they're drawn: footsteps as players' are, a call now and
+    then (every 25 seconds or so each), and a higher, sharper one as `Flinches` counts a hit;
+    sheep bleat. Each goes through `CreatureSound { kind, hurt, at }`, the hook for whatever
+    else wants a creature heard, and `SoundKind::sound` names each `CreatureKind`'s calls, so a
+    new kind (M3.2) won't build until it's given some.
+  - **Later:** furnaces crackling while lit, which the client only knows of the one open;
+    other players' blows while breaking, hurt and eating, which they aren't told of; creatures
+    dying; occlusion, so a cave next door is quieter through rock; rain (M3.5).
+
 ---
 
 ## 6. Roadmap
@@ -1717,11 +1769,11 @@ Done when: **the world feels inhabited, and night is dangerous.**
 - ☐ **M-A2 Living creatures.** Creatures and players feel alive: idle breathing, blinking, heads
   that turn to look, smooth limb swing and easing — inspired by packs like Fresh Animations,
   built on our own box models (INV-8). With or after M3.2.
-- ☐ **M-A3 Sound.** Bevy's audio switched on, with footsteps by surface, breaking and placing,
+- ☑ **M-A3 Sound.** Bevy's audio switched on, with footsteps by surface, breaking and placing,
   ambience (wind, water, birds by day, cave drips and echo underground), creature sounds and a
   little music — inspired by packs like Enhanced Audio, from CC0 sources or made by our own
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
-  silent and audio-free.
+  silent and audio-free. Built: all synthesised, §5.10.
 - ☐ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
   every setting lives in menus rather than environment variables:
   - **Title screen:** Singleplayer, Multiplayer, Settings, Quit, over a slowly panning view of a
@@ -1821,5 +1873,6 @@ For agents and contributors:
 - **Performance:** for anything touching generation, meshing, LODs or per-frame systems, measure
   with the `profile` skill and `examples/lod_sim.rs`, and report the numbers in the PR (INV-7).
 - **Textures:** new block textures with the `block-textures` skill.
+- **Sounds:** new or changed sounds with the `sounds` skill.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.

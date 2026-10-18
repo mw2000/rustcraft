@@ -12,6 +12,7 @@ pub mod join;
 pub mod models;
 pub mod others;
 pub mod player;
+pub mod sound;
 
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;

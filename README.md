@@ -35,6 +35,7 @@ cargo run --release
 - Farming: right-click dirt or grass with a hoe (2 planks, cobblestone or ingots and 2 sticks, at a crafting table) to till it into farmland, and right-click farmland with seeds, which tall grass sometimes drops, to plant wheat. It grows over two or three days, quicker with water within four blocks, and a field you've left has grown as it should by the time you're back. Break it ripe and golden for wheat and more seeds; 3 wheat make bread at a crafting table, which fills more of the food bar than an apple.
 - M opens the map of the land you've explored, centred on you: the arrow is you and the way you face, with the world's spawn, your bed and your friends marked. Scroll to zoom, drag to look around, and M or Escape closes it. It fills in as you go, a few hundred blocks around you, and it's kept on your computer with the world, or under the server's address when you join one.
 - `[` and `]` move the sun, and F1 shows the debug overlay.
+- The menu (Escape) sets the volume, and the effects, ambience and music each on their own, with − and +. They're kept for you in `volume.toml` beside the worlds' directory (below).
 
 ## Commands
 

@@ -51,10 +51,11 @@ impl Plugin for MenuPlugin {
     }
 }
 
+/// The pause menu, its buttons in a column.
 #[derive(Component)]
-struct Menu;
+pub(crate) struct Menu;
 
-fn spawn_menu(mut commands: Commands) {
+pub(crate) fn spawn_menu(mut commands: Commands) {
     commands
         .spawn((
             Menu,

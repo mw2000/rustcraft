@@ -25,6 +25,7 @@ use rustcraft::client::creatures::DrawCreaturesPlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::join::{join, server_address};
 use rustcraft::client::models::DrawPlayersPlugin;
+use rustcraft::client::sound::SoundPlugin;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
@@ -246,6 +247,7 @@ fn main() {
         DrawCracksPlugin,
         MapPlugin,
         AuthoringPlugin,
+        SoundPlugin,
     ))
     // the client, and the server unless joining one elsewhere: in singleplayer they're in one
     // App with no transport running, so replicon passes their messages straight across (§4.4)
