@@ -1,4 +1,5 @@
 pub mod input;
+pub mod name;
 pub mod physics;
 pub mod underwater;
 
@@ -42,9 +43,17 @@ pub fn arriving(state: &PlayerState) -> impl Bundle {
     )
 }
 
+impl Player {
+    /// Stops it where it is, as being put somewhere else does.
+    pub fn stop(&mut self) {
+        self.velocity = Vec3::ZERO;
+    }
+}
+
 /// The client a player belongs to: `ClientId::Server` for the host's own, the one player in
-/// singleplayer.
+/// singleplayer. Never changed, as the server shows each player to everyone but its owner by it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(immutable)]
 pub struct PlayerOwner(pub ClientId);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -4,26 +4,42 @@
 //! `CloseInventory`, `DropItem`, `PickBlock` and `Craft`, and placing a block in survival takes
 //! it from the slot `RequestEdit` names. In one App the change is made in the frame it's asked
 //! for, to the same `Inventory`; from M0.6 the server replicates each player's to its owner.
+//!
+//! Players are replicated to everyone but their owner, who moves its own (M0.6d): their name,
+//! game mode and what they hold, with where they are and look relayed as `PlayerMoved`.
 
+use std::time::Duration;
+
+use bevy::ecs::entity::MapEntities;
 use bevy::math::{I64Vec3, U16Vec3};
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
+use bevy_replicon_renet2::netcode::NETCODE_USER_DATA_BYTES;
 use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::crafting::Recipe;
+use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
+use crate::player::name::PlayerName;
+use crate::player::{Movement, PlayerOwner};
 use crate::save::region::{local_block, local_index};
 use crate::save::PlayerState;
 use crate::server::drops::DroppedItem;
+use crate::server::HeldItem;
 
 /// The port a world is hosted on unless another's asked for.
 pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
+
+/// How often a client tells the server where its player is, and the server tells the others
+/// where the host's is: about as often as reaching and keeping chunks near them needs, and
+/// often enough to draw them moving smoothly.
+pub const POSE_INTERVAL: Duration = Duration::from_millis(50);
 
 /// What netcode tells rustcraft's connections apart from other games' by.
 pub const NETCODE_PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustcraf");
@@ -62,7 +78,17 @@ impl Plugin for ProtocolPlugin {
             .add_client_message::<StartBreaking>(Channel::Ordered)
             // to every client, which draw them where the server has them
             .replicate::<DroppedItem>()
-            .replicate_filtered_as::<Transform, Position, With<DroppedItem>>();
+            .replicate_filtered_as::<Transform, Position, With<DroppedItem>>()
+            // to the client whose player it is, as the server puts them somewhere and changes
+            // how they play
+            .add_server_message::<Teleport>(Channel::Ordered)
+            .add_server_message::<GameModeChanged>(Channel::Ordered)
+            // unreliable, as the poses it's relayed from are
+            .add_mapped_server_message::<PlayerMoved>(Channel::Unreliable)
+            .replicate::<PlayerName>()
+            .replicate::<GameMode>()
+            .replicate::<HeldItem>()
+            .add_visibility_filter::<PlayerOwner>();
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -236,13 +262,59 @@ impl ChunkEdits {
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct InventoryChanged(pub Inventory);
 
-/// Where a client has moved its player to, by its feet, and which way they look, which the
-/// client decides (§4.4).
+/// Where a client has moved its player to, by its feet, which way they look, how they're
+/// moving and which hotbar slot they hold, which the client decides (§4.4) and the server
+/// checks. `at` is when, in milliseconds by the client's clock, and `teleports` how many
+/// `Teleport`s it had been sent by then, so the server can tell a pose from before its last.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct PlayerPose {
+    pub at: u32,
     pub position: Vec3,
     pub yaw: f32,
     pub pitch: f32,
+    pub movement: Movement,
+    pub slot: u8,
+    pub teleports: u32,
+}
+
+/// Where the server has put a client's player, by its feet, for the client to move them to:
+/// somewhere `/tp` sent them, or back where they were if they moved further than they could.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Teleport {
+    pub position: Vec3,
+}
+
+/// A client's player's game mode, as the server has changed it. The host's needs no telling.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameModeChanged(pub GameMode);
+
+/// Where another player is, by their feet, and which way they look, at `at` milliseconds by
+/// their own clock, which only tells their poses apart and how far apart they are.
+#[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct PlayerMoved {
+    #[entities]
+    pub player: Entity,
+    pub at: u32,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// A player's name as a client sends it on connecting, in netcode's user data.
+pub fn name_to_user_data(name: &PlayerName) -> [u8; NETCODE_USER_DATA_BYTES] {
+    let mut data = [0; NETCODE_USER_DATA_BYTES];
+    let bytes = name.as_str().as_bytes();
+    data[..bytes.len()].copy_from_slice(bytes);
+    data
+}
+
+/// The name a client sent on connecting, made a name whatever it sent.
+pub fn name_from_user_data(data: &[u8; NETCODE_USER_DATA_BYTES]) -> PlayerName {
+    let end = data
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(data.len());
+    PlayerName::new(&String::from_utf8_lossy(&data[..end]))
 }
 
 // A dropped item's `Transform`, which has no serde of its own, as only its translation: the
@@ -334,9 +406,10 @@ mod tests {
     use bevy::prelude::Entity;
     use bevy_replicon::prelude::ClientId;
 
-    use super::{BlockChanged, ChunkEdits};
+    use super::{name_from_user_data, name_to_user_data, BlockChanged, ChunkEdits};
     use crate::block::BlockType;
     use crate::chunks::chunk::ChunkCoordinate;
+    use crate::player::name::PlayerName;
 
     #[test]
     fn test_block_changes_round_trip_with_whoever_made_them() {
@@ -350,6 +423,15 @@ mod tests {
             let bytes = postcard::to_stdvec(&change).unwrap();
             assert_eq!(change, postcard::from_bytes(&bytes).unwrap());
         }
+    }
+
+    #[test]
+    fn test_names_go_in_the_user_data_and_come_out_names() {
+        let name = PlayerName::new("Zoë");
+        assert_eq!(name, name_from_user_data(&name_to_user_data(&name)));
+        let mut sent = [b'/'; 256];
+        sent[..4].copy_from_slice(b"..ab");
+        assert_eq!("ab", name_from_user_data(&sent).as_str());
     }
 
     #[test]

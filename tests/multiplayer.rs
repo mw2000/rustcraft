@@ -11,7 +11,9 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy::time::TimeUpdateStrategy;
 use bevy_replicon::prelude::*;
-use bevy_replicon_renet2::netcode::{in_memory_server_addr, new_memory_sockets};
+use bevy_replicon_renet2::netcode::{
+    in_memory_server_addr, new_memory_sockets, MemorySocketClient,
+};
 use bevy_replicon_renet2::renet2::RenetClient;
 use bevy_replicon_renet2::RepliconRenetPlugins;
 use rustcraft::block::BlockType;
@@ -22,16 +24,19 @@ use rustcraft::chunks::generate::checksum::world_checksum;
 use rustcraft::chunks::generate::generator::generate_chunk;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
 use rustcraft::client::join::{connect, GenerationChecksum};
+use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
-use rustcraft::player::PlayerOwner;
+use rustcraft::player::name::PlayerName;
+use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
-    BlockChanged, ChunkEdits, CommandOutput, EditRejected, ProtocolPlugin, RequestEdit,
-    StartBreaking,
+    BlockChanged, ChunkEdits, CommandOutput, EditRejected, PlayerMoved, PlayerPose, ProtocolPlugin,
+    RequestEdit, RunCommand, StartBreaking, Teleport,
 };
+use rustcraft::save::SavePlugin;
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
@@ -43,8 +48,8 @@ const FRAME: Duration = Duration::from_millis(20);
 const FAR: I64Vec3 = I64Vec3::new(100 * 16, 0, 0);
 
 // A world hosted with seed 3 in `dir`, its host playing in creative, so its edits are made at
-// once, and a client to join it on the other end of an in-memory socket. The client is given `version` too, as a game of another version
-// would have.
+// once, and a client to join it on the other end of an in-memory socket. The client is given
+// `version` too, as a game of another version would have.
 fn server_and_client(dir: &std::path::Path, version: Option<&str>) -> (App, App) {
     server_and_client_with(dir, version, GenerationChecksum::default())
 }
@@ -55,6 +60,14 @@ fn server_and_client_with(
     version: Option<&str>,
     checksum: GenerationChecksum,
 ) -> (App, App) {
+    let (server, mut sockets) = host(dir, 1, false);
+    let client = joiner(&server, sockets.pop().unwrap(), "guest", version, checksum);
+    (server, client)
+}
+
+// A world hosted with seed 3 in `dir` by a player called "host" in creative, saved if `saving`,
+// with an in-memory socket for each of `clients` to join it on.
+fn host(dir: &std::path::Path, clients: u16, saving: bool) -> (App, Vec<MemorySocketClient>) {
     let mut server = App::new();
     server
         .add_plugins((
@@ -70,8 +83,12 @@ fn server_and_client_with(
             seed: Some(3),
             time_of_day: None,
             region_distance: 16,
+            name: PlayerName::new("host"),
         })
         .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
+    if saving {
+        server.add_plugins(SavePlugin);
+    }
     server.finish();
     server.update();
     let host = player_of(&mut server, ClientId::Server);
@@ -79,7 +96,22 @@ fn server_and_client_with(
         .world_mut()
         .entity_mut(host)
         .insert(GameMode::Creative);
+    let (socket, clients) = new_memory_sockets((1..=clients).collect(), true, true);
+    let channels = server.world().resource::<RepliconChannels>();
+    let (renet, transport) = serve(channels, socket).unwrap();
+    server.insert_resource(renet).insert_resource(transport);
+    (server, clients)
+}
 
+// A client joining `server` on `socket` as `name`, of `version` too if it's given, working out
+// what seeds generate with `checksum`.
+fn joiner(
+    server: &App,
+    socket: MemorySocketClient,
+    name: &str,
+    version: Option<&str>,
+    checksum: GenerationChecksum,
+) -> App {
     let mut client = App::new();
     client
         .add_plugins((
@@ -107,20 +139,26 @@ fn server_and_client_with(
             .add_custom(version);
     }
     client.finish();
-
-    let (server_socket, mut client_sockets) = new_memory_sockets(vec![1], true, true);
     let channels = server.world().resource::<RepliconChannels>();
-    let (renet, transport) = serve(channels, server_socket).unwrap();
-    server.insert_resource(renet).insert_resource(transport);
-    let channels = client.world().resource::<RepliconChannels>();
-    let (renet, transport) = connect(
-        channels,
-        client_sockets.pop().unwrap(),
-        in_memory_server_addr(),
-    )
-    .unwrap();
+    let name = PlayerName::new(name);
+    let (renet, transport) = connect(channels, socket, in_memory_server_addr(), &name).unwrap();
     client.insert_resource(renet).insert_resource(transport);
-    (server, client)
+    client
+}
+
+// Runs them all until `done`, giving the server, the first, time to generate chunks.
+fn update_all_until(apps: &mut [App], mut done: impl FnMut(&mut [App]) -> bool) {
+    let start = Instant::now();
+    while !done(apps) {
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "they never got there"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+        for app in apps.iter_mut().rev() {
+            app.update();
+        }
+    }
 }
 
 // Runs both until `done`, giving the server time to generate chunks.
@@ -182,12 +220,26 @@ fn player_of(app: &mut App, client: ClientId) -> Entity {
     players.find(|(_, owner)| owner.0 == client).unwrap().0
 }
 
-// Moves `player` to `to`: on the server, or a client's own, which it tells the server of.
+// The player of the one client joined, on the server.
+fn guests_player(server: &mut App) -> Entity {
+    let guest = owners(server)
+        .into_iter()
+        .find(|&owner| owner != ClientId::Server);
+    player_of(server, guest.expect("no client has joined"))
+}
+
+// Moves `player` to `to` on the server, as the host moves their own.
 fn move_player(app: &mut App, player: Entity, to: Vec3) {
     app.world_mut()
         .get_mut::<Transform>(player)
         .unwrap()
         .translation = to;
+}
+
+// Sends a client's player to `to` with `/tp`, as it can't go far in one go by itself.
+fn teleport(client: &mut App, to: Vec3) {
+    let line = format!("/tp {} {} {}", to.x, to.y, to.z);
+    client.world_mut().write_message(RunCommand(line));
 }
 
 fn local_player(client: &mut App) -> Entity {
@@ -414,8 +466,7 @@ fn test_a_client_is_sent_the_edits_near_it_as_it_joins_and_moves() {
     }
     assert!(!client_has_edit(&mut client, far, BlockType::Bricks));
 
-    let me = local_player(&mut client);
-    move_player(&mut client, me, far.as_vec3());
+    teleport(&mut client, far.as_vec3());
     update_until(&mut server, &mut client, |_, client| {
         client_has_edit(client, far, BlockType::Bricks)
     });
@@ -457,8 +508,7 @@ fn test_a_change_far_from_a_client_reaches_it_only_as_it_comes_near() {
     assert!(told.is_empty(), "{told:?}");
     assert!(!client_has_edit(&mut client, block, to));
 
-    let me = local_player(&mut client);
-    move_player(&mut client, me, host_at);
+    teleport(&mut client, host_at);
     update_until(&mut server, &mut client, |_, client| {
         client_has_edit(client, block, to)
     });
@@ -521,7 +571,7 @@ fn test_a_survival_break_is_seen_at_once_and_undone_if_its_sooner_than_it_takes(
         .expect("there's no ground under the spawn");
     // the joiner stands on it, to break it by hand
     let feet = (ground + I64Vec3::Y).as_vec3() + Vec3::new(0.5, 0.0, 0.5);
-    move_player(&mut client, player, feet);
+    teleport(&mut client, feet);
     let guest = owners(&mut server)
         .into_iter()
         .find(|&owner| owner != ClientId::Server)
@@ -730,5 +780,291 @@ fn test_a_chunks_edits_and_a_change_to_it_overtaking_each_other_leave_the_newer(
     });
     client.update();
     assert_eq!(BlockType::Stone, shown(&mut client));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// The names of the players `app` has, as the server has them or a client's been shown them.
+fn names(app: &mut App) -> Vec<String> {
+    let mut names = app.world_mut().query::<&PlayerName>();
+    let mut names: Vec<_> = names
+        .iter(app.world())
+        .map(|name| name.as_str().to_owned())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+// Where the client draws the other players.
+fn seen(client: &mut App) -> Vec<(Entity, Vec3)> {
+    let mut seen = client.world_mut().query::<(&SeenPlayer, &Transform)>();
+    seen.iter(client.world())
+        .map(|(seen, body)| (seen.0, body.translation))
+        .collect()
+}
+
+fn printed(client: &App, cursor: &mut MessageCursor<CommandOutput>) -> Vec<String> {
+    let lines = received(client, cursor);
+    lines.into_iter().map(|line| line.text).collect()
+}
+
+#[test]
+fn test_players_get_names_of_their_own_and_see_everyone_else() {
+    let dir = temp_dir("seeing");
+    let (server, mut sockets) = host(&dir, 2, false);
+    let checksum = GenerationChecksum::default();
+    let second = joiner(&server, sockets.pop().unwrap(), "guest", None, checksum);
+    let first = joiner(&server, sockets.pop().unwrap(), "guest", None, checksum);
+    let mut apps = [server, first, second];
+    let mut said = MessageCursor::<CommandOutput>::default();
+    let mut lines = Vec::new();
+    update_all_until(&mut apps, |apps| {
+        lines.extend(printed(&apps[1], &mut said));
+        apps[1..].iter_mut().all(|client| seen(client).len() == 2)
+    });
+    let everyone = names(&mut apps[0]);
+    assert_eq!(["guest", "guest2", "host"], everyone[..]);
+    // each sees the host and the other, but not themselves, whom they draw where they are
+    let mut own = Vec::new();
+    for client in &mut apps[1..] {
+        let shown = names(client);
+        assert!(
+            shown.len() == 2 && shown.contains(&"host".into()),
+            "{shown:?}"
+        );
+        own.extend(
+            everyone
+                .iter()
+                .filter(|name| !shown.contains(name))
+                .cloned(),
+        );
+        let local = local_player(client);
+        assert!(seen(client).iter().all(|&(player, _)| player != local));
+    }
+    assert_eq!(2, own.len());
+    assert_ne!(own[0], own[1]);
+    let second = &own[1];
+    assert!(lines.contains(&format!("{second} joined the game")));
+
+    // the second leaves, and goes from the first's screen
+    apps[2]
+        .world_mut()
+        .resource_mut::<RenetClient>()
+        .disconnect();
+    update_all_until(&mut apps, |apps| {
+        lines.extend(printed(&apps[1], &mut said));
+        seen(&mut apps[1]).len() == 1 && lines.contains(&format!("{second} left the game"))
+    });
+    assert_eq!(["host"], names(&mut apps[1])[..]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// Where the client draws the player called `name`, once it's been told where they are.
+fn seen_at(client: &mut App, name: &str) -> Option<Vec3> {
+    let mut seen = client
+        .world_mut()
+        .query::<(&SeenPlayer, &Transform, &Visibility)>();
+    let mut names = client.world_mut().query::<&PlayerName>();
+    let world = client.world();
+    seen.iter(world)
+        .find(|(seen, ..)| names.get(world, seen.0).unwrap().as_str() == name)
+        .filter(|(.., shown)| **shown != Visibility::Hidden)
+        .map(|(_, body, _)| body.translation)
+}
+
+#[test]
+fn test_players_are_seen_moving_smoothly_between_their_poses() {
+    let dir = temp_dir("poses");
+    let (server, mut sockets) = host(&dir, 2, false);
+    let checksum = GenerationChecksum::default();
+    let watcher = joiner(&server, sockets.pop().unwrap(), "watcher", None, checksum);
+    let walker = joiner(&server, sockets.pop().unwrap(), "walker", None, checksum);
+    let mut apps = [server, walker, watcher];
+    update_all_until(&mut apps, |apps| {
+        seen_at(&mut apps[2], "walker").is_some() && seen_at(&mut apps[2], "host").is_some()
+    });
+    let start = seen_at(&mut apps[2], "walker").unwrap();
+    let mut players = apps[2].world_mut().query::<(Entity, &PlayerName)>();
+    let walkers = players
+        .iter(apps[2].world())
+        .find(|(_, name)| name.as_str() == "walker")
+        .unwrap()
+        .0;
+    let host_start = seen_at(&mut apps[2], "host").unwrap();
+    let mut poses = MessageCursor::<PlayerMoved>::default();
+    let (mut sent, mut shown) = (Vec::new(), Vec::new());
+    // both walking 2 blocks a second, the walker along x and the host along z
+    let step = 2.0 * FRAME.as_secs_f32();
+    update_all_until(&mut apps, |apps| {
+        let walker = local_player(&mut apps[1]);
+        let at = apps[1]
+            .world()
+            .get::<Transform>(walker)
+            .unwrap()
+            .translation;
+        move_player(&mut apps[1], walker, at + Vec3::X * step);
+        let host = player_of(&mut apps[0], ClientId::Server);
+        let at = apps[0].world().get::<Transform>(host).unwrap().translation;
+        move_player(&mut apps[0], host, at + Vec3::Z * step);
+        let arrived = received(&apps[2], &mut poses);
+        let walkers_poses = arrived.iter().filter(|moved| moved.player == walkers);
+        sent.extend(walkers_poses.map(|moved| moved.position.x));
+        shown.push(seen_at(&mut apps[2], "walker").unwrap().x);
+        shown.last().unwrap() - start.x > 2.0
+            && seen_at(&mut apps[2], "host").unwrap().z - host_start.z > 2.0
+    });
+    // drawn behind the poses, and in between them, not jumping from one to the next
+    let between = shown.iter().filter(|&&x| {
+        let (before, after) = (
+            sent.iter().rfind(|&&s| s < x),
+            sent.iter().find(|&&s| s > x),
+        );
+        before.is_some() && after.is_some() && !sent.iter().any(|&s| (s - x).abs() < 1e-4)
+    });
+    assert!(between.count() > shown.len() / 2, "{shown:?} from {sent:?}");
+    assert!(shown.windows(2).all(|pair| pair[1] >= pair[0]), "{shown:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_pose_too_far_or_into_the_ground_is_refused_and_the_client_put_back() {
+    let dir = temp_dir("too-fast");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let spawn = server.world().resource::<World>().spawn();
+    let guest = guests_player(&mut server);
+    let pose = |position, teleports| PlayerPose {
+        at: 0,
+        position,
+        yaw: 0.0,
+        pitch: 0.0,
+        movement: Movement::Walk,
+        slot: 0,
+        teleports,
+    };
+    let mut teleports = MessageCursor::<Teleport>::default();
+    // a hundred blocks in a moment, walking
+    client
+        .world_mut()
+        .write_message(pose(spawn + Vec3::X * 100.0, 0));
+    let put = update_until_sent(&mut server, &mut client, &mut teleports, |_| true);
+    assert_eq!(spawn, put.position);
+    let on_server = |server: &App| server.world().get::<Transform>(guest).unwrap().translation;
+    assert_eq!(spawn, on_server(&server));
+    let me = local_player(&mut client);
+    assert_eq!(
+        spawn,
+        client.world().get::<Transform>(me).unwrap().translation
+    );
+
+    // into the ground under it, once the server has it
+    let below = |down| spawn.floor().as_i64vec3() - I64Vec3::Y * down;
+    update_until(&mut server, &mut client, |server, _| {
+        let world = server.world().resource::<World>();
+        (1..40).all(|down| world.is_chunk_generated(ChunkCoordinate::containing(below(down))))
+    });
+    let world = server.world().resource::<World>();
+    let ground = (1..40)
+        .map(below)
+        .find(|&block| world.get_block_at(block).is_solid())
+        .unwrap();
+    let in_ground = ground.as_vec3() + Vec3::new(0.5, 0.0, 0.5);
+    client.world_mut().write_message(pose(in_ground, 1));
+    update_until_sent(&mut server, &mut client, &mut teleports, |_| true);
+    assert_eq!(spawn, on_server(&server));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_tp_and_gamemode_move_and_change_a_joiner_on_its_own_screen() {
+    let dir = temp_dir("tp");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let me = local_player(&mut client);
+    let to = Vec3::new(10.5, 500.0, -20.0);
+    teleport(&mut client, to);
+    update_until(&mut server, &mut client, |_, client| {
+        client.world().get::<Transform>(me).unwrap().translation == to
+    });
+    // and it stays there, its poses from there taken
+    let guest = guests_player(&mut server);
+    for _ in 0..20 {
+        client.update();
+        server.update();
+    }
+    assert_eq!(
+        to,
+        server.world().get::<Transform>(guest).unwrap().translation
+    );
+
+    let mode = |client: &App| *client.world().get::<GameMode>(me).unwrap();
+    assert_eq!(GameMode::Survival, mode(&client));
+    client
+        .world_mut()
+        .write_message(RunCommand("/gamemode creative".into()));
+    update_until(&mut server, &mut client, |_, client| {
+        mode(client) == GameMode::Creative
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_joiner_comes_back_where_they_left_with_what_they_had() {
+    let dir = temp_dir("own-saves");
+    let place = Vec3::new(40.5, 480.0, -20.25);
+    let looking = PlayerLook {
+        yaw: 1.0,
+        pitch: -0.3,
+    };
+    let gift = ItemStack::new(Item::Block(BlockType::Bricks), 5);
+    {
+        let (server, mut sockets) = host(&dir, 1, true);
+        let client = joiner(
+            &server,
+            sockets.pop().unwrap(),
+            "guest",
+            None,
+            Default::default(),
+        );
+        let (mut server, mut client) = (server, client);
+        update_until(&mut server, &mut client, |_, client| joined(client));
+        teleport(&mut client, place);
+        let me = local_player(&mut client);
+        client.world_mut().entity_mut(me).insert(looking);
+        let guest = guests_player(&mut server);
+        let mut inventory = server.world_mut().get_mut::<Inventory>(guest).unwrap();
+        assert_eq!(None, inventory.add(gift));
+        update_until(&mut server, &mut client, |server, _| {
+            let world = server.world();
+            world.get::<Transform>(guest).unwrap().translation == place
+                && *world.get::<PlayerLook>(guest).unwrap() == looking
+        });
+        client
+            .world_mut()
+            .resource_mut::<RenetClient>()
+            .disconnect();
+        let saved = dir.join("players").join("guest.toml");
+        update_until(&mut server, &mut client, |_, _| saved.exists());
+    }
+
+    // in a server opened from the save again
+    let (server, mut sockets) = host(&dir, 1, true);
+    let client = joiner(
+        &server,
+        sockets.pop().unwrap(),
+        "guest",
+        None,
+        Default::default(),
+    );
+    let (mut server, mut client) = (server, client);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let me = local_player(&mut client);
+    let world = client.world();
+    assert_eq!(place, world.get::<Transform>(me).unwrap().translation);
+    assert_eq!(looking, *world.get::<PlayerLook>(me).unwrap());
+    assert!(world
+        .get::<Inventory>(me)
+        .unwrap()
+        .slots
+        .contains(&Some(gift)));
     std::fs::remove_dir_all(&dir).unwrap();
 }

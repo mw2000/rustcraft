@@ -48,7 +48,9 @@ Worlds are saved every 30 seconds and when you quit, in a directory each under y
 
 To let friends join the world you're playing, choose Open to Friends in the menu (Escape), which shows the address to give them, or run with `RC_HOST=<port>` to open it as the game starts (`RC_HOST=` for the default port, 25600). Friends join with `RC_JOIN=<address>`, such as `RC_JOIN=192.168.1.20:25600`; the port can be left off if it's the default. Everyone needs the same version of rustcraft. Over the internet, the host forwards UDP port 25600 on their router.
 
-It's early days: friends don't see each other yet, nor edits made before they joined, and nothing they do is saved. Connections aren't encrypted, so play with people you trust.
+Everyone plays by a name, shown over their head to the others: `RC_NAME=<name>`, or else the name you're logged in as. A name already taken gets a number after it. The host's world keeps each friend's place, look and inventory under their name, so they come back where they left. A friend's game decides how they move, but the host puts them back if they go faster than they can or walk into a wall.
+
+It's early days: there's no chat yet, and connections aren't encrypted nor players' names checked, so play with people you trust.
 
 ## License
 

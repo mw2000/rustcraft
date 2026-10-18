@@ -25,6 +25,7 @@ use crate::edits::Edits;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
 use crate::inventory::Inventory;
+use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
 use crate::world::World;
 use region::{ChunkEdits, Region};
@@ -33,9 +34,11 @@ pub use world_file::{PlayerState, WorldFile};
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(30);
 const WORLD_FILE: &str = "world.toml";
 const EDITS_DIR: &str = "edits";
+const PLAYERS_DIR: &str = "players";
 
-/// Saves the world (§4.3): its edits and `world.toml`, every so often if they've changed, and
-/// as the game quits.
+/// Saves the world (§4.3): its edits, `world.toml` with the host's player, and each player who's
+/// joined from elsewhere as `players/<name>.toml`, every so often if they've changed, as such a
+/// player leaves, and as the game quits.
 pub struct SavePlugin;
 
 impl Plugin for SavePlugin {
@@ -69,14 +72,20 @@ pub struct WorldSave {
     unsaved: HashSet<Region>,
     // what `world.toml` was last written with, so it's only written again when it changes
     written: Option<WorldFile>,
+    // the players who've joined from elsewhere, by name, as they were saved or as they left
+    players: HashMap<String, PlayerState>,
+    // those of them changed since they were last written
+    unsaved_players: HashSet<String>,
     writing: Option<Writing>,
     next_autosave: Duration,
 }
 
-// A save being written in the background, and the regions in it, to write again if it fails.
+// A save being written in the background, and the regions and players in it, to write again if
+// it fails.
 struct Writing {
     task: Task<io::Result<()>>,
     regions: Vec<Region>,
+    players: Vec<String>,
 }
 
 /// What's changed since the last save, copied from the game to be written apart from it.
@@ -84,6 +93,7 @@ struct Snapshot {
     dir: PathBuf,
     world_file: Option<WorldFile>,
     regions: HashMap<Region, Vec<ChunkEdits>>,
+    players: Vec<(String, PlayerState)>,
 }
 
 impl WorldSave {
@@ -91,7 +101,8 @@ impl WorldSave {
     /// random one. Returns it with its `world.toml` and every edit made in it.
     ///
     /// All the edits are loaded at once, which is quick while worlds are small. A world with a
-    /// great many would load its regions as chunks near them load instead.
+    /// great many would load its regions as chunks near them load instead. So are the saves
+    /// of the players who've joined it, so none is read as they join.
     pub fn open(dir: PathBuf, requested_seed: Option<u32>) -> io::Result<(Self, WorldFile, Edits)> {
         let path = dir.join(WORLD_FILE);
         let file = match fs::read_to_string(&path) {
@@ -132,18 +143,66 @@ impl WorldSave {
             Err(error) => return Err(error),
         }
 
+        let mut players = HashMap::new();
+        match fs::read_dir(dir.join(PLAYERS_DIR)) {
+            Ok(entries) => {
+                for entry in entries {
+                    let path = entry?.path();
+                    let name = path.file_stem().and_then(|name| name.to_str());
+                    // only those a name could have written
+                    let Some(name) = name.filter(|&name| PlayerName::new(name).as_str() == name)
+                    else {
+                        continue;
+                    };
+                    if path.extension() == Some("toml".as_ref()) {
+                        let state = toml::from_str(&fs::read_to_string(&path)?).map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("{}: {e}", path.display()),
+                            )
+                        })?;
+                        players.insert(name.to_owned(), state);
+                    }
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
         let save = Self {
             dir,
             unsaved: HashSet::new(),
             written: Some(file.clone()),
+            players,
+            unsaved_players: HashSet::new(),
             writing: None,
             next_autosave: AUTOSAVE_INTERVAL,
         };
         Ok((save, file, edits))
     }
 
+    /// The saved state of the player from elsewhere called `name`, if they've played here.
+    pub fn player(&self, name: &PlayerName) -> Option<PlayerState> {
+        self.players.get(name.as_str()).cloned()
+    }
+
+    /// Keeps the state of the player from elsewhere called `name` as they leave, to save soon.
+    pub fn left(&mut self, name: &PlayerName, state: PlayerState) {
+        self.keep_player(name, state);
+        self.next_autosave = Duration::ZERO;
+    }
+
+    // Keeps a player's state, to be written if it's changed.
+    fn keep_player(&mut self, name: &PlayerName, state: PlayerState) {
+        if self.players.get(name.as_str()) != Some(&state) {
+            self.unsaved_players.insert(name.as_str().to_owned());
+            self.players.insert(name.as_str().to_owned(), state);
+        }
+    }
+
     // Takes what's changed since the last snapshot: the regions with new edits, all of whose
-    // edits are copied to be written again, and `file` if it's not what was last written.
+    // edits are copied to be written again, `file` if it's not what was last written, and the
+    // players changed.
     fn snapshot(&mut self, edits: &mut Edits, file: WorldFile) -> Snapshot {
         let changed = edits.take_changed().into_iter().map(Region::containing);
         self.unsaved.extend(changed);
@@ -157,18 +216,28 @@ impl WorldSave {
         }
         let world_file = (self.written.as_ref() != Some(&file)).then(|| file.clone());
         self.written = Some(file);
+        let players = self
+            .unsaved_players
+            .drain()
+            .map(|name| {
+                let state = self.players[&name].clone();
+                (name, state)
+            })
+            .collect();
         Snapshot {
             dir: self.dir.clone(),
             world_file,
             regions,
+            players,
         }
     }
 
     // A failed save leaves what it was writing to be written next time.
-    fn finished(&mut self, result: io::Result<()>, regions: Vec<Region>) {
+    fn finished(&mut self, result: io::Result<()>, regions: Vec<Region>, players: Vec<String>) {
         if let Err(error) = result {
             error!("couldn't save the world in {}: {error}", self.dir.display());
             self.unsaved.extend(regions);
+            self.unsaved_players.extend(players);
             self.written = None;
         }
     }
@@ -176,7 +245,14 @@ impl WorldSave {
 
 impl Snapshot {
     fn is_empty(&self) -> bool {
-        self.world_file.is_none() && self.regions.is_empty()
+        self.world_file.is_none() && self.regions.is_empty() && self.players.is_empty()
+    }
+
+    // What to write again if writing it fails.
+    fn contents(&self) -> (Vec<Region>, Vec<String>) {
+        let regions = self.regions.keys().copied().collect();
+        let players = self.players.iter().map(|(name, _)| name.clone()).collect();
+        (regions, players)
     }
 
     fn write(self) -> io::Result<()> {
@@ -189,6 +265,14 @@ impl Snapshot {
         }
         if let Some(file) = self.world_file {
             write_atomically(&self.dir.join(WORLD_FILE), file.to_toml().as_bytes())?;
+        }
+        if !self.players.is_empty() {
+            let players_dir = self.dir.join(PLAYERS_DIR);
+            fs::create_dir_all(&players_dir)?;
+            for (name, state) in self.players {
+                let text = toml::to_string(&state).expect("players always encode");
+                write_atomically(&players_dir.join(name + ".toml"), text.as_bytes())?;
+            }
         }
         Ok(())
     }
@@ -206,6 +290,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// The game state that's saved.
 #[derive(SystemParam)]
+#[allow(clippy::type_complexity)]
 struct Savable<'w, 's> {
     world: ResMut<'w, World>,
     clock: Res<'w, TimeOfDay>,
@@ -220,6 +305,7 @@ struct Savable<'w, 's> {
             &'static Hotbar,
             &'static Inventory,
             &'static PlayerOwner,
+            Option<&'static PlayerName>,
         ),
     >,
 }
@@ -227,14 +313,14 @@ struct Savable<'w, 's> {
 impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
-        // the host's, until M0.6 saves each player's
-        file.player = self
-            .players
-            .iter()
-            .find(|(.., owner)| owner.0 == ClientId::Server)
-            .map(|(body, player, look, mode, hotbar, inventory, _)| {
-                PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory)
-            });
+        for (body, player, look, mode, hotbar, inventory, owner, name) in &self.players {
+            let state = PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory);
+            match (owner.0, name) {
+                (ClientId::Server, _) => file.player = Some(state),
+                (_, Some(name)) => save.keep_player(name, state),
+                _ => {}
+            }
+        }
         save.snapshot(self.world.edits_mut(), file)
     }
 }
@@ -245,8 +331,10 @@ fn autosave(time: Res<Time<Real>>, mut save: ResMut<WorldSave>, mut savable: Sav
         let Some(result) = futures::check_ready(&mut writing.task) else {
             return;
         };
-        let regions = save.writing.take().unwrap().regions;
-        save.finished(result, regions);
+        let Writing {
+            regions, players, ..
+        } = save.writing.take().unwrap();
+        save.finished(result, regions, players);
     }
     if time.elapsed() < save.next_autosave {
         return;
@@ -256,9 +344,13 @@ fn autosave(time: Res<Time<Real>>, mut save: ResMut<WorldSave>, mut savable: Sav
     if snapshot.is_empty() {
         return;
     }
-    let regions = snapshot.regions.keys().copied().collect();
+    let (regions, players) = snapshot.contents();
     let task = IoTaskPool::get().spawn(async move { snapshot.write() });
-    save.writing = Some(Writing { task, regions });
+    save.writing = Some(Writing {
+        task,
+        regions,
+        players,
+    });
 }
 
 // The last save is written here on the main thread, after any still being written, rather than
@@ -272,15 +364,15 @@ fn save_on_exit(
         return;
     }
     if let Some(writing) = save.writing.take() {
-        save.finished(block_on(writing.task), writing.regions);
+        save.finished(block_on(writing.task), writing.regions, writing.players);
     }
     let snapshot = savable.snapshot(&mut save);
-    let regions = snapshot.regions.keys().copied().collect();
+    let (regions, players) = snapshot.contents();
     let result = snapshot.write();
     if result.is_ok() {
         info!("saved the world in {}", save.dir.display());
     }
-    save.finished(result, regions);
+    save.finished(result, regions, players);
 }
 
 #[cfg(test)]
@@ -304,6 +396,7 @@ mod tests {
     use crate::hotbar::Hotbar;
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
+    use crate::player::name::PlayerName;
     use crate::player::{Movement, Player, PlayerLook};
     use crate::protocol::ProtocolPlugin;
     use crate::server::{ServerPlugin, WorldToOpen};
@@ -435,6 +528,7 @@ mod tests {
             seed: None,
             time_of_day: None,
             region_distance: 16,
+            name: PlayerName::new("host"),
         });
         app.finish();
         app.update();

@@ -262,7 +262,7 @@ The world's state beyond the seed (INV-1).
   `RequestEdit { block, to, slot, seq }`, `RunCommand`, `Chat`, the inventory's requests
   (`InventoryClick`, `CloseInventory`, `DropItem`, `PickBlock`, §5.2), `UseBlock` and `Craft`
   (§5.3), `StartBreaking` (§5.1), and from M0.6
-  `PlayerState` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
+  `PlayerPose` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
   time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
   `CommandOutput`, `ChatLine`. Players are replicated entities, and so are dropped items; a
@@ -426,13 +426,8 @@ The world's state beyond the seed (INV-1).
     item's `Transform` alone, so only moving items and changed stacks are sent again.
   - **Known gaps:** netcode runs unsecure: clients aren't authenticated (they pick their own
     random id) and nothing's encrypted, fine among friends until connect tokens are handed out.
-    Not synced yet (edits came with M0.6c): other players,
-    whom nobody sees (M0.6d); `/tp`, which moves only the server's copy of a client's player,
-    and `/gamemode`, which the client's own movement doesn't follow (M0.6d's `Teleport`, and
-    the mode to come with it); a client's player is never saved and always arrives at the
-    spawn (M0.6d); a client leaving while winding leaves the clock wound. Poses aren't checked
-    for plausibility (M0.6d), and `REACH_SLACK` hasn't been raised for a pose's delay, so a
-    client flying fast can have an edit at the edge of reach refused.
+    Not synced yet (edits came with M0.6c, other players, `/tp`, `/gamemode`, saving and
+    plausibility with M0.6d): a client leaving while winding leaves the clock wound.
   - `tests/multiplayer.rs` runs a listen server and a client as two Apps over the memory
     transport: the client is authorised and welcomed with the server's seed and its player,
     its edit is made by the server and comes back as `BlockChanged`, the host's edit reaches
@@ -506,10 +501,82 @@ The world's state beyond the seed (INV-1).
     once and undone when it's refused; edits sent while a slow client checks its world wait
     for it; a chunk's edits and a change overtaking each other (injected) leave the newer; and
     the cost of joining among 50,000 edits.
+- **Built (M0.6d):** other players (`src/server/players.rs`, `src/client/others.rs`,
+  `src/client/models.rs`, `src/player/name.rs`).
+  - **Names:** `PlayerName`, up to 16 letters, digits, `_` and `-`, so it's safe as a file name
+    anywhere; anything else is left out, and nothing left is "Player". A game plays as
+    `RC_NAME`, or else the user it runs as (`USER`, `USERNAME`). A client sends its name as
+    it connects, in netcode's 256 bytes of user data (`protocol::name_to_user_data`), so it's
+    there as the client's authorised and `welcome` needs no message to wait for. The server
+    makes it unique, ignoring case as some file systems do, by the first number after it free
+    (`alex`, `alex2`). The host's comes in `WorldToOpen::name`. Joining and leaving print "X
+    joined the game" and "X left the game" in everyone's command bar, as `CommandOutput`.
+  - **Replication:** players are spawned `Replicated` (`players::spawning`) with
+    `PlayerName`, `GameMode` and `HeldItem` (what's in the selected hotbar slot, which the
+    server keeps up to date from the inventory and the slot each pose names) replicated.
+    `PlayerOwner` is now immutable and a replicon visibility filter, so a player is shown to
+    every client but their owner's, which moves its own; nothing else, dropped items
+    included, is hidden by it. Their place and look go as `PlayerMoved { player, at,
+    position, yaw, pitch }`, unreliable and mapped to the client's entity: the server relays
+    each pose it accepts to everyone but its sender as it arrives, and sends the host's every
+    `POSE_INTERVAL` (50 ms), to clients only. A pose is stamped with its sender's clock (`at`,
+    milliseconds), so receivers space poses by when they were made, not by when they arrived.
+  - **Interpolation:** a client sees each other player (the host's App the joiners', a
+    joiner the host and the rest) as a `SeenPlayer` entity of its own, a relationship whose
+    target `Seen` is on the player, so it goes when they do, on the host as the server's
+    entity is despawned and on a joiner as replicon despawns its copy. On the host the
+    server's entity can't be drawn from, as its `Transform` jumps to each pose. `Poses` keeps
+    the latest 8 and shows the moment 100 ms behind the newest, two poses' worth: between the
+    two either side, yaw the short way round, or past the newest the way the last two were
+    going, for at most another 100 ms. What's shown moves on at the client's own pace,
+    drifting back towards 100 ms behind at a tenth of its error per 100 ms, and jumps there if
+    it's fallen 200 ms behind; a pose overtaken by a newer one is dropped. It's hidden until
+    its first pose.
+  - **Models** (`DrawPlayersPlugin`, beside `DrawDropsPlugin`, whose item meshes it draws in
+    the right hand): boxes in flat colours, two blocks tall as the body is: legs of trousers,
+    a torso in one of six shirts chosen by the name's hash, bare arms, a head with hair and
+    eyes, facing -z as the look does. Five meshes and ten `StandardMaterial`s for everyone,
+    like dropped items, which don't bend with the curvature shader either, as neither is
+    drawn far off. The body turns with yaw and the head with pitch; legs and arms swing with
+    the distance walked across, more the faster up to a walk. The name is a UI label placed
+    each frame where the camera sees the head, hidden behind the camera or past 64 blocks.
+  - **Plausibility:** `PlayerPose` now carries `at`, `movement`, the hotbar `slot` and
+    `teleports`. The server moves a client's player only if it could have got there:
+    `PoseCheck` keeps how far ahead of the server's clock its movement has got, in seconds of
+    moving at `physics::top_speed` (flying 80 blocks a second straight or rising, 113
+    diagonally; walking 5.6 across, 9 up, 60 falling, flying taken as walking unless the game
+    mode flies), with 10% over for rounding, and refuses a pose that would take it more than
+    half a second ahead, or that walks the body into a solid block it wasn't already in.
+    Bursts from jitter and hitches are let through; going faster than the mode allows for
+    longer isn't. A refused pose answers `Teleport { position }` with where the server has the
+    player, and so does `/tp` on a player from elsewhere. The client counts the teleports it's
+    heard of and says how many with each pose, so the poses it sent before hearing, from where
+    it no longer is, are ignored rather than refused again. It stops the player as it moves
+    them. `GameModeChanged` tells a client its player's game mode as the server changes it,
+    and `land_when_flying_is_lost` lands them. `REACH_SLACK` is 3: a block for rounding and
+    two for 0.1 s, a pose's interval and a one-way trip, of flying at the usual 20 blocks a
+    second; at the sprint's 80 it'd be 9, too lenient for what's rare while building.
+  - **Saving:** `world.toml` keeps the host's player, unchanged (format 2). Each player from
+    elsewhere is `players/<name>.toml`, a `PlayerState`, all read as the world opens (as
+    edits are), and written by the autosave when changed, as they leave (which saves at the
+    next frame's autosave) and as the game quits. A joiner arrives where their save has them.
+    Older games ignore the directory, so the format isn't raised.
+  - `PROTOCOL_VERSION` is 5.
+  - **Known gaps:** names aren't authenticated, so anyone can join as anyone and take their
+    save, which is fine among friends. Respawning (M1.8) on a joiner will need its
+    `Teleport`. Labels show through terrain. The host's own player is only relayed, never
+    checked, as it's the server's.
+  - `tests/multiplayer.rs` adds, with up to three Apps: two joiners named alike get names of
+    their own, each sees the host and the other but not themselves, and one leaving goes from
+    the other's screen with a line saying so; a walker and the host are seen moving between
+    their poses, not jumping from one to the next; a pose a hundred blocks off or into the
+    ground is refused with a `Teleport` back; `/tp` and `/gamemode` reach a joiner's own
+    player; and a joiner comes back to a server opened again from the save where they left,
+    looking the same way with what they carried. Tests that moved a client far now `/tp` it.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, `host.rs`, `players.rs`, `sync.rs`); `src/save/`
   under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup,
-  `edits.rs`, `player.rs`, `join.rs`).
+  `edits.rs`, `player.rs`, `join.rs`, `others.rs`, `models.rs`).
   Shared modules stay where they are. Later a default-on `client` cargo feature keeps wgpu and
   winit out of the dedicated server binary.
 
@@ -944,7 +1011,7 @@ and loads.**
     and Linux (D-3).
   - ☑ **M0.6c Edit sync**: `ChunkEdits` on joining and moving, `BlockChanged` by area, client
     prediction with rollback.
-  - ☐ **M0.6d Other players**: names, interpolated poses, simple models, plausibility checks with
+  - ☑ **M0.6d Other players**: names, interpolated poses, simple models, plausibility checks with
     `Teleport` corrections, a save per player.
   - ☐ **M0.6e Chat and operators**, an `ops` list in `world.toml` with the host as operator.
 - ☑ **M0.7 CI.** Build, test, clippy and fmt on every PR.

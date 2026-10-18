@@ -61,6 +61,22 @@ pub fn step(
     }
 }
 
+/// The fastest `step` moves a player with `movement`, in blocks a second: across, up and down.
+/// Flying goes fastest across diagonally, and can rise or sink as fast at the same time.
+pub fn top_speed(movement: Movement) -> (f32, f32, f32) {
+    match movement {
+        Movement::Fly => {
+            let straight = FLY_SPEED * FLY_SPRINT_MULTIPLIER;
+            (straight * std::f32::consts::SQRT_2, straight, straight)
+        }
+        Movement::Walk => (
+            WALK_SPEED * WALK_SPRINT_MULTIPLIER,
+            JUMP_SPEED,
+            TERMINAL_SPEED,
+        ),
+    }
+}
+
 fn walk(
     position: Vec3,
     player: &mut Player,

@@ -15,14 +15,17 @@ mod sync;
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
 pub use host::{host, serve};
+pub use players::HeldItem;
 
 use std::path::PathBuf;
 
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_timer;
 use bevy_replicon::prelude::{ClientId, ClientState, ClientSystems, ServerSystems};
 
 use crate::clock::TimeOfDay;
-use crate::player::{arriving, PlayerOwner};
+use crate::player::name::PlayerName;
+use crate::protocol::POSE_INTERVAL;
 use crate::save::{PlayerState, WorldSave};
 use crate::world::World;
 
@@ -88,12 +91,24 @@ impl Plugin for ServerPlugin {
             )
             .add_systems(
                 PostUpdate,
-                // once this frame's requests have changed them
-                players::send_inventories
+                // once this frame's requests and commands have changed them
+                (
+                    players::send_inventories,
+                    players::send_game_modes,
+                    players::hold_items,
+                )
                     .after(edits::receive_edits)
                     .after(inventory::receive_inventory_requests)
+                    .after(commands::run_commands)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
+                players::send_host_pose
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority)
+                    .run_if(on_timer(POSE_INTERVAL)),
             );
     }
 }
@@ -115,6 +130,8 @@ pub struct WorldToOpen {
     pub time_of_day: Option<f32>,
     /// How far, in chunks, terrain is built from full-detail regions, see `World::new`.
     pub region_distance: u32,
+    /// The host's player's name.
+    pub name: PlayerName,
 }
 
 /// Opens the world and its save, and spawns the host's player where they were saved, or at the
@@ -129,13 +146,17 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
         dir.display(),
         saved.seed
     );
-    // the host's, as the one player `world.toml` holds until M0.6 saves each player's
+    // the host's, as `world.toml` holds, and players joining keep their own saves
     let arrival = saved
         .player
         .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
     let [x, y, z] = arrival.position;
     info!("spawned at {x:?}, {y:?}, {z:?}");
-    commands.spawn((arriving(&arrival), PlayerOwner(ClientId::Server)));
+    commands.spawn(players::spawning(
+        &arrival,
+        ClientId::Server,
+        open.name.clone(),
+    ));
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);

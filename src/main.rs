@@ -21,6 +21,7 @@ use rustcraft::client::clock::{follow_clock, wind_clock};
 use rustcraft::client::cracks::DrawCracksPlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::join::{join, server_address};
+use rustcraft::client::models::DrawPlayersPlugin;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
@@ -34,6 +35,7 @@ use rustcraft::inventory::screen::InventoryScreenPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::picker::PickerPlugin;
 use rustcraft::player::input::{follow_look, player_look, player_move};
+use rustcraft::player::name::PlayerName;
 use rustcraft::player::underwater::{murk, update_underwater_effects, MurkMaterial};
 use rustcraft::protocol::{ProtocolPlugin, DEFAULT_PORT};
 use rustcraft::save::{world_name, worlds_dir, SavePlugin};
@@ -192,7 +194,7 @@ fn host_from_env(mut commands: Commands, channels: Res<RepliconChannels>) {
 // world of this game's own
 fn join_from_env(address: String) -> impl FnMut(Commands, Res<RepliconChannels>) {
     move |mut commands, channels| match server_address(&address) {
-        Ok(server) => match join(&mut commands, &channels, server) {
+        Ok(server) => match join(&mut commands, &channels, server, &PlayerName::own()) {
             Ok(()) => info!("joining {server}"),
             Err(error) => error!("couldn't join {server}: {error}"),
         },
@@ -233,6 +235,7 @@ fn main() {
         PickerPlugin,
         InventoryScreenPlugin,
         DrawDropsPlugin,
+        DrawPlayersPlugin,
         DrawCracksPlugin,
     ))
     // the client, and the server unless joining one elsewhere: in singleplayer they're in one
@@ -252,6 +255,7 @@ fn main() {
                 seed: World::requested_seed(),
                 time_of_day: start_time(),
                 region_distance: settings.renderer.lod_layout().region_reach() as u32,
+                name: PlayerName::own(),
             })
             .add_systems(Startup, host_from_env);
     }

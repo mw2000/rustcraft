@@ -33,14 +33,41 @@ impl Plugin for DrawDropsPlugin {
     }
 }
 
-/// What dropped items are drawn with: the block atlas and the items' one, and a mesh for each
-/// item, made the first time one's dropped.
+/// What dropped items, and those players hold, are drawn with: the block atlas and the items'
+/// one, and a mesh for each item, made the first time one's drawn.
 #[derive(Resource)]
-struct DropLooks {
+pub(super) struct DropLooks {
     material: Handle<StandardMaterial>,
     sprites: Handle<StandardMaterial>,
     meshes: HashMap<Item, Handle<Mesh>>,
     grass: LinearRgba,
+}
+
+impl DropLooks {
+    /// The mesh and material `item` is drawn with, `SIZE` across.
+    pub(super) fn of(
+        &mut self,
+        item: Item,
+        meshes: &mut Assets<Mesh>,
+    ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+        let grass = self.grass;
+        let mesh = self
+            .meshes
+            .entry(item)
+            .or_insert_with(|| match (item.block(), item.sprite()) {
+                (Some(block), _) => meshes.add(cube(block, grass)),
+                (None, sprite) => {
+                    meshes.add(picture(sprite.expect("an item has a block or a sprite")))
+                }
+            })
+            .clone();
+        let material = if item.block().is_some() {
+            self.material.clone()
+        } else {
+            self.sprites.clone()
+        };
+        (mesh, material)
+    }
 }
 
 // The cube drawn for a dropped item, a child of it so the server's `Transform` is left alone,
@@ -89,23 +116,9 @@ fn draw_drop(
     let Ok(dropped) = items.get(add.entity) else {
         return;
     };
-    let item = dropped.stack.item;
-    let grass = looks.grass;
-    let mesh = looks
-        .meshes
-        .entry(item)
-        .or_insert_with(|| match (item.block(), item.sprite()) {
-            (Some(block), _) => meshes.add(cube(block, grass)),
-            (None, sprite) => meshes.add(picture(sprite.expect("an item has a block or a sprite"))),
-        })
-        .clone();
+    let (mesh, material) = looks.of(dropped.stack.item, &mut meshes);
     // the golden angle, so items dropped together don't spin and bob as one
     let phase = (add.entity.index_u32() as f32 * 2.39996).rem_euclid(TAU);
-    let material = if item.block().is_some() {
-        looks.material.clone()
-    } else {
-        looks.sprites.clone()
-    };
     commands
         .entity(add.entity)
         .insert(Visibility::default())

@@ -15,17 +15,17 @@ use super::edits::{EditOrder, Predictions};
 use super::player::LocalPlayer;
 use crate::chunks::generate::checksum::world_checksum;
 use crate::edits::Edits;
+use crate::game_mode::GameMode;
+use crate::hotbar::Hotbar;
 use crate::inventory::Inventory;
-use crate::player::{arriving, PlayerLook};
+use crate::player::name::PlayerName;
+use crate::player::{arriving, Player, PlayerLook};
 use crate::protocol::{
-    CommandOutput, EditReach, InventoryChanged, PlayerPose, Welcome, DEFAULT_PORT,
-    NETCODE_PROTOCOL_ID, PROTOCOL_VERSION,
+    name_to_user_data, CommandOutput, EditReach, GameModeChanged, InventoryChanged, PlayerPose,
+    Teleport, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID, POSE_INTERVAL, PROTOCOL_VERSION,
 };
 use crate::settings::Settings;
 use crate::world::World;
-
-// About as often as a player's movement needs telling for reaching and keeping chunks near them.
-const POSE_INTERVAL: Duration = Duration::from_millis(50);
 
 /// The server at `address`, `host:port` or just `host` for the default port.
 pub fn server_address(address: &str) -> std::io::Result<SocketAddr> {
@@ -39,12 +39,13 @@ pub fn server_address(address: &str) -> std::io::Result<SocketAddr> {
         .ok_or_else(|| std::io::ErrorKind::NotFound.into())
 }
 
-/// Starts joining the server at `server` over UDP, as a client with no world of its own until
-/// the server's `Welcome`.
+/// Starts joining the server at `server` over UDP as `name`, as a client with no world of its
+/// own until the server's `Welcome`.
 pub fn join(
     commands: &mut Commands,
     channels: &RepliconChannels,
     server: SocketAddr,
+    name: &PlayerName,
 ) -> Result<(), NetcodeError> {
     let any: std::net::IpAddr = if server.is_ipv4() {
         Ipv4Addr::UNSPECIFIED.into()
@@ -52,18 +53,20 @@ pub fn join(
         Ipv6Addr::UNSPECIFIED.into()
     };
     let socket = NativeSocket::new(UdpSocket::bind((any, 0))?)?;
-    let (client, transport) = connect(channels, socket, server)?;
+    let (client, transport) = connect(channels, socket, server, name)?;
     commands.insert_resource(client);
     commands.insert_resource(transport);
     Ok(())
 }
 
-/// A client connecting to `server` on `socket`, whose resources start it once inserted. In
-/// netcode's unsecure mode, as the server is (`server::serve`).
+/// A client connecting to `server` on `socket` as `name`, which it sends as it connects, whose
+/// resources start it once inserted. In netcode's unsecure mode, as the server is
+/// (`server::serve`).
 pub fn connect(
     channels: &RepliconChannels,
     socket: impl ClientSocket,
     server: SocketAddr,
+    name: &PlayerName,
 ) -> Result<(RenetClient, NetcodeClientTransport), NetcodeError> {
     let client = RenetClient::new(
         ConnectionConfig::from_channels(channels.server_configs(), channels.client_configs()),
@@ -75,7 +78,7 @@ pub fn connect(
         client_id: rand::random(),
         socket_id: 0,
         server_addr: server,
-        user_data: None,
+        user_data: Some(name_to_user_data(name)),
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -179,14 +182,47 @@ pub(super) fn follow_inventory(
     }
 }
 
+/// Puts the game mode the server says this client's player has on them.
+pub(super) fn follow_game_mode(
+    mut changes: MessageReader<GameModeChanged>,
+    mut player: Query<&mut GameMode, With<LocalPlayer>>,
+) {
+    if let (Some(GameModeChanged(mode)), Ok(mut held)) =
+        (changes.read().last(), player.single_mut())
+    {
+        *held = *mode;
+    }
+}
+
+/// How many times the server has put this client's player somewhere, which it tells with each
+/// pose.
+#[derive(Resource, Default)]
+pub(super) struct Teleports(u32);
+
+/// Puts this client's player where the server says, stopped.
+pub(super) fn follow_teleports(
+    mut teleports: MessageReader<Teleport>,
+    mut count: ResMut<Teleports>,
+    mut player: Query<(&mut Transform, &mut Player), With<LocalPlayer>>,
+) {
+    for teleport in teleports.read() {
+        count.0 += 1;
+        if let Ok((mut body, mut player)) = player.single_mut() {
+            body.translation = teleport.position;
+            player.stop();
+        }
+    }
+}
+
 /// Tells the server where this client's player is, every `POSE_INTERVAL`.
 pub(super) fn send_pose(
     time: Res<Time>,
-    player: Query<(&Transform, &PlayerLook), With<LocalPlayer>>,
+    teleports: Res<Teleports>,
+    player: Query<(&Transform, &PlayerLook, &Player, &Hotbar), With<LocalPlayer>>,
     mut next: Local<Duration>,
     mut poses: MessageWriter<PlayerPose>,
 ) {
-    let Ok((body, look)) = player.single() else {
+    let Ok((body, look, player, hotbar)) = player.single() else {
         return;
     };
     if time.elapsed() < *next {
@@ -194,9 +230,13 @@ pub(super) fn send_pose(
     }
     *next = time.elapsed() + POSE_INTERVAL;
     poses.write(PlayerPose {
+        at: time.elapsed().as_millis() as u32,
         position: body.translation,
         yaw: look.yaw,
         pitch: look.pitch,
+        movement: player.movement,
+        slot: hotbar.selected as u8,
+        teleports: teleports.0,
     });
 }
 

@@ -19,9 +19,11 @@ use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking};
 use crate::world::World;
 
 // How much further than `REACH` from the eye an edit can be, in blocks, for a player who's
-// moved since aiming. In singleplayer they haven't, as it's the same frame, so this only covers
-// rounding until M0.6 adds a network's delay.
-const REACH_SLACK: f32 = 1.0;
+// moved since aiming: a block for rounding, as in singleplayer, where it's the same frame, and
+// two for the server's copy of a client's player trailing the client by up to a pose's
+// interval and the trip here, a tenth of a second together, flying at the usual 20 blocks a
+// second. Building while sprinting through the air at 80 is too fast to be worth covering.
+const REACH_SLACK: f32 = 3.0;
 // Clicking as fast as anyone can is about 15 a second, so creative building at full speed never
 // meets this, and a burst of a second's worth lets a quick flurry of clicks through whole. It only
 // stops a client flooding the server with edits.
@@ -427,10 +429,11 @@ mod tests {
     #[test]
     fn test_edits_out_of_reach_are_refused() {
         let mut app = server(GameMode::Creative);
-        // reach is measured from the eye, 1.85 up, to the nearest point of the block
-        assert_refused(&mut app, I64Vec3::new(7, 0, 0), BlockType::Air);
-        assert_refused(&mut app, I64Vec3::new(0, 9, 0), BlockType::Stone);
-        let (changed, _) = request(&mut app, &[(I64Vec3::new(6, 0, 0), BlockType::Air)]);
+        // reach is measured from the eye, 1.85 up, to the nearest point of the block, and
+        // stretched for a client that's moved since it aimed
+        assert_refused(&mut app, I64Vec3::new(10, 0, 0), BlockType::Stone);
+        assert_refused(&mut app, I64Vec3::new(0, 12, 0), BlockType::Stone);
+        let (changed, _) = request(&mut app, &[(I64Vec3::new(7, 0, 0), BlockType::Air)]);
         assert_eq!(1, changed.len());
     }
 

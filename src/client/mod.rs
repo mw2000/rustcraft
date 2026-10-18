@@ -6,6 +6,8 @@ pub mod cracks;
 pub mod drops;
 pub mod edits;
 pub mod join;
+pub mod models;
+pub mod others;
 pub mod player;
 
 use bevy::prelude::*;
@@ -26,6 +28,7 @@ impl Plugin for ClientPlugin {
         app.init_resource::<TimeOfDay>()
             .init_resource::<join::GenerationChecksum>()
             .init_resource::<edits::Predictions>()
+            .init_resource::<join::Teleports>()
             .add_observer(player::mark_local_player)
             .add_systems(
                 PostStartup,
@@ -42,7 +45,12 @@ impl Plugin for ClientPlugin {
                 (
                     join::arrive.run_if(on_message::<Welcome>),
                     join::check_world.run_if(resource_exists::<join::Checking>),
-                    (player::attach_camera, join::follow_inventory),
+                    (
+                        player::attach_camera,
+                        join::follow_inventory,
+                        join::follow_game_mode,
+                        join::follow_teleports,
+                    ),
                 )
                     .chain()
                     .before(TransformSystems::Propagate),
@@ -73,6 +81,12 @@ impl Plugin for ClientPlugin {
                     clock::follow_clock.run_if(not(is_authority)),
                     join::send_pose.run_if(in_state(ClientState::Connected)),
                     join::report_connection,
+                    (
+                        others::see_players,
+                        others::receive_poses,
+                        others::move_seen,
+                    )
+                        .chain(),
                 ),
             );
     }

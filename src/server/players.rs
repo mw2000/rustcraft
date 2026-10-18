@@ -1,15 +1,80 @@
+use std::time::Duration;
+
+use bevy::math::I64Vec3;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, AsyncComputeTaskPool, Task};
 use bevy_replicon::prelude::*;
+use bevy_replicon::shared::backend::connected_client::NetworkId;
+use bevy_replicon_renet2::netcode::NetcodeServerTransport;
+use serde::{Deserialize, Serialize};
 
 use super::edits::EditAllowances;
 use super::sync::SyncedArea;
+use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::generate::checksum::world_checksum;
-use crate::inventory::Inventory;
-use crate::player::{arriving, PlayerLook, PlayerOwner};
-use crate::protocol::{InventoryChanged, PlayerPose, Welcome};
-use crate::save::PlayerState;
+use crate::game_mode::GameMode;
+use crate::hotbar::Hotbar;
+use crate::interaction::overlaps;
+use crate::inventory::{Inventory, HOTBAR_SLOTS};
+use crate::items::Item;
+use crate::player::name::PlayerName;
+use crate::player::physics::top_speed;
+use crate::player::{arriving, Movement, Player, PlayerLook, PlayerOwner, BODY};
+use crate::protocol::{
+    name_from_user_data, CommandOutput, GameModeChanged, InventoryChanged, PlayerMoved, PlayerPose,
+    Teleport, Welcome,
+};
+use crate::save::{PlayerState, WorldSave};
 use crate::world::World;
+
+// How far ahead of the server's clock a client's movement can get, in seconds of moving at its
+// top speed: a pose held up on its way by this long, then arriving with the next, is still let
+// through, which covers a network's jitter and a frame's hitch on either side. Over this, the
+// player's put back. It never lets a client go faster than its top speed for longer.
+const POSE_SLACK: f32 = 0.5;
+// And a little over its top speed, for the rounding in its clock and steps.
+const SPEED_SLACK: f32 = 1.1;
+
+/// What a player holds in their hand, for others to see.
+#[derive(Component, Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeldItem(pub Option<Item>);
+
+/// A player as the server spawns them, to everyone but their owner a replicated entity.
+pub(super) fn spawning(state: &PlayerState, owner: ClientId, name: PlayerName) -> impl Bundle {
+    (
+        arriving(state),
+        PlayerOwner(owner),
+        name,
+        HeldItem::default(),
+        Replicated,
+    )
+}
+
+// A player's shown to every client but its owner's, which moves its own.
+impl VisibilityFilter for PlayerOwner {
+    type ClientComponent = AuthorizedClient;
+    type Scope = Entity;
+
+    fn is_visible(&self, client: Entity, _: Option<&AuthorizedClient>) -> bool {
+        self.0 != ClientId::Client(client)
+    }
+}
+
+/// How a client's player's poses are checked: how far ahead of the server's clock its movement
+/// has got, in seconds at its top speed, as of when, and how many times it's been teleported.
+#[derive(Component)]
+pub(super) struct PoseCheck {
+    ahead: f32,
+    at: Duration,
+    teleports: u32,
+}
+
+impl PoseCheck {
+    /// Counts a teleport, after which poses sent before the client heard of it are ignored.
+    pub(super) fn teleported(&mut self) {
+        self.teleports += 1;
+    }
+}
 
 /// The checksum of what the world's seed generates, for clients to check theirs against (D-3).
 /// Worked out on a task as the world opens, which is done long before anyone joins.
@@ -36,20 +101,40 @@ impl WorldChecksum {
     }
 }
 
-/// Welcomes a client the server has let in, its versions matching: spawns its player at the
-/// world's spawn, tells it the seed, its checksum and where its player is, and starts keeping
-/// its edits in step round its player.
+/// Welcomes a client the server has let in, its versions matching: spawns its player by the
+/// name it sent, made unique, where they were saved or else at the world's spawn, tells it the
+/// seed, its checksum and where its player is, starts keeping its edits in step round its
+/// player, and tells everyone they've joined.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn welcome(
     authorized: On<Add<AuthorizedClient>>,
     world: Res<World>,
+    save: Res<WorldSave>,
+    time: Res<Time>,
     mut checksum: ResMut<WorldChecksum>,
+    transport: Option<Res<NetcodeServerTransport>>,
+    clients: Query<&NetworkId>,
+    names: Query<&PlayerName>,
     mut commands: Commands,
     mut welcomes: MessageWriter<ToClients<Welcome>>,
+    mut output: MessageWriter<ToClients<CommandOutput>>,
 ) {
     let client = ClientId::Client(authorized.entity);
-    // where everyone joining arrives until M0.6d saves each player
-    let player = PlayerState::arriving_at(world.spawn());
-    commands.spawn((arriving(&player), PlayerOwner(client)));
+    let sent = transport
+        .zip(clients.get(authorized.entity).ok())
+        .and_then(|(transport, id)| transport.user_data(id.get()));
+    let name = sent
+        .map_or_else(|| PlayerName::new(""), |data| name_from_user_data(&data))
+        .unique_among(names.iter());
+    let player = save
+        .player(&name)
+        .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
+    let check = PoseCheck {
+        ahead: 0.0,
+        at: time.elapsed(),
+        teleports: 0,
+    };
+    commands.spawn((spawning(&player, client, name.clone()), check));
     commands
         .entity(authorized.entity)
         .insert(SyncedArea::default());
@@ -62,40 +147,196 @@ pub(super) fn welcome(
             you: client,
         },
     });
-    info!("{client} joined");
+    announce(&mut output, format!("{} joined the game", name.as_str()));
+    info!("{client} joined as {}", name.as_str());
 }
 
-/// Sees a client off as it disconnects, despawning its player and forgetting its edits.
+type Leaving<'a> = (
+    Entity,
+    &'a PlayerOwner,
+    &'a PlayerName,
+    &'a Transform,
+    &'a PlayerLook,
+    &'a Player,
+    &'a GameMode,
+    &'a Hotbar,
+    &'a Inventory,
+);
+
+/// Sees a client off as it disconnects: keeps its player's state to save, despawns them, which
+/// takes them off everyone's screen, forgets its edits and tells everyone they've left.
 pub(super) fn see_off(
     gone: On<Remove<ConnectedClient>>,
-    players: Query<(Entity, &PlayerOwner)>,
+    players: Query<Leaving>,
+    mut save: ResMut<WorldSave>,
     mut allowances: ResMut<EditAllowances>,
+    mut output: MessageWriter<ToClients<CommandOutput>>,
     mut commands: Commands,
 ) {
     let client = ClientId::Client(gone.entity);
     allowances.forget(client);
-    for (player, owner) in &players {
-        if owner.0 == client {
-            commands.entity(player).despawn();
-            info!("{client} left");
+    let leaving = players.iter().find(|(_, owner, ..)| owner.0 == client);
+    if let Some((player, _, name, body, look, state, mode, hotbar, inventory)) = leaving {
+        let state = PlayerState::of(body, *look, state.movement, *mode, *hotbar, inventory);
+        save.left(name, state);
+        commands.entity(player).despawn();
+        announce(&mut output, format!("{} left the game", name.as_str()));
+        info!("{client} left");
+    }
+}
+
+fn announce(output: &mut MessageWriter<ToClients<CommandOutput>>, text: String) {
+    output.write(ToClients {
+        targets: SendTargets::All,
+        message: CommandOutput { text, error: false },
+    });
+}
+
+type Moving<'a> = (
+    Entity,
+    &'a PlayerOwner,
+    &'a GameMode,
+    &'a mut Player,
+    &'a mut Transform,
+    &'a mut PlayerLook,
+    &'a mut Hotbar,
+    &'a mut PoseCheck,
+);
+
+/// Moves players where their clients say they've gone, as each decides its own movement, and
+/// tells everyone else. A pose further than the player could have gone since the last, or
+/// walking into a solid block, is refused, and the client told to put its player back where
+/// the server has them.
+pub(super) fn move_players(
+    mut poses: MessageReader<FromClient<PlayerPose>>,
+    world: Res<World>,
+    time: Res<Time>,
+    mut players: Query<Moving>,
+    mut teleports: MessageWriter<ToClients<Teleport>>,
+    mut moved: MessageWriter<ToClients<PlayerMoved>>,
+) {
+    for &FromClient {
+        client_id: client,
+        message: pose,
+    } in poses.read()
+    {
+        let player = players.iter_mut().find(|(_, owner, ..)| owner.0 == client);
+        let Some((player, _, mode, mut state, mut body, mut look, mut hotbar, mut check)) = player
+        else {
+            continue;
+        };
+        // sent before the client heard where it was last put, so from where it no longer is
+        if pose.teleports < check.teleports {
+            continue;
+        }
+        let now = time.elapsed();
+        check.ahead = (check.ahead - (now - check.at).as_secs_f32()).max(0.0);
+        check.at = now;
+        // only flying where the game mode allows it, as a client may not have heard it's
+        // changed yet
+        let movement = match pose.movement {
+            Movement::Fly if mode.can_fly() => Movement::Fly,
+            _ => Movement::Walk,
+        };
+        let took = time_to_move(body.translation, pose.position, movement);
+        let into_solid = movement == Movement::Walk
+            && in_solid(&world, pose.position)
+            && !in_solid(&world, body.translation);
+        if check.ahead + took > POSE_SLACK || into_solid {
+            debug!("put {client} back, as it moved further than it could");
+            check.teleported();
+            teleports.write(ToClients {
+                targets: SendTargets::Single(client),
+                message: Teleport {
+                    position: body.translation,
+                },
+            });
+            continue;
+        }
+        check.ahead += took;
+        body.translation = pose.position;
+        *look = PlayerLook {
+            yaw: pose.yaw,
+            pitch: pose.pitch,
+        };
+        state.movement = movement;
+        let selected = usize::from(pose.slot).min(HOTBAR_SLOTS - 1);
+        hotbar.set_if_neq(Hotbar { selected });
+        moved.write(ToClients {
+            targets: SendTargets::AllExcept(client),
+            message: PlayerMoved {
+                player,
+                at: pose.at,
+                position: pose.position,
+                yaw: pose.yaw,
+                pitch: pose.pitch,
+            },
+        });
+    }
+}
+
+// How long, in seconds, a player moving with `movement` takes at the least to go from `from` to
+// `to`, each way they can go at its own top speed.
+fn time_to_move(from: Vec3, to: Vec3, movement: Movement) -> f32 {
+    let (across, up, down) = top_speed(movement);
+    let moved = to - from;
+    let times = [
+        moved.xz().length() / across,
+        moved.y.max(0.0) / up,
+        (-moved.y).max(0.0) / down,
+    ];
+    times.into_iter().fold(0.0, f32::max) / SPEED_SLACK
+}
+
+// Whether a body with its feet at `feet` is in a solid block, of those loaded.
+fn in_solid(world: &World, feet: Vec3) -> bool {
+    let (min, max) = (feet + BODY.min, feet + BODY.max);
+    let (min, max) = (min.floor().as_i64vec3(), max.floor().as_i64vec3());
+    (min.x..=max.x).any(|x| {
+        (min.y..=max.y).any(|y| {
+            (min.z..=max.z).any(|z| {
+                let block = I64Vec3::new(x, y, z);
+                world.is_chunk_generated(ChunkCoordinate::containing(block))
+                    && world.get_block_at(block).is_solid()
+                    && overlaps(BODY, feet, block)
+            })
+        })
+    })
+}
+
+/// Tells everyone but the host where the host's player is, as often as clients tell theirs.
+pub(super) fn send_host_pose(
+    time: Res<Time>,
+    players: Query<(Entity, &PlayerOwner, &Transform, &PlayerLook)>,
+    mut moved: MessageWriter<ToClients<PlayerMoved>>,
+) {
+    for (player, owner, body, look) in &players {
+        if owner.0 == ClientId::Server {
+            moved.write(ToClients {
+                targets: SendTargets::CLIENTS_ONLY,
+                message: PlayerMoved {
+                    player,
+                    at: time.elapsed().as_millis() as u32,
+                    position: body.translation,
+                    yaw: look.yaw,
+                    pitch: look.pitch,
+                },
+            });
         }
     }
 }
 
-/// Moves players where their clients say they've gone, as each decides its own movement.
-pub(super) fn move_players(
-    mut poses: MessageReader<FromClient<PlayerPose>>,
-    mut players: Query<(&PlayerOwner, &mut Transform, &mut PlayerLook)>,
+/// Keeps what each player holds up to date for others to see, as their inventory or the slot
+/// they've selected changes.
+#[allow(clippy::type_complexity)]
+pub(super) fn hold_items(
+    mut players: Query<
+        (&Inventory, &Hotbar, &mut HeldItem),
+        Or<(Changed<Inventory>, Changed<Hotbar>)>,
+    >,
 ) {
-    for FromClient { client_id, message } in poses.read() {
-        let player = players.iter_mut().find(|(owner, ..)| owner.0 == *client_id);
-        if let Some((_, mut body, mut look)) = player {
-            body.translation = message.position;
-            *look = PlayerLook {
-                yaw: message.yaw,
-                pitch: message.pitch,
-            };
-        }
+    for (inventory, hotbar, mut held) in &mut players {
+        held.set_if_neq(HeldItem(hotbar.held(inventory).map(|stack| stack.item)));
     }
 }
 
@@ -111,5 +352,41 @@ pub(super) fn send_inventories(
                 message: InventoryChanged(inventory.clone()),
             });
         }
+    }
+}
+
+/// Tells each client its player's game mode whenever the server changes it.
+pub(super) fn send_game_modes(
+    players: Query<(&PlayerOwner, &GameMode), Changed<GameMode>>,
+    mut changes: MessageWriter<ToClients<GameModeChanged>>,
+) {
+    for (owner, mode) in &players {
+        if owner.0 != ClientId::Server {
+            changes.write(ToClients {
+                targets: SendTargets::Single(owner.0),
+                message: GameModeChanged(*mode),
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::math::Vec3;
+
+    use super::time_to_move;
+    use crate::player::Movement;
+
+    #[test]
+    fn test_walking_is_held_to_walking_speed_and_flying_to_flying() {
+        let second = |to: Vec3, movement| time_to_move(Vec3::ZERO, to, movement);
+        // a second's sprint either way is let through, and much more isn't
+        assert!(second(Vec3::new(5.0, 0.0, 0.0), Movement::Walk) < 1.0);
+        assert!(second(Vec3::new(10.0, 0.0, 0.0), Movement::Walk) > 1.5);
+        assert!(second(Vec3::new(80.0, 80.0, 80.0), Movement::Fly) < 1.0);
+        assert!(second(Vec3::new(160.0, 0.0, 0.0), Movement::Fly) > 1.2);
+        // falling is quicker than jumping
+        assert!(second(Vec3::new(0.0, -40.0, 0.0), Movement::Walk) < 1.0);
+        assert!(second(Vec3::new(0.0, 20.0, 0.0), Movement::Walk) > 1.5);
     }
 }

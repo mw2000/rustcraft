@@ -16,6 +16,7 @@ use rustcraft::clock::TimeOfDay;
 use rustcraft::game_mode::{GameMode, GameModePlugin};
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
+use rustcraft::player::name::PlayerName;
 use rustcraft::player::{Movement, Player, PlayerLook, PlayerOwner, EYE_HEIGHT};
 use rustcraft::protocol::{BlockChanged, ProtocolPlugin, RequestEdit};
 use rustcraft::save::{SavePlugin, WorldSave};
@@ -39,6 +40,7 @@ fn server(dir: &Path) -> App {
         seed: Some(3),
         time_of_day: None,
         region_distance: 16,
+        name: PlayerName::new("host"),
     })
     // a second a frame, so the clock visibly moves
     .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)));
