@@ -215,6 +215,13 @@ fn received<M: Message + Clone>(client: &App, cursor: &mut MessageCursor<M>) -> 
     cursor.read(messages).cloned().collect()
 }
 
+// Exits a saving server, which writes its last save on this thread after any still being
+// written in the background, so nothing is left writing to its directory.
+fn exit(mut server: App) {
+    server.world_mut().write_message(AppExit::Success);
+    server.update();
+}
+
 // A directory for a world, emptied.
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("rustcraft-{name}-{}", std::process::id()));
@@ -1253,8 +1260,12 @@ fn test_a_joiner_comes_back_where_they_left_with_what_they_had() {
             .world_mut()
             .resource_mut::<RenetClient>()
             .disconnect();
-        let saved = dir.join("players").join("guest.toml");
-        update_until(&mut server, &mut client, |_, _| saved.exists());
+        // and once the server's seen them go, its last save has them as they left, rather than
+        // as an autosave when they joined had them
+        update_until(&mut server, &mut client, |server, _| {
+            owners(server) == [ClientId::Server]
+        });
+        exit(server);
     }
 
     // in a server opened from the save again
@@ -1279,6 +1290,7 @@ fn test_a_joiner_comes_back_where_they_left_with_what_they_had() {
         .contains(&Some(gift)));
     assert_eq!(9, world.get::<Vitals>(me).unwrap().health);
     assert_eq!(10, world.get::<Vitals>(me).unwrap().food);
+    exit(server);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

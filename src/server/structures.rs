@@ -373,7 +373,7 @@ mod tests {
             ));
             let _ = std::fs::remove_dir_all(&dir);
             let (save, ..) = WorldSave::open(dir.clone(), Some(3)).unwrap();
-            let mut world = World::new(16);
+            let mut world = World::from_save(3, crate::edits::Edits::default(), 16);
             for x in -2..=1 {
                 for y in 0..=1 {
                     for z in -2..=1 {

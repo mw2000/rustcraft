@@ -12,6 +12,7 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::window::WindowFocused;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::RepliconRenetPlugins;
+use rustcraft::chunks::chunk::ChunkCoordinate;
 use rustcraft::chunks::chunk_loader::ChunkLoader;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
 use rustcraft::client::creatures::{Dying, SeenCreature};
@@ -79,6 +80,7 @@ fn state(app: &App) -> GameState {
     app.world().resource::<State<GameState>>().get().clone()
 }
 
+#[track_caller]
 fn update_until(app: &mut App, done: impl Fn(&mut App) -> bool) {
     let start = Instant::now();
     while !done(app) {
@@ -125,11 +127,16 @@ fn play(app: &mut App, dir: &Path) -> Entity {
 // A sheep beside `player`, which the client's seen, so quitting has a creature to put away.
 fn with_a_sheep(app: &mut App, player: Entity) {
     let at = app.world().get::<Transform>(player).unwrap().translation + Vec3::X;
+    // with the ground under it loaded, or it's put to sleep and has to be woken first
+    let ground = ChunkCoordinate::containing(at.floor().as_i64vec3());
+    update_until(app, |app| {
+        app.world().resource::<World>().is_chunk_generated(ground)
+    });
     let sheep = SavedCreature::grown(CreatureKind::Sheep, at);
     app.world_mut().spawn(creature(sheep, 0.0));
     update_until(app, |app| {
         let mut seen = app.world_mut().query::<&SeenCreature>();
-        seen.iter(app.world()).count() == 1
+        seen.iter(app.world()).count() >= 1
     });
 }
 
@@ -342,5 +349,9 @@ fn test_environment_variables_skip_the_title_screen_for_development() {
     assert_eq!(GameState::Loading, state(&app));
     assert_eq!(Some(&Page::Loading), app.world().resource::<Menu>().top());
     assert_eq!(3, app.world().resource::<World>().seed());
+    // the last save is written on this thread, so nothing's left writing to the directory
+    app.world_mut().write_message(AppExit::Success);
+    app.update();
+    drop(app);
     std::fs::remove_dir_all(&dir).unwrap();
 }

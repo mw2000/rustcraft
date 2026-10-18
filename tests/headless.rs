@@ -71,6 +71,15 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
+// Exits the server, which writes its last save on this thread after any still being written in
+// the background, then removes its world: deleting the directory under a background save fails.
+fn finish(mut app: App, dir: &Path) {
+    app.world_mut().write_message(AppExit::Success);
+    app.update();
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // The one player, the host's.
 fn hosts_player(app: &mut App) -> Entity {
     let (player, owner) = app
@@ -154,7 +163,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
         *app.world().get::<GameMode>(player).unwrap()
     );
     assert_eq!(carried, *app.world().get::<Inventory>(player).unwrap());
-    std::fs::remove_dir_all(&dir).unwrap();
+    finish(app, &dir);
 }
 
 #[test]
@@ -202,7 +211,7 @@ fn test_a_server_alone_keeps_the_chunks_near_its_player_loaded() {
     assert!(near.iter().all(|&chunk| !world.is_chunk_generated(chunk)));
     let there = ChunkCoordinate::containing(away.floor().as_i64vec3());
     update_until(&mut app, |world| world.is_chunk_generated(there));
-    std::fs::remove_dir_all(&dir).unwrap();
+    finish(app, &dir);
 }
 
 // Moves every player as walking with no keys held does, under gravity, as their clients would.
@@ -261,5 +270,5 @@ fn test_a_new_survival_player_arrives_unhurt() {
         Vitals::default(),
         *app.world().get::<Vitals>(player).unwrap()
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    finish(app, &dir);
 }
