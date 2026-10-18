@@ -52,6 +52,8 @@ Items that aren't blocks (sticks, ingots, tools) are pictures on transparency in
 python items.py
 ```
 
+`cracks.py` draws the cracks a block shows as it's broken, `assets/textures/cracks.png`, a tile per stage (`CRACK_STAGES` in `src/breaking.rs`, which it reads): one network grown from the middle, each stage showing more of it in the order it grew, dark on transparency with a faint lip. `out/cracks_contact.png` shows each stage over stone. Its default seed is the one picked.
+
 ## How it works
 
 - `block_texture.json` is the txt2img graph. SD1.5 renders 512px with circular padding in both axes so the result tiles. `generate.py` saves the render as `out/raw_<Tile>.png` and `finish()` turns it into 16x16: Lanczos down, wrap-around blur (`smooth`, keeps seams), normalise mean colour and luminance contrast, then a 4-colour quantise (`COLORS`). Plain `area` averaging gives flat grey, so don't use it.

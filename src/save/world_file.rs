@@ -47,14 +47,20 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
-    /// A player arriving in a new world at `position`, facing +z.
+    /// A player arriving in a new world at `position`, facing +z, walking unless their game
+    /// mode flies.
     pub fn arriving_at(position: Vec3) -> Self {
+        let game_mode = GameMode::default();
         Self {
             position: position.into(),
             yaw: PI,
             pitch: 0.0,
-            movement: Movement::default(),
-            game_mode: GameMode::default(),
+            movement: if game_mode.can_fly() {
+                Movement::Fly
+            } else {
+                Movement::Walk
+            },
+            game_mode,
             hotbar: Hotbar::default(),
             inventory: None,
         }
@@ -201,9 +207,9 @@ mod tests {
         let older = &text[..text.find("game_mode").unwrap()];
         assert!(!older.contains("hotbar"), "{older}");
         let player = WorldFile::from_toml(older).unwrap().player.unwrap();
-        assert_eq!(GameMode::Creative, player.game_mode);
+        assert_eq!(GameMode::Survival, player.game_mode);
         assert_eq!(Hotbar::default(), player.hotbar);
-        assert_eq!(Inventory::starting(GameMode::Creative), player.inventory());
+        assert_eq!(Inventory::default(), player.inventory());
     }
 
     #[test]

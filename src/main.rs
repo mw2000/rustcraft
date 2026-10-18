@@ -18,6 +18,7 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::client::clock::{follow_clock, wind_clock};
+use rustcraft::client::cracks::DrawCracksPlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::join::{join, server_address};
 use rustcraft::client::ClientPlugin;
@@ -232,6 +233,7 @@ fn main() {
         PickerPlugin,
         InventoryScreenPlugin,
         DrawDropsPlugin,
+        DrawCracksPlugin,
     ))
     // the client, and the server unless joining one elsewhere: in singleplayer they're in one
     // App with no transport running, so replicon passes their messages straight across (§4.4)

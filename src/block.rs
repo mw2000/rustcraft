@@ -1,5 +1,6 @@
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::items::Item;
+use crate::items::ToolKind::{self, Axe, Pickaxe, Shovel};
 
 /// A block's row in the table: how it behaves and looks.
 struct Properties {
@@ -13,6 +14,12 @@ struct Properties {
     style: RenderStyle,
     /// What it leaves when it's broken in survival.
     drops: Drops,
+    /// How long it takes to break in survival by hand, in seconds, or with a tool it isn't for.
+    hardness: f32,
+    /// The tool that breaks it quicker, if any.
+    tool: Option<ToolKind>,
+    /// The tier of that tool it needs to drop anything, or 0 if a hand will do (§5.3).
+    tier: u8,
     /// How many levels of light it takes from light passing through it, see `light.rs`.
     light_opacity: u8,
     /// The level of block light it gives off, 0 for none, see `BlockLight`.
@@ -79,113 +86,134 @@ blocks! {
     Air {
         name: "air", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::None, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
         // Never drawn.
         top: Tile::Stone, side: Tile::Stone, bottom: Tile::Stone, lod: Tile::Stone,
     },
     Stone {
         name: "stone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Cobblestone),
+        hardness: 7.5, tool: Some(Pickaxe), tier: 1,
         top: Tile::Stone, side: Tile::Stone, bottom: Tile::Stone, lod: Tile::Stone,
     },
     Grass {
         name: "grass", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Dirt),
+        hardness: 0.9, tool: Some(Shovel), tier: 0,
         // Far off, grass stays green on hillsides.
         top: Tile::GrassTop, side: Tile::GrassSide, bottom: Tile::Dirt, lod: Tile::GrassTop,
     },
     Sand {
         name: "sand", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 0.75, tool: Some(Shovel), tier: 0,
         top: Tile::Sand, side: Tile::Sand, bottom: Tile::Sand, lod: Tile::Sand,
     },
     Water {
         name: "water", solid: false, light_opacity: 2, occlusion_weight: 0.4, emits: 0,
         style: RenderStyle::Liquid, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
         top: Tile::Water, side: Tile::Water, bottom: Tile::Water, lod: Tile::Water,
     },
     Snow {
         name: "snow", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 0.3, tool: Some(Shovel), tier: 0,
         top: Tile::Snow, side: Tile::SnowSide, bottom: Tile::Snow, lod: Tile::SnowSide,
     },
     Log {
         name: "log", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 3.0, tool: Some(Axe), tier: 0,
         top: Tile::LogEnd, side: Tile::LogBark, bottom: Tile::LogEnd, lod: Tile::LogBark,
     },
     Leaves {
         name: "leaves", solid: true, light_opacity: 1, occlusion_weight: 0.3, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Nothing,
+        hardness: 0.3, tool: None, tier: 0,
         // Saplings and apples come with farming (M1.9b).
         top: Tile::Leaves, side: Tile::Leaves, bottom: Tile::Leaves, lod: Tile::Leaves,
     },
     Dirt {
         name: "dirt", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 0.75, tool: Some(Shovel), tier: 0,
         top: Tile::Dirt, side: Tile::Dirt, bottom: Tile::Dirt, lod: Tile::Dirt,
     },
     Gravel {
         name: "gravel", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 0.9, tool: Some(Shovel), tier: 0,
         top: Tile::Gravel, side: Tile::Gravel, bottom: Tile::Gravel, lod: Tile::Gravel,
     },
     Ice {
         name: "ice", solid: true, light_opacity: 3, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 0.75, tool: Some(Pickaxe), tier: 0,
         top: Tile::Ice, side: Tile::Ice, bottom: Tile::Ice, lod: Tile::Ice,
     },
     Sandstone {
         name: "sandstone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 4.0, tool: Some(Pickaxe), tier: 1,
         top: Tile::SandstoneTop, side: Tile::SandstoneSide, bottom: Tile::SandstoneTop,
         lod: Tile::SandstoneSide,
     },
     Planks {
         name: "planks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 3.0, tool: Some(Axe), tier: 0,
         top: Tile::Planks, side: Tile::Planks, bottom: Tile::Planks, lod: Tile::Planks,
     },
     Cobblestone {
         name: "cobblestone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 7.5, tool: Some(Pickaxe), tier: 1,
         top: Tile::Cobblestone, side: Tile::Cobblestone, bottom: Tile::Cobblestone,
         lod: Tile::Cobblestone,
     },
     StoneBricks {
         name: "stone_bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 7.5, tool: Some(Pickaxe), tier: 1,
         top: Tile::StoneBricks, side: Tile::StoneBricks, bottom: Tile::StoneBricks,
         lod: Tile::StoneBricks,
     },
     Bricks {
         name: "bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 7.5, tool: Some(Pickaxe), tier: 1,
         top: Tile::Bricks, side: Tile::Bricks, bottom: Tile::Bricks, lod: Tile::Bricks,
     },
     CoalOre {
         name: "coal_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 9.0, tool: Some(Pickaxe), tier: 1,
         top: Tile::CoalOre, side: Tile::CoalOre, bottom: Tile::CoalOre, lod: Tile::CoalOre,
     },
     CopperOre {
         name: "copper_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 9.0, tool: Some(Pickaxe), tier: 2,
         top: Tile::CopperOre, side: Tile::CopperOre, bottom: Tile::CopperOre, lod: Tile::CopperOre,
     },
     IronOre {
         name: "iron_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 9.0, tool: Some(Pickaxe), tier: 3,
         top: Tile::IronOre, side: Tile::IronOre, bottom: Tile::IronOre, lod: Tile::IronOre,
     },
     CraftingTable {
         name: "crafting_table", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 3.75, tool: Some(Axe), tier: 0,
         top: Tile::CraftingTableTop, side: Tile::CraftingTableSide, bottom: Tile::Planks,
         lod: Tile::CraftingTableSide,
     },
     Furnace {
         name: "furnace", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 8.0, tool: Some(Pickaxe), tier: 1,
         // Blocks have no facing yet, so every side has the furnace's mouth.
         top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
     },
@@ -195,21 +223,25 @@ blocks! {
     TallGrass {
         name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
         top: Tile::TallGrass, side: Tile::TallGrass, bottom: Tile::TallGrass, lod: Tile::TallGrass,
     },
     Poppy {
         name: "poppy", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
         top: Tile::Poppy, side: Tile::Poppy, bottom: Tile::Poppy, lod: Tile::Poppy,
     },
     Dandelion {
         name: "dandelion", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
         top: Tile::Dandelion, side: Tile::Dandelion, bottom: Tile::Dandelion, lod: Tile::Dandelion,
     },
     Cornflower {
         name: "cornflower", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
         top: Tile::Cornflower, side: Tile::Cornflower, bottom: Tile::Cornflower,
         lod: Tile::Cornflower,
     },
@@ -217,6 +249,7 @@ blocks! {
     Torch {
         name: "torch", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 14,
         style: RenderStyle::Torch, replaceable: false, drops: Drops::Itself,
+        hardness: 0.0, tool: None, tier: 0,
         top: Tile::Torch, side: Tile::Torch, bottom: Tile::Torch, lod: Tile::Torch,
     },
 }
@@ -265,6 +298,21 @@ impl BlockType {
             Drops::Itself => Some(Item::Block(self)),
             Drops::Block(block) => Some(Item::Block(block)),
         }
+    }
+
+    /// How long it takes to break by hand in survival, in seconds, see `breaking`.
+    pub fn hardness(self) -> f32 {
+        self.properties().hardness
+    }
+
+    /// The tool it's broken quicker with, if there's one.
+    pub fn tool(self) -> Option<ToolKind> {
+        self.properties().tool
+    }
+
+    /// The tier of tool it needs to drop anything, or 0 if a hand will do.
+    pub fn tier(self) -> u8 {
+        self.properties().tier
     }
 
     /// Whether it's a plant.

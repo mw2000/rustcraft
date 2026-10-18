@@ -325,6 +325,7 @@ mod tests {
         app.world_mut().spawn((
             Player::default(),
             LocalPlayer,
+            GameMode::Creative,
             Inventory::starting(GameMode::Creative),
         ));
         app.finish();

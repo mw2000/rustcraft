@@ -445,6 +445,7 @@ mod tests {
                 Player::default(),
                 PlayerOwner(ClientId::Server),
                 LocalPlayer,
+                GameMode::Creative,
                 Transform::default(),
             ));
             app.finish();

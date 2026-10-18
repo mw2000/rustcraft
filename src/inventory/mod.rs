@@ -135,6 +135,14 @@ impl Inventory {
         true
     }
 
+    /// Wears the tool in `slot` by a block broken with it, which breaks it if that was the last
+    /// its durability had in it.
+    pub fn wear(&mut self, slot: usize) {
+        if let Some(held) = self.slots.get_mut(slot) {
+            *held = held.and_then(ItemStack::worn);
+        }
+    }
+
     /// Takes the stack in `slot`, or one of it, to drop.
     pub fn drop_from(&mut self, slot: usize, all: bool) -> Option<ItemStack> {
         let held = self.slots.get_mut(slot)?;

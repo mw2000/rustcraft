@@ -1,4 +1,5 @@
 pub mod block;
+pub mod breaking;
 pub mod chunks;
 pub mod client;
 pub mod clock;

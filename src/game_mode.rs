@@ -6,15 +6,14 @@ use crate::player::{Movement, Player};
 
 /// How a player plays (§4.5), one each so players in a world can differ.
 ///
-/// What the modes change is asked of here and nowhere else. Survival can't fly, and places only
-/// what it carries, which it gets from what it breaks; it has no breaking times or health yet
-/// (M1.2, M1.8).
+/// What the modes change is asked of here and nowhere else. Survival can't fly, breaks blocks
+/// over a time set by their hardness and the tool held, and places only what it carries, which
+/// it gets from what it breaks and crafts; it has no health yet (M1.8). New players start in it.
 #[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameMode {
-    Survival,
-    // until survival has the breaking times and crafting that make it a game
     #[default]
+    Survival,
     Creative,
 }
 
@@ -41,6 +40,12 @@ impl GameMode {
     /// Whether the player may place `block` at all: any but air and water, in either mode.
     pub fn can_place(self, block: BlockType) -> bool {
         block.is_tangible()
+    }
+
+    /// Whether the player breaks blocks at a click, rather than holding the mouse on them for as
+    /// long as their hardness and the tool held say (§5.1).
+    pub fn breaks_at_once(self) -> bool {
+        self == GameMode::Creative
     }
 
     /// Whether what the player breaks drops an item to pick up.
@@ -78,7 +83,10 @@ mod tests {
     fn test_switching_to_survival_stops_flying() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, GameModePlugin));
-        let player = app.world_mut().spawn(Player::default()).id();
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), GameMode::Creative))
+            .id();
         app.update();
         let movement = |app: &App| app.world().get::<Player>(player).unwrap().movement;
         assert_eq!(

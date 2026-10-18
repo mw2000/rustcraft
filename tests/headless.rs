@@ -158,6 +158,10 @@ fn test_a_server_alone_keeps_the_chunks_near_its_player_loaded() {
     let dir = temp_dir("residency");
     let mut app = server(&dir);
     let player = hosts_player(&mut app);
+    // building from nothing
+    app.world_mut()
+        .entity_mut(player)
+        .insert(GameMode::Creative);
     let feet = app.world().get::<Transform>(player).unwrap().translation;
     let eye = ChunkCoordinate::containing((feet + Vec3::Y * EYE_HEIGHT).floor().as_i64vec3());
     let near: Vec<_> = eye.neighbors_26().into_iter().chain([eye]).collect();

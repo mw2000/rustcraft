@@ -63,7 +63,7 @@ impl Plugin for ServerPlugin {
                 // so a singleplayer edit or command is made and answered in the frame it's
                 // asked for
                 (
-                    edits::receive_edits,
+                    (edits::receive_break_starts, edits::receive_edits).chain(),
                     inventory::receive_inventory_requests,
                     crafting::receive_crafts,
                     commands::run_commands,

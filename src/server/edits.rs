@@ -8,13 +8,14 @@ use bevy_replicon::prelude::*;
 use super::drops::DroppedItem;
 use super::sync::BlockChanges;
 use crate::block::BlockType;
+use crate::breaking::{break_time, harvests};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::game_mode::GameMode;
 use crate::interaction::{overlaps, REACH};
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::items::{Item, ItemStack};
 use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT};
-use crate::protocol::{BlockChanged, EditRejected, RequestEdit};
+use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking};
 use crate::world::World;
 
 // How much further than `REACH` from the eye an edit can be, in blocks, for a player who's
@@ -26,6 +27,15 @@ const REACH_SLACK: f32 = 1.0;
 // stops a client flooding the server with edits.
 const EDITS_PER_SECOND: f32 = 20.0;
 const EDIT_BURST: f32 = 20.0;
+// How much sooner than it takes, in seconds, a block can be broken after the player started on
+// it. The client times its hold from the frame it sends `StartBreaking` to the frame it sends
+// the edit, and the server from the frame each arrives, so in one App the two agree to the
+// frame. Over a network each goes its own way, but both take about as long, so their delay
+// cancels all but its jitter, a few tens of milliseconds, and a server frame's wait; a tenth of
+// a second covers those and lets no one break stone with a wooden pickaxe more than a twentieth
+// quicker. A start overtaken by its edit, which would take jitter longer than the break, is
+// refused, and the client's prediction rolled back.
+const BREAK_SLACK: f32 = 0.1;
 
 /// What each client may still edit straight away: a burst of edits, used up by each request
 /// and refilled at a steady rate.
@@ -60,21 +70,52 @@ impl EditAllowances {
     }
 }
 
+/// The block a player in survival started breaking, and when.
+#[derive(Component, Debug, Clone, Copy)]
+pub(super) struct BreakingStarted {
+    block: I64Vec3,
+    at: Duration,
+}
+
+/// Times the blocks players start breaking, to check the edits breaking them against.
+pub(super) fn receive_break_starts(
+    mut starts: MessageReader<FromClient<StartBreaking>>,
+    time: Res<Time>,
+    players: Query<(Entity, &PlayerOwner)>,
+    mut commands: Commands,
+) {
+    for &FromClient {
+        client_id,
+        message: StartBreaking { block },
+    } in starts.read()
+    {
+        if let Some((player, _)) = players.iter().find(|(_, owner)| owner.0 == client_id) {
+            let at = time.elapsed();
+            commands
+                .entity(player)
+                .insert(BreakingStarted { block, at });
+        }
+    }
+}
+
 type Players<'w, 's> = Query<
     'w,
     's,
     (
+        Entity,
         &'static Transform,
         &'static GameMode,
         &'static PlayerOwner,
         &'static mut Inventory,
+        Option<&'static BreakingStarted>,
     ),
     With<Player>,
 >;
 
 /// Makes the edits clients ask for that pass the checks, telling the clients near them, and
 /// tells the client asking for one that doesn't what's there instead. In survival a block placed
-/// is taken from the player's hotbar, and one broken leaves its item to pick up.
+/// is taken from the player's hotbar, and one broken leaves its item to pick up if it was broken
+/// with a tool of the tier it needs, and wears the tool held.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_edits(
     mut requests: MessageReader<FromClient<RequestEdit>>,
@@ -100,8 +141,16 @@ pub(super) fn receive_edits(
         let was = world.get_block_at(block);
         // every request counts, so a flood of bad ones is stopped too
         let why_not = if allowances.take(client, time.elapsed()) {
-            refusal(&world, &players, client, block, to, slot.into())
-                .or_else(|| (!world.edit(block, to)).then_some("it's already that block"))
+            refusal(
+                &world,
+                &players,
+                client,
+                block,
+                to,
+                slot.into(),
+                time.elapsed(),
+            )
+            .or_else(|| (!world.edit(block, to)).then_some("it's already that block"))
         } else {
             Some("too many edits")
         };
@@ -122,13 +171,19 @@ pub(super) fn receive_edits(
             to,
             by: Some((client, seq)),
         });
-        let (_, mode, _, mut inventory) = players
+        let (player, _, mode, _, mut inventory, _) = players
             .iter_mut()
-            .find(|(_, _, owner, _)| owner.0 == client)
+            .find(|(_, _, _, owner, ..)| owner.0 == client)
             .expect("an edit allowed has a player making it");
+        let slot = usize::from(slot);
+        let held = held(&inventory, slot).and_then(|stack| stack.item.tool());
+        if to == BlockType::Air {
+            // the time it was held for is spent, so a block put back there takes as long
+            commands.entity(player).remove::<BreakingStarted>();
+        }
         let drops = mode.drops_broken_blocks();
         let mut leave = |broken: BlockType, at: I64Vec3| {
-            if let Some(item) = broken.drops().filter(|_| drops) {
+            if let Some(item) = broken.drops().filter(|_| drops && harvests(broken, held)) {
                 commands.spawn((
                     DroppedItem::from_block(ItemStack::new(item, 1), at),
                     Replicated,
@@ -137,8 +192,12 @@ pub(super) fn receive_edits(
         };
         if to == BlockType::Air {
             leave(was, block);
+            // what breaks at a touch doesn't wear a tool, nor does anything in creative
+            if held.is_some() && !mode.breaks_at_once() && was.hardness() > 0.0 {
+                inventory.wear(slot);
+            }
         } else if !mode.has_every_block() {
-            inventory.use_one(slot.into(), Item::Block(to));
+            inventory.use_one(slot, Item::Block(to));
         }
         // a plant or a torch goes with the ground it stood on
         let above = block + I64Vec3::Y;
@@ -163,7 +222,13 @@ pub(super) fn in_reach(feet: Vec3, block: I64Vec3) -> bool {
     eye.distance(nearest) <= REACH + REACH_SLACK
 }
 
-// Why `client` can't change `block` to `to`, placing it from hotbar slot `slot`, if it can't.
+// What's in hotbar slot `slot`, if there's one.
+fn held(inventory: &Inventory, slot: usize) -> Option<ItemStack> {
+    inventory.slots[..HOTBAR_SLOTS].get(slot).copied().flatten()
+}
+
+// Why `client` can't change `block` to `to` at `now`, placing it from or breaking it with what's
+// in hotbar slot `slot`, if it can't.
 fn refusal(
     world: &World,
     players: &Players,
@@ -171,6 +236,7 @@ fn refusal(
     block: I64Vec3,
     to: BlockType,
     slot: usize,
+    now: Duration,
 ) -> Option<&'static str> {
     let coord = ChunkCoordinate::containing(block);
     if !World::layers(world.height).contains(&coord.0.y) {
@@ -179,13 +245,24 @@ fn refusal(
     if !world.is_chunk_generated(coord) {
         return Some("its chunk isn't loaded");
     }
-    let Some((feet, mode, _, inventory)) =
-        players.iter().find(|(_, _, owner, _)| owner.0 == client)
+    let Some((_, feet, mode, _, inventory, started)) = players
+        .iter()
+        .find(|(_, _, _, owner, ..)| owner.0 == client)
     else {
         return Some("they have no player");
     };
     if !in_reach(feet.translation, block) {
         return Some("it's out of reach");
+    }
+    if to == BlockType::Air && !mode.breaks_at_once() {
+        let tool = held(inventory, slot).and_then(|stack| stack.item.tool());
+        let takes = break_time(world.get_block_at(block), tool);
+        let held_for = started
+            .filter(|started| started.block == block)
+            .map_or(0.0, |started| now.saturating_sub(started.at).as_secs_f32());
+        if held_for < takes - BREAK_SLACK {
+            return Some("it's broken sooner than it takes");
+        }
     }
     if to != BlockType::Air {
         if !world.get_block_at(block).is_replaceable() {
@@ -194,7 +271,7 @@ fn refusal(
         if !mode.can_place(to) {
             return Some("they can't place that");
         }
-        let held = inventory.slots[..HOTBAR_SLOTS].get(slot).copied().flatten();
+        let held = held(inventory, slot);
         if !mode.has_every_block() && held.is_none_or(|stack| stack.item != Item::Block(to)) {
             return Some("they aren't holding that");
         }
@@ -203,7 +280,7 @@ fn refusal(
         }
         let into_player = players
             .iter()
-            .any(|(body, ..)| overlaps(BODY, body.translation, block));
+            .any(|(_, body, ..)| overlaps(BODY, body.translation, block));
         if into_player {
             return Some("it's into a player");
         }
@@ -229,7 +306,7 @@ mod tests {
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
     use crate::player::{Player, PlayerOwner};
-    use crate::protocol::{BlockChanged, EditRejected, ProtocolPlugin, RequestEdit};
+    use crate::protocol::{BlockChanged, EditRejected, ProtocolPlugin, RequestEdit, StartBreaking};
     use crate::server::drops::DroppedItem;
     use crate::server::ServerPlugin;
     use crate::world::World;
@@ -424,7 +501,8 @@ mod tests {
         // nor does a torch hold up another, or count as ground for anything placed on it
         assert_refused(&mut app, above + I64Vec3::Y, BlockType::Torch);
         assert_refused(&mut app, above, BlockType::Stone);
-        request(&mut app, &[(FLOOR, BlockType::Air)]);
+        holding(&mut app, Item::WoodenPickaxe);
+        hold_and_break(&mut app, FLOOR, 1.9);
         assert_eq!(BlockType::Air, block_at(&app, above));
         let mut items: Vec<_> = dropped(&mut app).into_iter().map(|(s, _)| s).collect();
         items.sort_unstable_by_key(|stack| stack.item.name());
@@ -478,6 +556,32 @@ mod tests {
         assert_eq!(before, *inventory(&mut app));
     }
 
+    // Lets `seconds` pass on the server, a tenth at a time, as a frame's time is capped.
+    fn pass(app: &mut App, seconds: f32) {
+        let tenth = Duration::from_millis(100);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(tenth));
+        for _ in 0..(seconds * 10.0).round() as usize {
+            app.update();
+        }
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    }
+
+    // Starts breaking `block`, holds it for `seconds` and asks for it to be broken.
+    fn hold_and_break(
+        app: &mut App,
+        block: I64Vec3,
+        seconds: f32,
+    ) -> (Vec<BlockChanged>, Vec<EditRejected>) {
+        app.world_mut().write_message(StartBreaking { block });
+        app.update();
+        pass(app, seconds);
+        request(app, &[(block, BlockType::Air)])
+    }
+
+    fn holding(app: &mut App, item: Item) {
+        inventory(app).slots[0] = Some(ItemStack::new(item, 1));
+    }
+
     #[test]
     fn test_breaking_in_survival_drops_what_the_block_drops() {
         let mut app = server(GameMode::Survival);
@@ -488,13 +592,9 @@ mod tests {
             world.edit(poppy, BlockType::Poppy);
         }
         // stone leaves cobblestone, grass dirt, and the poppy on it nothing
-        request(
-            &mut app,
-            &[
-                (FLOOR, BlockType::Air),
-                (FLOOR + I64Vec3::X, BlockType::Air),
-            ],
-        );
+        holding(&mut app, Item::WoodenPickaxe);
+        hold_and_break(&mut app, FLOOR, 1.9);
+        hold_and_break(&mut app, FLOOR + I64Vec3::X, 0.9);
         let mut items: Vec<_> = dropped(&mut app);
         items.sort_unstable_by(|a, b| a.1.x.total_cmp(&b.1.x));
         let one = |block| ItemStack::new(Item::Block(block), 1);
@@ -503,8 +603,92 @@ mod tests {
             items.iter().map(|(stack, _)| *stack).collect::<Vec<_>>()
         );
         // from where the block was
-        assert_eq!(Vec3::new(3.5, 0.375, 0.5), items[0].1);
+        assert!(items[0].1.distance(Vec3::new(3.5, 0.375, 0.5)) < 0.5);
         assert_eq!(BlockType::Air, block_at(&app, poppy));
+    }
+
+    #[test]
+    fn test_breaking_in_survival_is_refused_until_its_been_held_long_enough() {
+        let mut app = server(GameMode::Survival);
+        // stone takes 7.5 / 4 seconds with a wooden pickaxe
+        holding(&mut app, Item::WoodenPickaxe);
+        assert_refused(&mut app, FLOOR, BlockType::Air);
+        let (changed, rejected) = hold_and_break(&mut app, FLOOR, 1.5);
+        assert_eq!((0, 1), (changed.len(), rejected.len()));
+        // held on, it's long enough, give or take the slack for the network
+        pass(&mut app, 0.3);
+        let (changed, _) = request(&mut app, &[(FLOOR, BlockType::Air)]);
+        assert_eq!(1, changed.len());
+        // nor does the time held count again for a block put back there
+        let mut query = app.world_mut().query::<&mut GameMode>();
+        *query.single_mut(app.world_mut()).unwrap() = GameMode::Creative;
+        request(&mut app, &[(FLOOR, BlockType::Stone)]);
+        let mut query = app.world_mut().query::<&mut GameMode>();
+        *query.single_mut(app.world_mut()).unwrap() = GameMode::Survival;
+        assert_refused(&mut app, FLOOR, BlockType::Air);
+        // and timing another block doesn't count for this one
+        let next = FLOOR + I64Vec3::X;
+        app.world_mut().write_message(StartBreaking {
+            block: next + I64Vec3::X,
+        });
+        app.update();
+        pass(&mut app, 2.0);
+        assert_refused(&mut app, next, BlockType::Air);
+    }
+
+    #[test]
+    fn test_plants_break_at_a_touch_in_survival() {
+        let mut app = server(GameMode::Survival);
+        app.world_mut()
+            .resource_mut::<World>()
+            .edit(FLOOR + I64Vec3::Y, BlockType::Dandelion);
+        let (changed, _) = request(&mut app, &[(FLOOR + I64Vec3::Y, BlockType::Air)]);
+        assert_eq!(1, changed.len());
+    }
+
+    #[test]
+    fn test_a_block_broken_without_the_tier_it_needs_drops_nothing() {
+        let mut app = server(GameMode::Survival);
+        // stone by hand, and with an axe, takes as long as by hand
+        let (changed, _) = hold_and_break(&mut app, FLOOR, 7.5);
+        assert_eq!(1, changed.len());
+        holding(&mut app, Item::IronAxe);
+        let (changed, _) = hold_and_break(&mut app, FLOOR + I64Vec3::X, 7.5);
+        assert_eq!(1, changed.len());
+        // and iron ore with a stone pickaxe
+        holding(&mut app, Item::StonePickaxe);
+        let ore = FLOOR + I64Vec3::X * 2;
+        app.world_mut()
+            .resource_mut::<World>()
+            .edit(ore, BlockType::IronOre);
+        let (changed, _) = hold_and_break(&mut app, ore, 9.0);
+        assert_eq!(1, changed.len());
+        assert!(dropped(&mut app).is_empty());
+    }
+
+    #[test]
+    fn test_breaking_wears_the_tool_held_until_it_breaks() {
+        let mut app = server(GameMode::Survival);
+        holding(&mut app, Item::IronPickaxe);
+        hold_and_break(&mut app, FLOOR, 0.75);
+        assert_eq!(1, inventory(&mut app).slots[0].unwrap().wear);
+        // a plant broken with it doesn't wear it
+        let plant = FLOOR + I64Vec3::new(1, 1, 0);
+        app.world_mut()
+            .resource_mut::<World>()
+            .edit(plant, BlockType::Poppy);
+        request(&mut app, &[(plant, BlockType::Air)]);
+        assert_eq!(1, inventory(&mut app).slots[0].unwrap().wear);
+        // and the last of its durability breaks it
+        inventory(&mut app).slots[0].as_mut().unwrap().wear = 255;
+        hold_and_break(&mut app, FLOOR + I64Vec3::X, 0.75);
+        assert_eq!(None, inventory(&mut app).slots[0]);
+        // having broken the stone it wore out on, as it did the first
+        let stones = dropped(&mut app)
+            .iter()
+            .map(|(stack, _)| stack.count)
+            .sum::<u8>();
+        assert_eq!(2, stones);
     }
 
     #[test]

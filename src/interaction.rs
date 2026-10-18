@@ -1,7 +1,9 @@
+use bevy::ecs::system::SystemParam;
 use bevy::math::I64Vec3;
 use bevy::prelude::*;
 
 use crate::block::BlockType;
+use crate::breaking::{break_time, crack_stage};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::client::player::LocalPlayer;
 use crate::collision::Aabb;
@@ -14,7 +16,7 @@ use crate::inventory::Inventory;
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT};
-use crate::protocol::{PickBlock, RequestEdit, UseBlock};
+use crate::protocol::{PickBlock, RequestEdit, StartBreaking, UseBlock};
 use crate::world::World;
 
 /// How far from the eye a block can be reached, in blocks.
@@ -23,19 +25,29 @@ pub const REACH: f32 = 5.0;
 // Just over a block wide, so the outline isn't hidden in the block's own faces.
 const OUTLINE_SIZE: f32 = 1.004;
 const OUTLINE_COLOUR: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
+// How long after breaking a block, in seconds, the next starts to break with the mouse still
+// held, as in Minecraft, so a held click doesn't mow through plants a block a frame.
+const BREAK_REST: f32 = 0.25;
 
 /// Looking at blocks, outlining the one looked at, and breaking, placing, picking and using
-/// blocks with the mouse (§5.1), breaking and placing as requests to the server. None of it
-/// happens while the game's paused, the block picker's up or the command bar's open.
+/// blocks with the mouse (§5.1), breaking and placing as requests to the server. Creative breaks
+/// a block at a click, and survival when the mouse has been held on it for as long as it takes.
+/// None of it happens while the game's paused, the block picker's up or the command bar's open.
 pub struct InteractionPlugin;
 
 impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Target>()
             .init_resource::<CraftingStation>()
+            .init_resource::<Breaking>()
+            .init_resource::<EditSeq>()
+            .add_systems(OnExit(GameState::Playing), stop_breaking)
             .add_systems(
                 Update,
-                (target_block, (outline_target, use_target, use_station))
+                (
+                    target_block,
+                    (outline_target, break_target, use_target, use_station),
+                )
                     .chain()
                     // from where the player is this frame
                     .after(player_move)
@@ -58,6 +70,104 @@ pub struct Target(pub Option<Hit>);
 pub struct Hit {
     pub block: I64Vec3,
     pub face: I64Vec3,
+}
+
+/// The block the player's holding the mouse on to break in survival, if any, and how it's
+/// getting on.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
+pub struct Breaking {
+    on: Option<BreakingBlock>,
+    // seconds before the next block starts to break, after one has
+    rest: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BreakingBlock {
+    block: I64Vec3,
+    // how long it's been held, from the frame it was started on, and how long it takes, in
+    // seconds
+    held: f32,
+    takes: f32,
+}
+
+/// What breaking a block with the mouse held tells the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BreakStep {
+    Start(I64Vec3),
+    Break(I64Vec3),
+}
+
+impl Breaking {
+    /// The block being broken and which of its cracks it shows, if there's one.
+    pub fn cracks(&self) -> Option<(I64Vec3, usize)> {
+        self.on.map(|on| (on.block, crack_stage(on.held, on.takes)))
+    }
+
+    // The mouse held on `target`, a block and how long it takes to break, or let go if none,
+    // for `dt` seconds. A new block starts from nothing, so looking away or letting go loses
+    // the progress, and the frame it starts on counts no time, as the server's timing of it
+    // starts from that frame too. A block that breaks at a touch needs no start.
+    fn hold(&mut self, target: Option<(I64Vec3, f32)>, dt: f32) -> Option<BreakStep> {
+        let Some((block, takes)) = target else {
+            *self = Self::default();
+            return None;
+        };
+        if self.rest > 0.0 {
+            self.rest -= dt;
+            return None;
+        }
+        let on = match &mut self.on {
+            Some(on) if on.block == block => {
+                on.held += dt;
+                // the tool held may have changed
+                on.takes = takes;
+                *on
+            }
+            _ => {
+                let on = BreakingBlock {
+                    block,
+                    held: 0.0,
+                    takes,
+                };
+                self.on = Some(on);
+                if takes > 0.0 {
+                    return Some(BreakStep::Start(block));
+                }
+                on
+            }
+        };
+        if on.held < on.takes {
+            return None;
+        }
+        self.on = None;
+        self.rest = BREAK_REST;
+        Some(BreakStep::Break(block))
+    }
+}
+
+// Each edit request a client makes is numbered, so it can tell which an answer is to.
+#[derive(Resource, Default)]
+struct EditSeq(u32);
+
+// What's asked of the server about blocks.
+#[derive(SystemParam)]
+struct EditRequests<'w> {
+    edits: MessageWriter<'w, RequestEdit>,
+    starts: MessageWriter<'w, StartBreaking>,
+    seq: ResMut<'w, EditSeq>,
+}
+
+impl EditRequests<'_> {
+    fn edit(&mut self, block: I64Vec3, to: BlockType, slot: u8) {
+        self.seq.0 = self.seq.0.wrapping_add(1);
+        let seq = self.seq.0;
+        self.edits.write(RequestEdit {
+            block,
+            to,
+            slot,
+            seq,
+        });
+    }
 }
 
 /// The first block that `stops` the ray from `origin` along `direction` within `reach` blocks,
@@ -140,38 +250,61 @@ fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {
     }
 }
 
-// Left click breaks the block looked at, right click places the selected block in the hotbar
-// against the face looked at, or in place of a block that's replaceable, such as tall grass,
-// and middle click selects the hotbar slot holding the block looked at, or in creative asks
-// for it in the selected slot. The server decides whether a block can go where it's placed:
-// into a replaceable block, never into a player, and in survival only if it's held.
+// Left click breaks the block looked at in creative. In survival the mouse is held on it, the
+// server told when it starts, and it breaks once it's been held as long as it takes with the
+// tool in the selected slot, which the server checks.
+fn break_target(
+    world: Res<World>,
+    target: Res<Target>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    time: Res<Time>,
+    player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
+    mut breaking: ResMut<Breaking>,
+    mut requests: EditRequests,
+) {
+    let (mode, hotbar, inventory) = player.single().expect("player does not exist");
+    let slot = hotbar.selected as u8;
+    if mode.breaks_at_once() {
+        if let Some(hit) = target.0.filter(|_| mouse.just_pressed(MouseButton::Left)) {
+            requests.edit(hit.block, BlockType::Air, slot);
+        }
+        return;
+    }
+    let tool = hotbar.held(inventory).and_then(|stack| stack.item.tool());
+    let held = target.0.filter(|_| mouse.pressed(MouseButton::Left));
+    let held = held.map(|hit| (hit.block, break_time(world.get_block_at(hit.block), tool)));
+    match breaking.hold(held, time.delta_secs()) {
+        Some(BreakStep::Start(block)) => {
+            requests.starts.write(StartBreaking { block });
+        }
+        Some(BreakStep::Break(block)) => requests.edit(block, BlockType::Air, slot),
+        None => {}
+    }
+}
+
+// Breaking starts again from nothing once the game's back from a menu or the inventory.
+fn stop_breaking(mut breaking: ResMut<Breaking>) {
+    *breaking = Breaking::default();
+}
+
+// Right click places the selected block in the hotbar against the face looked at, or in place
+// of a block that's replaceable, such as tall grass, and middle click selects the hotbar slot
+// holding the block looked at, or in creative asks for it in the selected slot. The server
+// decides whether a block can go where it's placed: into a replaceable block, never into a
+// player, and in survival only if it's held.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut player: Query<(&GameMode, &mut Hotbar, &Inventory), With<LocalPlayer>>,
-    mut requests: MessageWriter<RequestEdit>,
+    mut requests: EditRequests,
     mut picks: MessageWriter<PickBlock>,
-    mut seq: Local<u32>,
 ) {
     let Some(hit) = target.0 else {
         return;
     };
     let (mode, mut hotbar, inventory) = player.single_mut().expect("player does not exist");
     let slot = hotbar.selected as u8;
-    let mut request = |block, to| {
-        *seq = seq.wrapping_add(1);
-        requests.write(RequestEdit {
-            block,
-            to,
-            slot,
-            seq: *seq,
-        });
-    };
-    // at once in either mode, until M1.2 gives survival breaking times
-    if mouse.just_pressed(MouseButton::Left) {
-        request(hit.block, BlockType::Air);
-    }
     let replaceable = world.get_block_at(hit.block).is_replaceable();
     // and right click on a crafting table opens it instead, see `use_station`
     let places =
@@ -183,7 +316,7 @@ fn use_target(
             } else {
                 hit.block + hit.face
             };
-            request(at, held);
+            requests.edit(at, held, slot);
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
@@ -228,8 +361,71 @@ fn use_station(
 mod tests {
     use bevy::math::{I64Vec3, Vec3};
 
-    use super::{overlaps, raycast, Hit, REACH};
+    use super::{overlaps, raycast, BreakStep, Breaking, Hit, BREAK_REST, REACH};
+    use crate::breaking::CRACK_STAGES;
     use crate::player::BODY;
+
+    #[test]
+    fn test_holding_on_a_block_starts_it_cracks_it_and_breaks_it_once_its_taken_long_enough() {
+        let mut breaking = Breaking::default();
+        let block = I64Vec3::new(1, 2, 3);
+        // a tenth of a second a stage
+        let target = Some((block, CRACK_STAGES as f32 * 0.1));
+        assert_eq!(Some(BreakStep::Start(block)), breaking.hold(target, 0.1));
+        // the frame it starts on counts no time
+        assert_eq!(Some((block, 0)), breaking.cracks());
+        let mut stages = vec![];
+        for _ in 1..CRACK_STAGES {
+            assert_eq!(None, breaking.hold(target, 0.1));
+            stages.push(breaking.cracks().unwrap().1);
+        }
+        assert_eq!((1..CRACK_STAGES).collect::<Vec<_>>(), stages);
+        assert_eq!(Some(BreakStep::Break(block)), breaking.hold(target, 0.1));
+        assert_eq!(None, breaking.cracks());
+        // and the next waits a moment before it starts
+        let next = Some((block + I64Vec3::Y, 0.8));
+        let rest = (BREAK_REST / 0.1).ceil() as usize;
+        for _ in 0..rest {
+            assert_eq!(None, breaking.hold(next, 0.1));
+        }
+        assert_eq!(
+            Some(BreakStep::Start(block + I64Vec3::Y)),
+            breaking.hold(next, 0.1)
+        );
+    }
+
+    #[test]
+    fn test_letting_go_or_looking_away_starts_breaking_again_from_nothing() {
+        let mut breaking = Breaking::default();
+        let (block, other) = (I64Vec3::ZERO, I64Vec3::X);
+        breaking.hold(Some((block, 1.0)), 0.1);
+        for _ in 0..5 {
+            breaking.hold(Some((block, 1.0)), 0.1);
+        }
+        assert_eq!(Some((block, 4)), breaking.cracks());
+        assert_eq!(None, breaking.hold(None, 0.1));
+        assert_eq!(None, breaking.cracks());
+        assert_eq!(
+            Some(BreakStep::Start(block)),
+            breaking.hold(Some((block, 1.0)), 0.1)
+        );
+        breaking.hold(Some((block, 1.0)), 0.5);
+        assert_eq!(
+            Some(BreakStep::Start(other)),
+            breaking.hold(Some((other, 1.0)), 0.1)
+        );
+        assert_eq!(Some((other, 0)), breaking.cracks());
+    }
+
+    #[test]
+    fn test_what_breaks_at_a_touch_breaks_without_starting() {
+        let mut breaking = Breaking::default();
+        let block = I64Vec3::ZERO;
+        assert_eq!(
+            Some(BreakStep::Break(block)),
+            breaking.hold(Some((block, 0.0)), 0.1)
+        );
+    }
 
     // a floor from y 0 down, and a pillar at x 3, z 0 standing on it
     fn stops(block: I64Vec3) -> bool {
@@ -337,7 +533,7 @@ mod tests {
         use bevy_replicon::prelude::ClientId;
         use bevy_replicon::RepliconPlugins;
 
-        use super::super::{use_station, use_target, Hit, Target};
+        use super::super::{break_target, use_station, use_target, Breaking, EditSeq, Hit, Target};
         use crate::block::BlockType;
         use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
         use crate::chunks::chunk_loader::ChunkLoader;
@@ -353,7 +549,9 @@ mod tests {
         use crate::items::{Item, ItemStack};
         use crate::menu::GameState;
         use crate::player::{Player, PlayerOwner};
-        use crate::protocol::{EditRejected, PickBlock, ProtocolPlugin, RequestEdit, UseBlock};
+        use crate::protocol::{
+            EditRejected, PickBlock, ProtocolPlugin, RequestEdit, StartBreaking, UseBlock,
+        };
         use crate::server::ServerPlugin;
 
         // Looking down at the top of a block of sand at the origin, from `feet`.
@@ -367,14 +565,17 @@ mod tests {
                 .add_message::<RequestEdit>()
                 .add_message::<PickBlock>()
                 .add_message::<UseBlock>()
+                .add_message::<StartBreaking>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .init_resource::<CraftingStation>()
+                .init_resource::<Breaking>()
+                .init_resource::<EditSeq>()
                 .insert_resource(world)
                 .insert_resource(Target(Some(Hit {
                     block: I64Vec3::ZERO,
                     face: I64Vec3::Y,
                 })))
-                .add_systems(Update, (use_target, use_station));
+                .add_systems(Update, (break_target, use_target, use_station));
             app.world_mut().spawn((
                 Player::default(),
                 PlayerOwner(ClientId::Server),
@@ -596,6 +797,37 @@ mod tests {
                 .resource_mut::<crate::world::World>()
                 .edit(I64Vec3::ZERO, BlockType::CraftingTable);
             app
+        }
+
+        #[test]
+        fn test_survival_breaks_a_block_once_the_mouse_has_been_held_on_it_long_enough() {
+            use std::time::Duration;
+
+            use bevy::time::TimeUpdateStrategy;
+
+            let mut app = played(AWAY, GameMode::Survival);
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                100,
+            )));
+            // sand takes 0.75 seconds by hand
+            press(&mut app, MouseButton::Left);
+            app.update();
+            let sand = |app: &App| {
+                let world = app.world().resource::<crate::world::World>();
+                world.get_block_at(I64Vec3::ZERO) == BlockType::Sand
+            };
+            for _ in 0..7 {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<MouseButton>>()
+                    .clear();
+                app.update();
+                assert!(sand(&app));
+            }
+            let cracks = app.world().resource::<Breaking>().cracks();
+            assert_eq!(Some((I64Vec3::ZERO, 7)), cracks);
+            app.update();
+            assert!(!sand(&app));
+            assert_eq!(None, app.world().resource::<Breaking>().cracks());
         }
     }
 }

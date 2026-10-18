@@ -15,6 +15,7 @@ use bevy_replicon_renet2::netcode::{in_memory_server_addr, new_memory_sockets};
 use bevy_replicon_renet2::renet2::RenetClient;
 use bevy_replicon_renet2::RepliconRenetPlugins;
 use rustcraft::block::BlockType;
+use rustcraft::breaking::break_time;
 use rustcraft::chunks::chunk::ChunkCoordinate;
 use rustcraft::chunks::chunk_loader::ChunkLoader;
 use rustcraft::chunks::generate::checksum::world_checksum;
@@ -29,6 +30,7 @@ use rustcraft::items::{Item, ItemStack};
 use rustcraft::player::PlayerOwner;
 use rustcraft::protocol::{
     BlockChanged, ChunkEdits, CommandOutput, EditRejected, ProtocolPlugin, RequestEdit,
+    StartBreaking,
 };
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, ServerPlugin, WorldToOpen};
@@ -40,8 +42,8 @@ const FRAME: Duration = Duration::from_millis(20);
 // Far beyond the reach of a client drawing as far as the default settings, 36 chunks.
 const FAR: I64Vec3 = I64Vec3::new(100 * 16, 0, 0);
 
-// A world hosted with seed 3 in `dir`, its host playing, and a client to join it on the other
-// end of an in-memory socket. The client is given `version` too, as a game of another version
+// A world hosted with seed 3 in `dir`, its host playing in creative, so its edits are made at
+// once, and a client to join it on the other end of an in-memory socket. The client is given `version` too, as a game of another version
 // would have.
 fn server_and_client(dir: &std::path::Path, version: Option<&str>) -> (App, App) {
     server_and_client_with(dir, version, GenerationChecksum::default())
@@ -72,6 +74,11 @@ fn server_and_client_with(
         .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
     server.finish();
     server.update();
+    let host = player_of(&mut server, ClientId::Server);
+    server
+        .world_mut()
+        .entity_mut(host)
+        .insert(GameMode::Creative);
 
     let mut client = App::new();
     client
@@ -246,6 +253,12 @@ fn test_a_client_joins_plays_and_leaves() {
         .into_iter()
         .find(|&owner| owner != ClientId::Server)
         .expect("the server spawned no player for the client");
+    // building from nothing
+    let guests = player_of(&mut server, guest);
+    server
+        .world_mut()
+        .entity_mut(guests)
+        .insert(GameMode::Creative);
     let spawn = server.world().resource::<World>().spawn();
     let mut local = client
         .world_mut()
@@ -300,11 +313,24 @@ fn test_a_client_joins_plays_and_leaves() {
         *local.single(client.world()).unwrap() == expected
     });
 
-    // and the item a block it breaks in survival drops, which the server replicates to it
+    // and the item a block it breaks in survival drops, which the server replicates to it:
+    // planks, which a hand breaks in 3 seconds and gets
     server
         .world_mut()
         .entity_mut(guests_player)
         .insert(GameMode::Survival);
+    server
+        .world_mut()
+        .resource_mut::<World>()
+        .edit(below, BlockType::Planks);
+    client
+        .world_mut()
+        .write_message(StartBreaking { block: below });
+    let takes = break_time(BlockType::Planks, None);
+    for _ in 0..(takes / FRAME.as_secs_f32()) as usize + 10 {
+        client.update();
+        server.update();
+    }
     client.world_mut().write_message(RequestEdit {
         block: below,
         to: BlockType::Air,
@@ -314,7 +340,7 @@ fn test_a_client_joins_plays_and_leaves() {
     update_until(&mut server, &mut client, |_, client| {
         let mut drops = client.world_mut().query::<&DroppedItem>();
         let dropped = drops.iter(client.world()).map(|item| item.stack.item);
-        dropped.eq([Item::Block(BlockType::Bricks)])
+        dropped.eq([Item::Block(BlockType::Planks)])
     });
 
     // leaving takes its player with it
@@ -463,6 +489,88 @@ fn test_a_client_sees_its_edit_at_once_and_undone_if_its_refused() {
         rejection.seq == 1
     });
     assert_eq!(was, shown(&client));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_survival_break_is_seen_at_once_and_undone_if_its_sooner_than_it_takes() {
+    let dir = temp_dir("breaking");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let player = local_player(&mut client);
+    assert_eq!(
+        GameMode::Survival,
+        *client.world().get::<GameMode>(player).unwrap()
+    );
+    // the ground under the joiner's spawn, which is over it, once the server has it
+    let spawn = client
+        .world()
+        .resource::<World>()
+        .spawn()
+        .floor()
+        .as_i64vec3();
+    let column = |down| spawn - I64Vec3::Y * down;
+    update_until(&mut server, &mut client, |server, _| {
+        let world = server.world().resource::<World>();
+        (0..40).all(|down| world.is_chunk_generated(ChunkCoordinate::containing(column(down))))
+    });
+    let world = server.world().resource::<World>();
+    let ground = (1..40)
+        .map(column)
+        .find(|&block| world.get_block_at(block).is_solid())
+        .expect("there's no ground under the spawn");
+    // the joiner stands on it, to break it by hand
+    let feet = (ground + I64Vec3::Y).as_vec3() + Vec3::new(0.5, 0.0, 0.5);
+    move_player(&mut client, player, feet);
+    let guest = owners(&mut server)
+        .into_iter()
+        .find(|&owner| owner != ClientId::Server)
+        .unwrap();
+    let guests = player_of(&mut server, guest);
+    update_until(&mut server, &mut client, |server, _| {
+        server.world().get::<Transform>(guests).unwrap().translation == feet
+    });
+    let was = generate_at(&mut client, ground);
+    let takes = break_time(was, None);
+    assert!(takes > 0.2, "{was:?}");
+    let shown = |client: &App| client.world().resource::<World>().get_block_at(ground);
+    let break_it = |client: &mut App, seq| {
+        client.world_mut().write_message(RequestEdit {
+            block: ground,
+            to: BlockType::Air,
+            slot: 0,
+            seq,
+        });
+        client.update();
+    };
+
+    // at once, it's shown gone and then put back
+    client
+        .world_mut()
+        .write_message(StartBreaking { block: ground });
+    break_it(&mut client, 1);
+    assert_eq!(BlockType::Air, shown(&client));
+    let mut rejections = MessageCursor::<EditRejected>::default();
+    update_until_sent(&mut server, &mut client, &mut rejections, |r| r.seq == 1);
+    assert_eq!(was, shown(&client));
+
+    // held as long as it takes, it's shown gone and stays gone
+    client
+        .world_mut()
+        .write_message(StartBreaking { block: ground });
+    for _ in 0..(takes / FRAME.as_secs_f32()) as usize + 10 {
+        client.update();
+        server.update();
+    }
+    break_it(&mut client, 2);
+    assert_eq!(BlockType::Air, shown(&client));
+    let mut changes = MessageCursor::<BlockChanged>::default();
+    update_until_sent(&mut server, &mut client, &mut changes, |change| {
+        change.by.is_some_and(|(_, seq)| seq == 2)
+    });
+    assert_eq!(BlockType::Air, shown(&client));
+    let on_server = server.world().resource::<World>().get_block_at(ground);
+    assert_eq!(BlockType::Air, on_server);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

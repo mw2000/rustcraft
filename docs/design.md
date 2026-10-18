@@ -67,7 +67,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
-| Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
+| Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
@@ -83,7 +83,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits and the player (`src/save/`).
 
-Not there yet: breaking times, health, structures, mobs, networking.
+Not there yet: health, structures, mobs, networking.
 
 ---
 
@@ -127,9 +127,11 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
   whether it's replaceable (a block placed into it takes its place: air, water, plants), its
   `light_opacity` and occlusion weight, the block light it `emits` (0–14, a torch's 14), its
   render style, and its tiles per face and for LODs. Properties are added to the row as the
-  features that use them land (hardness).
+  features that use them land.
   Since M1.1 a row says what the block `drops` when broken in survival: `Nothing`, `Itself`
-  (its own block item) or another block's item (§5.2).
+  (its own block item) or another block's item (§5.2). Since M1.2 it has a `hardness` (the
+  seconds it takes to break by hand), the `tool` that breaks it quicker, if any, and the `tier`
+  of that tool it needs to drop anything (§5.1, §5.3).
 - Render styles (`RenderStyle`): `None` (air), `Cube` (faces, culled against opaque neighbours
   and greedy-merged), `Liquid` (water's own mesh), `Cross` (two diagonal quads, double-sided
   and alpha cut out, at full detail only) and `Torch` (a stick 2/16 wide and 10/16 tall on the
@@ -259,7 +261,7 @@ The world's state beyond the seed (INV-1).
 - **Protocol.** Blocks travel by name, or by a palette sent on joining (§4.1). Client to server:
   `RequestEdit { block, to, slot, seq }`, `RunCommand`, `Chat`, the inventory's requests
   (`InventoryClick`, `CloseInventory`, `DropItem`, `PickBlock`, §5.2), `UseBlock` and `Craft`
-  (§5.3), and from M0.6
+  (§5.3), `StartBreaking` (§5.1), and from M0.6
   `PlayerState` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
   time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
@@ -520,16 +522,18 @@ The world's state beyond the seed (INV-1).
 Switched with `/gamemode`, which in multiplayer needs operator permission.
 
 - **Built (M0.4):** `GameMode` (`src/game_mode.rs`) is a component on the player, so each player
-  can have their own, saved with them (§4.3). It's **creative by default for now**, since
-  survival has no breaking times, crafting or health yet: with only instant breaking and
-  nothing to make, a new world in survival would be a slower creative. Everything the modes
-  change asks `GameMode`'s methods (`can_fly`, `has_every_block`, `drops_broken_blocks`), so
-  M1.2 adds its own there. Creative flies (F toggles), breaks at once, has the block picker and
-  never uses blocks up. Survival can't fly, and switching to it drops a flying player into
-  walking; it breaks at once until M1.2, but **since M1.1** places only what's in the hotbar
-  slot held, using it up, and what it breaks drops its item (§5.2). Middle click only selects
+  can have their own, saved with them (§4.3). Everything the modes change asks `GameMode`'s
+  methods (`can_fly`, `has_every_block`, `breaks_at_once`, `drops_broken_blocks`). Creative
+  flies (F toggles), breaks at once, has the block picker and never uses blocks up. Survival
+  can't fly, and switching to it drops a flying player into walking; **since M1.1** it places
+  only what's in the hotbar slot held, using it up, and what it breaks drops its item (§5.2),
+  and **since M1.2** breaking takes time and the right tool (§5.1). Middle click only selects
   a block already in the hotbar. `/gamemode survival|creative` (or `s`/`c`) switches, keeping
   the inventory as it is.
+- **Survival is the default since M1.2**, once breaking times and crafting made it a game: a
+  new player, or one saved before game modes, starts in survival, walking, with nothing.
+  `/gamemode c` switches to creative. (Until then it was creative, as survival with instant
+  breaking and nothing to make was only a slower creative.)
 
 ---
 
@@ -551,6 +555,52 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   (checked by the server since M0.5b, §4.4), and middle click picks the block looked at into the
   hotbar (§5.2). None of it happens while paused, in the inventory or with the command bar open.
   Since M1.1 survival places from the hotbar slot held, and breaking drops items (§5.2).
+- **Built (M1.2):** breaking in survival takes time (`src/breaking.rs` holds the rules both
+  sides use).
+  - **Break time** is the block's `hardness` (§4.1), its seconds by hand, divided by the speed
+    of the tool held if it's the kind the block names and of the tier it needs, or by 1
+    otherwise. A block broken without that tier, by hand or with too low a tier or the wrong
+    kind of tool, takes as long as by hand and drops nothing. The numbers, with tools' speeds
+    of 4, 6, 8 and 10 from wood to iron (§5.2):
+
+    | Block | Hardness (s by hand) | Tool | Tier | Wood | Stone | Copper | Iron |
+    |---|---|---|---|---|---|---|---|
+    | Plants, torches | 0 | | 0 | | | | |
+    | Leaves, snow | 0.3 | (snow: shovel) | 0 | | | | |
+    | Dirt, sand, ice | 0.75 | shovel (ice: pickaxe) | 0 | 0.19 | 0.13 | 0.09 | 0.08 |
+    | Grass, gravel | 0.9 | shovel | 0 | 0.23 | 0.15 | 0.11 | 0.09 |
+    | Logs, planks | 3 | axe | 0 | 0.75 | 0.5 | 0.38 | 0.3 |
+    | Crafting table | 3.75 | axe | 0 | 0.94 | 0.63 | 0.47 | 0.38 |
+    | Sandstone | 4 | pickaxe | 1 | 1 | 0.67 | 0.5 | 0.4 |
+    | Stone, cobblestone, bricks, stone bricks | 7.5 | pickaxe | 1 | 1.9 | 1.25 | 0.94 | 0.75 |
+    | Furnace | 8 | pickaxe | 1 | 2 | 1.33 | 1 | 0.8 |
+    | Coal ore | 9 | pickaxe | 1 | 2.25 | 1.5 | 1.13 | 0.9 |
+    | Copper ore | 9 | pickaxe | 2 | (9, nothing) | 1.5 | 1.13 | 0.9 |
+    | Iron ore | 9 | pickaxe | 3 | (9, nothing) | (9, nothing) | 1.13 | 0.9 |
+
+  - **Holding to break** (`interaction::break_target`, `Breaking`): in survival the left mouse
+    is held on a block until it's been held as long as it takes with the hotbar's selected
+    tool. Looking away or letting go starts again from nothing, and so does leaving play for a
+    menu or the inventory. After a block breaks, the next starts a quarter of a second later, as
+    in Minecraft, so a held click doesn't mow through plants a block a frame. Creative breaks at
+    a click, as before.
+  - **Cracks** (`src/client/cracks.rs`): a cube a hair bigger than the block, alpha-blended,
+    draws one of 8 stages (`CRACK_STAGES`) of `assets/textures/cracks.png`, a network of
+    cracks that spreads from the middle, drawn by the block-textures skill's `cracks.py`.
+  - **The server checks it** (INV-4): the client sends `StartBreaking { block }` as it starts
+    on a block (not one that breaks at a touch), and the server notes the time
+    (`BreakingStarted` on the player); a survival `RequestEdit` breaking a block is refused
+    unless that block was started on at least its break time, for the tool in the slot the
+    request names, ago, less 0.1 s of slack (`BREAK_SLACK`), and a break spends the start, so a
+    block put back in the same place takes as long again. The client times its hold from the
+    frame it sends the start to the frame it sends the edit, which in one App is the server's
+    timing to the frame; over a network both take about as long to arrive, so their delay
+    cancels, all but jitter and a server frame's wait. A joined client predicts the break like
+    any edit (§4.4): the block goes as the hold ends, and comes back if the server refuses. A tenth lets no one break stone with a
+    wooden pickaxe more than a twentieth quicker.
+  - **Wear:** each block broken with a tool in survival, but for one that breaks at a touch,
+    wears it by 1 (§5.2); a tool worn to its durability breaks and is gone. Leaves still drop
+    nothing: apples and saplings come with farming (M1.9b).
 
 ### 5.2 Inventory and items
 
@@ -645,13 +695,15 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 
 - Recipes are data (INV-6), and a recipe is a list of ingredients and an output, made at a
   station: by hand, at a crafting table, and for smelting at a furnace (D-4).
-- Tool tiers set what can be mined. Proposed tiers, to rename and tune freely:
+- Tool tiers set what can be mined: a block mined without its tier drops nothing (§5.1, built in
+  M1.2 to tier 4). Coal needs only a wooden pickaxe, rather than stone as first planned, as it's
+  for torches, wanted on the first night. Proposed tiers, to rename and tune freely:
 
   | Tier | Material | Mines | Where it's found |
   |---|---|---|---|
   | 0 | Hand | Dirt, sand, logs, leaves | Everywhere |
-  | 1 | Wood | Stone | Everywhere |
-  | 2 | Stone | Copper, coal | Everywhere, shallow |
+  | 1 | Wood | Stone, coal | Everywhere |
+  | 2 | Stone | Copper | Everywhere, shallow |
   | 3 | Copper | Iron | Everywhere, mid-depth |
   | 4 | Iron | Regional ores | Specific regions (P3) |
   | 5 | Alloys from regional ores | The deepest ores | Deep, specific regions |
@@ -902,7 +954,7 @@ and loads.**
 Done when: **you can start with nothing and make iron tools.**
 
 - ☑ **M1.1 Hotbar, inventory and items.** Data-driven items, stacks, dropped items (§5.2).
-- ☐ **M1.2 Survival breaking.** Break time from hardness and tool (§5.1). Drops came with M1.1;
+- ☑ **M1.2 Survival breaking.** Break time from hardness and tool (§5.1). Drops came with M1.1;
   M1.2 makes some need the right tool.
 - ☑ **M1.3 Caves.** 3D carving underground, cave mouths, buried-chunk skipping updated (§5.4).
 - ☑ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).

@@ -253,6 +253,16 @@ impl ItemStack {
         (moved < other.count).then(|| ItemStack::new(other.item, other.count - moved))
     }
 
+    /// A tool after breaking a block with it, or nothing if that wore it out. Anything else
+    /// doesn't wear.
+    pub fn worn(self) -> Option<Self> {
+        let Some(tool) = self.item.tool() else {
+            return Some(self);
+        };
+        let wear = self.wear + 1;
+        (wear < tool.durability).then_some(Self { wear, ..self })
+    }
+
     /// How much of a worn tool's durability is left, from 1 when new down towards 0, or none
     /// if it isn't a tool or is new, as only a worn one shows it.
     pub fn durability_left(self) -> Option<f32> {

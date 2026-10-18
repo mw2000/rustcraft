@@ -58,6 +58,8 @@ impl Plugin for ProtocolPlugin {
             // after the station it's made at's opened
             .add_client_message::<UseBlock>(Channel::Ordered)
             .add_client_message::<Craft>(Channel::Ordered)
+            // before the edit that finishes it
+            .add_client_message::<StartBreaking>(Channel::Ordered)
             // to every client, which draw them where the server has them
             .replicate::<DroppedItem>()
             .replicate_filtered_as::<Transform, Position, With<DroppedItem>>();
@@ -272,6 +274,13 @@ pub struct UseBlock {
 pub struct Craft {
     pub recipe: Recipe,
     pub all: bool,
+}
+
+/// A player in survival starting to break the block at `block`, which the server times, so it
+/// can refuse a `RequestEdit` breaking it sooner than it takes.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartBreaking {
+    pub block: I64Vec3,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself
