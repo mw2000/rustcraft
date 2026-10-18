@@ -1,6 +1,7 @@
 //! The crafting list beside the inventory screen's slots: every recipe that can be made at the
 //! station it's open at, bright if what's carried makes it and dimmed if not. Clicking one asks
-//! the server to make it once, and shift-clicking as many times as it can (`Craft`).
+//! the server to make it once, and shift-clicking as many times as it can (`Craft`). It scrolls,
+//! with the wheel or the arrow keys over it, once there are more than fit.
 
 use bevy::picking::events::PointerPress;
 use bevy::picking::hover::Hovered;
@@ -14,16 +15,19 @@ use super::Inventory;
 use crate::client::player::LocalPlayer;
 use crate::crafting::{Recipe, Station};
 use crate::items::Item;
+use crate::menu::widgets::scroller;
 use crate::menu::{font, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
 use crate::protocol::Craft;
 
 // In pixels: five columns of buttons, each the output and what it takes, so a crafting table's
-// sixty-odd recipes fit on the screen.
+// sixty-odd recipes fit across the screen, scrolling down it.
 const CARD_WIDTH: f32 = 140.0;
 const CARD_HEIGHT: f32 = 44.0;
 const CARD_BORDER: f32 = 2.0;
 const CARD_GAP: f32 = 4.0;
 const COLUMNS: u16 = 5;
+// The most of the screen's height the list takes before it scrolls, in percent.
+const LIST_HEIGHT: f32 = 60.0;
 // Over a recipe there aren't the ingredients for.
 const DIMMED: Color = Color::srgba(0.0, 0.0, 0.0, 0.65);
 
@@ -61,18 +65,24 @@ pub(super) fn spawn_recipes(screen: &mut ChildSpawnerCommands, icons: &ItemIcons
         ))
         .with_children(|list| {
             list.spawn((Heading, Text::new("Crafting"), font(18.0), TEXT_SHADOW));
-            list.spawn(Node {
-                display: Display::Grid,
-                grid_template_columns: RepeatedGridTrack::px(COLUMNS, CARD_WIDTH),
-                row_gap: Val::Px(CARD_GAP),
-                column_gap: Val::Px(CARD_GAP),
-                ..default()
-            })
-            .with_children(|grid| {
-                for &recipe in Recipe::ALL {
-                    spawn_card(grid, icons, recipe);
-                }
-            });
+            // a crafting table makes more than fit on a short screen
+            list.spawn(scroller(Val::Vh(LIST_HEIGHT)))
+                .with_children(|scroller| {
+                    scroller
+                        .spawn(Node {
+                            display: Display::Grid,
+                            grid_template_columns: RepeatedGridTrack::px(COLUMNS, CARD_WIDTH),
+                            row_gap: Val::Px(CARD_GAP),
+                            column_gap: Val::Px(CARD_GAP),
+                            flex_shrink: 0.0,
+                            ..default()
+                        })
+                        .with_children(|grid| {
+                            for &recipe in Recipe::ALL {
+                                spawn_card(grid, icons, recipe);
+                            }
+                        });
+                });
         });
 }
 

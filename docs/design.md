@@ -2046,7 +2046,10 @@ Done when: **the world feels inhabited, and night is dangerous.**
       short lists), sliders (`Slider`, rounded to their step, showing "Name: value"), text fields
       (`TextInput`, so a cursor, selection, typing, paste and a filter, selecting all on focus),
       scrolling lists (`ListBox`; arrow keys select, Enter or a double click is `RowChosen`),
-      tabs as buttons, and confirmations and notices as pages. Tab, Shift-Tab and Up/Down move
+      tabs as buttons, a `scroller` (a column that scrolls past a height, with the wheel or the
+      arrow and Page keys while hovered or focused; the inventory's crafting list is in one, as
+      a crafting table's recipes overflow short screens), and confirmations and notices as
+      pages. Tab, Shift-Tab and Up/Down move
       the focus (`TabNavigationPlugin` and `move_focus_with_arrows`), Enter and Space press, and
       the focus lights up only once the keyboard's used. Text is sized in rem, so Larger Text is
       `RemSize`; UI Scale is `UiScale`.

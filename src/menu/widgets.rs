@@ -57,7 +57,13 @@ impl Plugin for WidgetsPlugin {
             .add_observer(choose_row)
             .add_systems(
                 Update,
-                (move_focus_with_arrows, show_sliders, highlight).chain(),
+                (
+                    move_focus_with_arrows,
+                    scroll_with_keys,
+                    show_sliders,
+                    highlight,
+                )
+                    .chain(),
             );
     }
 }
@@ -381,6 +387,56 @@ pub fn list(width: f32, height: f32) -> impl Bundle {
         BackgroundColor(FIELD_COLOR),
         BorderColor::all(BUTTON_BORDER_COLOR),
     )
+}
+
+/// What scrolls in a `scroller`, with the wheel or with the arrow and Page keys while the pointer's
+/// over it or it has the focus.
+#[derive(Component)]
+pub struct Scroller;
+
+// How far the arrow keys scroll, in pixels.
+const KEY_SCROLL: f32 = 40.0;
+
+/// A column, for widgets that may not all fit, scrolling once it's taller than `max_height`.
+pub fn scroller(max_height: Val) -> impl Bundle {
+    (
+        Scroller,
+        ScrollArea,
+        Hovered::default(),
+        Node {
+            flex_direction: FlexDirection::Column,
+            max_height,
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+    )
+}
+
+fn scroll_with_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<InputFocus>,
+    mut areas: Query<(Entity, &Hovered, &ComputedNode, &mut ScrollPosition), With<Scroller>>,
+) {
+    for (area, hovered, node, mut scrolled) in &mut areas {
+        if !hovered.get() && focus.get() != Some(area) {
+            continue;
+        }
+        let visible = node.size().y * node.inverse_scale_factor;
+        let content = node.content_size().y * node.inverse_scale_factor;
+        let by = [
+            (KeyCode::ArrowUp, -KEY_SCROLL),
+            (KeyCode::ArrowDown, KEY_SCROLL),
+            (KeyCode::PageUp, -visible),
+            (KeyCode::PageDown, visible),
+        ]
+        .into_iter()
+        .filter(|&(key, _)| keys.just_pressed(key))
+        .map(|(_, by)| by)
+        .sum::<f32>();
+        if by != 0.0 {
+            scrolled.y = (scrolled.y + by).clamp(0.0, (content - visible).max(0.0));
+        }
+    }
 }
 
 /// A row of a `list`, for its lines of text to go in.
