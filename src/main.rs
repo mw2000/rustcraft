@@ -121,7 +121,7 @@ fn setup_scene(
         texture: Some(atlas.clone()),
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
-        cloud_layer: clouds.layer,
+        cloud_layer: clouds.layer.clone(),
         curvature: curvature.buffer.clone(),
         debug: settings.debug,
     });
@@ -130,7 +130,7 @@ fn setup_scene(
         texture: Some(atlas),
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
-        cloud_layer: clouds.layer,
+        cloud_layer: clouds.layer.clone(),
         see_through: see_through_reach(layout),
         curvature: curvature.buffer.clone(),
         solid: false,

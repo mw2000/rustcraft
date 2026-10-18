@@ -20,6 +20,7 @@ use bevy::{
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::chunks::material::{push_shader_defs, water_level};
+use crate::clock::{TimeOfDay, DAY_SECONDS};
 use crate::curvature::Curvature;
 
 /// Height of the clouds' undersides: above most land, so only the tallest peaks reach them.
@@ -47,10 +48,12 @@ const CLOUD_CELLS: f64 = 16.0;
 const COPIES: i32 = 3;
 // The pattern's width in blocks.
 const SPAN: f32 = PATTERN as f32 * CELL;
-// Which way and how fast clouds drift, in blocks a second: a whole number of patterns an
-// hour each way, so they carry on seamlessly when the shaders' clock, Bevy's `globals.time`,
-// wraps back to zero on the hour.
-const WIND: Vec2 = Vec2::new(SPAN * 2.0 / 3600.0, SPAN / 3600.0);
+// Which way and how fast clouds drift, in blocks a second: a whole number of patterns every
+// `WIND_PERIOD` seconds each way, so they carry on seamlessly when the drift wraps.
+const WIND: Vec2 = Vec2::new(SPAN * 2.0 / WIND_PERIOD, SPAN / WIND_PERIOD);
+// How long the wind takes to carry the clouds a whole number of patterns, a whole number of
+// game days so the drift can wrap by days, see `wind_drift`.
+const WIND_PERIOD: f32 = 6.0 * DAY_SECONDS;
 // Each level of detail's cells, in the finest's, and how far out it starts, in patterns
 // from the camera to the nearest edge of a copy: far copies are coarser, as there are many
 // and every one is drawn in full.
@@ -121,8 +124,9 @@ impl Material for CloudMaterial {
 pub struct CloudLayer {
     /// The pattern, one texel a cell, more the thicker the cloud there, 0 where clear.
     pub pattern: Handle<Image>,
-    /// The middle of the layer's height, the pattern's width in blocks, and the wind.
-    pub layer: Vec4,
+    /// The middle of the layer's height, the pattern's width in blocks, and how far the wind
+    /// has drifted the clouds, a `Vec4` in a buffer that `drift_clouds` keeps up to date.
+    pub layer: Handle<ShaderBuffer>,
 }
 
 // One copy of the pattern, `offset` patterns from the one over the camera.
@@ -483,6 +487,7 @@ pub fn spawn_clouds(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<CloudMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     curvature: Res<Curvature>,
 ) {
     let seed = rand::random();
@@ -490,7 +495,10 @@ pub fn spawn_clouds(
     let height = MAX_LAYERS as f32 * LAYER;
     commands.insert_resource(CloudLayer {
         pattern: images.add(pattern_image(&columns)),
-        layer: Vec4::new(CLOUD_BASE + height / 2.0, SPAN, WIND.x, WIND.y),
+        layer: buffers.add(ShaderBuffer::new(
+            layer_data(Vec2::ZERO).to_vec(),
+            RenderAssetUsages::default(),
+        )),
     });
     let lods: Vec<Handle<Mesh>> = LODS
         .iter()
@@ -518,10 +526,26 @@ pub fn spawn_clouds(
     commands.insert_resource(CloudMeshes(lods));
 }
 
-/// Where the pattern copy `offset` copies from the one over `camera` starts, `elapsed`
-/// seconds into the wind.
-fn tile_origin(camera: Vec2, elapsed: f32, offset: IVec2) -> Vec2 {
-    let drift = (WIND * elapsed).rem_euclid(Vec2::splat(SPAN));
+// What the shaders read of the cloud layer, see `CloudLayer::layer`.
+fn layer_data(drift: Vec2) -> [f32; 4] {
+    let middle = CLOUD_BASE + MAX_LAYERS as f32 * LAYER / 2.0;
+    [middle, SPAN, drift.x, drift.y]
+}
+
+/// How far the wind has carried the clouds at `time`, wrapped to the pattern. It follows the
+/// shared time of day, not each process's own clock, so everyone sees the same clouds. The
+/// whole days wrap by the wind's period apart from the day's fraction, so it stays precise
+/// however many days have passed.
+fn wind_drift(time: &TimeOfDay) -> Vec2 {
+    let days = time.0.floor();
+    let seconds =
+        (days % (WIND_PERIOD / DAY_SECONDS)) * DAY_SECONDS + (time.0 - days) * DAY_SECONDS;
+    (WIND * seconds).rem_euclid(Vec2::splat(SPAN))
+}
+
+/// Where the pattern copy `offset` copies from the one over `camera` starts, with the clouds
+/// carried `drift` by the wind.
+fn tile_origin(camera: Vec2, drift: Vec2, offset: IVec2) -> Vec2 {
     ((camera - drift) / SPAN).floor() * SPAN + drift + offset.as_vec2() * SPAN
 }
 
@@ -535,7 +559,10 @@ fn tile_lod(camera: Vec2, origin: Vec2) -> usize {
 }
 
 fn drift_clouds(
-    time: Res<Time>,
+    time: Res<TimeOfDay>,
+    layer: Res<CloudLayer>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut shown: Local<Vec2>,
     lods: Res<CloudMeshes>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut tiles: Query<(&CloudTile, &mut Transform, &mut Mesh3d)>,
@@ -544,9 +571,17 @@ fn drift_clouds(
         return;
     };
     let camera = camera.translation().xz();
+    let drift = wind_drift(&time);
+    // the shaders draw the clouds' shadows with the same drift, so they keep together
+    if drift != *shown {
+        *shown = drift;
+        if let Some(mut buffer) = buffers.get_mut(&layer.layer) {
+            buffer.clear();
+            buffer.extend_from_slice(&layer_data(drift));
+        }
+    }
     for (tile, mut transform, mut mesh) in &mut tiles {
-        // the shaders' clock, so clouds and their shadows keep together
-        let origin = tile_origin(camera, time.elapsed_secs_wrapped(), tile.offset);
+        let origin = tile_origin(camera, drift, tile.offset);
         transform.translation = Vec3::new(origin.x, CLOUD_BASE, origin.y);
         let lod = &lods.0[tile_lod(camera, origin)];
         if mesh.0 != *lod {
@@ -752,10 +787,51 @@ mod tests {
     }
 
     #[test]
-    fn test_wind_carries_on_seamlessly_past_the_hour() {
+    fn test_wind_carries_on_seamlessly_past_the_period() {
         let camera = Vec2::new(500.0, 900.0);
-        assert!(tile_origin(camera, 3600.0, IVec2::ZERO)
-            .abs_diff_eq(tile_origin(camera, 0.0, IVec2::ZERO), 0.05));
+        let period = WIND_PERIOD / DAY_SECONDS;
+        for days in [0.3, 2.0, 41.6] {
+            assert!(
+                tile_origin(camera, wind_drift(&TimeOfDay(days + period)), IVec2::ZERO)
+                    .abs_diff_eq(
+                        tile_origin(camera, wind_drift(&TimeOfDay(days)), IVec2::ZERO),
+                        0.5
+                    ),
+                "{days}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_drift_depends_only_on_the_time_of_day() {
+        // nothing but `TimeOfDay` goes in, so every player at the same time sees the same sky
+        assert_eq!(wind_drift(&TimeOfDay(1.25)), wind_drift(&TimeOfDay(1.25)));
+        assert_ne!(wind_drift(&TimeOfDay(1.25)), wind_drift(&TimeOfDay(1.26)));
+    }
+
+    #[test]
+    fn test_drift_has_no_jumps_across_a_day_boundary_or_after_many_days() {
+        let step = 0.001;
+        let wrapped = |a: Vec2, b: Vec2| {
+            let d = (b - a).rem_euclid(Vec2::splat(SPAN));
+            d.min(Vec2::splat(SPAN) - d)
+        };
+        for start in [0.9, 5.9, 5.99, 400.9, 1000.99] {
+            let mut last = wind_drift(&TimeOfDay(start));
+            for i in 1..=40 {
+                let now = wind_drift(&TimeOfDay(start + step * i as f32));
+                // a step moves it about as far as the wind goes in that time, and no more
+                let moved = wrapped(last, now);
+                assert!(
+                    moved.max_element() < (WIND * step * DAY_SECONDS).max_element() * 3.0,
+                    "{start} {moved}"
+                );
+                last = now;
+            }
+        }
+        // a day is a tenth of a wind period
+        let day = wrapped(wind_drift(&TimeOfDay(2.0)), wind_drift(&TimeOfDay(3.0)));
+        assert!((day - WIND * DAY_SECONDS).abs().max_element() < 1.0);
     }
 
     #[test]
@@ -773,7 +849,7 @@ mod tests {
     #[test]
     fn test_nearby_copies_are_finest_and_far_ones_coarsest() {
         let camera = Vec2::new(10_000.0, -3_000.0);
-        let origin = |offset| tile_origin(camera, 0.0, offset);
+        let origin = |offset| tile_origin(camera, Vec2::ZERO, offset);
         assert_eq!(0, tile_lod(camera, origin(IVec2::ZERO)));
         assert_eq!(
             LODS.len() - 1,
@@ -789,14 +865,15 @@ mod tests {
     fn test_tiles_cover_the_camera_and_drift_with_the_wind() {
         let span = SPAN;
         let camera = Vec2::new(10_000.0, -3_000.0);
-        for elapsed in [0.0, 100.0, 5_000.0] {
-            let origin = tile_origin(camera, elapsed, IVec2::ZERO);
+        for days in [0.0, 0.2, 8.0] {
+            let origin = tile_origin(camera, wind_drift(&TimeOfDay(days)), IVec2::ZERO);
             assert!(
                 (camera - origin).cmpge(Vec2::ZERO).all()
                     && (camera - origin).cmplt(Vec2::splat(span)).all()
             );
         }
-        let moved = tile_origin(camera, 1.0, IVec2::ZERO) - tile_origin(camera, 0.0, IVec2::ZERO);
+        let moved =
+            tile_origin(camera, WIND, IVec2::ZERO) - tile_origin(camera, Vec2::ZERO, IVec2::ZERO);
         assert!((moved - WIND).length() < 1e-3 || (moved - WIND).abs().max_element() > span * 0.5);
     }
 }

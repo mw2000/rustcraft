@@ -121,8 +121,8 @@ pub struct ChunkMaterial {
     #[texture(4)]
     #[sampler(5)]
     pub cloud_pattern: Handle<Image>,
-    #[uniform(6)]
-    pub cloud_layer: Vec4,
+    #[storage(6, read_only)]
+    pub cloud_layer: Handle<ShaderBuffer>,
     // what the land bends around, see `curvature::Curvature`
     #[storage(8, read_only)]
     pub curvature: Handle<ShaderBuffer>,
@@ -214,8 +214,8 @@ pub struct WaterMaterial {
     #[texture(4)]
     #[sampler(5)]
     pub cloud_pattern: Handle<Image>,
-    #[uniform(6)]
-    pub cloud_layer: Vec4,
+    #[storage(6, read_only)]
+    pub cloud_layer: Handle<ShaderBuffer>,
     // between these distances in blocks, x to y, see-through water turns opaque, so it
     // matches the opaque water LODs draw farther out, see `see_through_reach`
     #[uniform(7)]

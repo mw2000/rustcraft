@@ -336,8 +336,8 @@ fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         return sky;
     }
     let hit = origin.xz + direction.xz * ((layer - origin.y) / direction.y);
-    // `globals.time` wraps when the wind has carried the clouds a whole number of patterns
-    let drift = cloud_layer.zw * view_bindings::globals.time;
+    // the drift follows the shared time of day, see `clouds::wind_drift`
+    let drift = cloud_layer.zw;
     let thickness = textureSampleLevel(cloud_pattern, cloud_sampler, (hit - drift) / cloud_layer.y, 0.0).r;
     let away = distance(hit, view_bindings::view.world_position.xz);
     let end = max(view_bindings::fog.be.y, 1.0);

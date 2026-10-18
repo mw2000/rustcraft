@@ -6,8 +6,8 @@ import super::sky::SUN_LIGHT;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(4) var cloud_pattern: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(5) var cloud_sampler: sampler;
-// the middle of the layer's height, the pattern's width in blocks, and the wind
-@group(constants::MATERIAL_BIND_GROUP) @binding(6) var<uniform> cloud_layer: vec4<f32>;
+// the middle of the layer's height, the pattern's width in blocks, and how far the wind has drifted the clouds
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var<storage, read> cloud_layer: vec4<f32>;
 
 // How much of the sun a cloud keeps off the ground.
 const CLOUD_SHADE: f32 = 0.7;
@@ -20,9 +20,8 @@ fn cloud_shadow(world_position: vec3<f32>) -> f32 {
         return 1.0;
     }
     let under = world_position.xz + to_sun.xz * ((layer - world_position.y) / to_sun.y);
-    // `globals.time` wraps on the hour, when the wind has carried the clouds a whole
-    // number of patterns, see `clouds::WIND`
-    let drift = cloud_layer.zw * view_bindings::globals.time;
+    // the drift follows the shared time of day, see `clouds::wind_drift`
+    let drift = cloud_layer.zw;
     let cover = textureSampleLevel(cloud_pattern, cloud_sampler, (under - drift) / cloud_layer.y, 0.0).r;
     return 1.0 - CLOUD_SHADE * cover;
 }
