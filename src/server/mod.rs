@@ -137,6 +137,7 @@ impl Plugin for ServerPlugin {
                     chat::receive_chat,
                     (clock::wind_clock, clock::sync_clock).chain(),
                     (creatures::receive_hits, creatures::receive_uses),
+                    players::relay_swings,
                 )
                     .after(ClientSystems::Send)
                     .before(ServerSystems::Send)

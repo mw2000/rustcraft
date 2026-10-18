@@ -1804,8 +1804,7 @@ from high places.
     reach, a kill that drops mutton and wears the axe, sleeping and waking, spawning on grass out
     of sight up to the cap, and none at night or on sand); saving and restoring them; the
     multiplayer test (§4.4); `/summon`'s parsing; and `ray_distance`.
-  - **Later:** hostile mobs, despawning and weapons (M3.3), villagers (M3.4); a creature's head
-    turning to look, grazing, and a death that tips over rather than vanishing; creatures pushing
+  - **Later:** hostile mobs, despawning and weapons (M3.3), villagers (M3.4); creatures pushing
     each other and players apart.
 - **Built (M3.2): passive animals,** shearing and breeding (`src/server/creatures/tending.rs`).
   - **Four kinds** in `creatures!`: sheep (0.9 × 1.3, 8 health), cows (0.9 × 1.4, 10, walking
@@ -1867,6 +1866,45 @@ from high places.
     and a shorn sheep and reading format 1, and shearing seen by a joining client.
   - **Later:** eggs, dyed wool, babies following their mothers, grazing that eats grass (which
     would want grass to spread back first).
+- **Built (M-A2): living creatures and players,** all on the client, from what's replicated and
+  its own clock (`src/client/animation.rs`, pure functions of time, speed and a seed from the
+  entity, so each creature's out of step with the rest).
+  - **Models have joints:** a `Part`'s `joint` is `Body`, `Leg(side)`, `Head`, `Tail` or
+    `Wing(side)`, and its `look` `Plain`, `Fleece` or `Eye`; a kind's row gives its `neck` and
+    whether it `grazes` (sheep and cows). Each creature drawn is its root (where its poses put
+    it), a trunk its body's boxes hang from, a head on the neck, and its legs, tails and wings,
+    so a frame writes a handful of transforms a creature and nothing else; meshes and materials
+    stay shared.
+  - **Idle life:** the trunk breathes (2.5% over 3.2 s); eyes blink for 0.14 s once in each 4.5
+    s; a head turns, easing, to the nearest player within 6 blocks, up to 1.2 radians aside and
+    0.7 up or down, and not at all at someone further round behind; a grazer standing still
+    lowers its head for 3.5 s in some 12 s spells, easing down and up (visual only: eating grass
+    would leave dirt for good while grass doesn't spread); tails sway and flick now and then;
+    a young one's head is drawn 1.3 times bigger for its size.
+  - **Movement:** the body turns smoothly to its heading; legs swing with the distance walked by
+    an amount eased in and out with speed (smoothstep), with a small bob of body and head; wings
+    flap as a chicken flutters down or runs; a hit rears it back for 0.3 s as it flashes red.
+  - **Death:** a creature that goes while within 48 blocks of the player has died, as nothing
+    else takes one away so near (they sleep and leave sight beyond 96), so `CreatureSeen` no
+    longer despawns what's seen with it: `see_off` keeps it as `Dying`, which tips onto its side
+    over 0.45 s, eyes shut, then fades out in four steps of shared translucent materials, and
+    `die_away` removes it after a second. No protocol was needed for it. When M3.3 despawns
+    monsters near players this needs a reason sent with it.
+  - **Players** seen breathe, turn their heads smoothly to their look, the body following once
+    the head's 0.8 radians round or as they walk, and swing their right arm as they hit, break
+    (every 0.3 s while held), place or use: the client sends `Swing`, and the server relays
+    `PlayerSwung` to everyone else, at most every 150 ms a player. `PROTOCOL_VERSION` is 17.
+  - **Cost:** 100 animals' animation, measured in a headless App, takes 0.021 ms a frame on the
+    main thread (p99 0.04), and the whole frame with them 0.18 ms more than without, most of it
+    propagating their parts' transforms. Nothing allocates per frame.
+  - **Tests** (`client::animation`): breathing, blinking, grazing and tails deterministic and
+    within their bounds over minutes; blinks short and out of step; grazing never jumping; head
+    look limits, behind and turned; easing independent of frame rate and the short way round;
+    death, flinch and arm swing ending; and (`client::creatures`) a creature gone near dying
+    and then removed, and one far off removed at once; swings relayed at most every 150 ms; and
+    quitting to the title leaving no creature, seen or dying, behind (`tests/session.rs`).
+    Leaving a world puts away the creatures seen and any still dying with the rest
+    (`client::clear_world`), and the arm's swings come from the `Break` and `Place` actions.
 
 ### 5.9 Distribution
 
@@ -2067,9 +2105,9 @@ Done when: **the world feels inhabited, and night is dangerous.**
   inspired by the look of packs like Patrix (soft, detailed, naturally lit surfaces), never copied
   (INV-8) — by our own drawing scripts, with the atlas, shaders, LOD colours and map relief following.
   16px stays available as a setting if it's cheap to keep.
-- ☐ **M-A2 Living creatures.** Creatures and players feel alive: idle breathing, blinking, heads
+- ☑ **M-A2 Living creatures.** Creatures and players feel alive: idle breathing, blinking, heads
   that turn to look, smooth limb swing and easing — inspired by packs like Fresh Animations,
-  built on our own box models (INV-8). With or after M3.2.
+  built on our own box models (INV-8). With or after M3.2. (§5.8)
 - ☑ **M-A3 Sound.** Bevy's audio switched on, with footsteps by surface, breaking and placing,
   ambience (wind, water, birds by day, cave drips and echo underground), creature sounds and a
   little music — inspired by packs like Enhanced Audio, from CC0 sources or made by our own

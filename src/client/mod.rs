@@ -1,6 +1,7 @@
 //! What a player's game does with what the server decides (§4.4): in singleplayer it runs in the
 //! same App as the server.
 
+mod animation;
 pub mod authoring;
 pub mod clock;
 pub mod command_bar;
@@ -54,6 +55,7 @@ impl Plugin for ClientPlugin {
                 player::attach_camera.before(TransformSystems::Propagate),
             )
             .add_observer(join::refused)
+            .add_observer(creatures::see_off)
             .add_systems(
                 PostUpdate,
                 // a client joining a server has its player once it's welcomed, with the camera
@@ -106,18 +108,32 @@ impl Plugin for ClientPlugin {
                         creatures::see_creatures,
                         others::receive_poses,
                         creatures::follow_creatures,
+                        others::receive_swings,
                         others::move_seen,
                     )
                         .chain(),
+                    creatures::die_away,
                 ),
             );
     }
 }
 
 // Puts away what this client had of the world it's left: the players it saw and what the server
-// replicated, and its own state as it was before it joined.
+// replicated, and its own state as it was before it joined. The creatures it saw go too, and
+// any still dying, rather than dying where the world was.
 #[allow(clippy::type_complexity)]
-fn clear_world(things: Query<Entity, Or<(With<Player>, With<Remote>)>>, mut commands: Commands) {
+fn clear_world(
+    things: Query<
+        Entity,
+        Or<(
+            With<Player>,
+            With<Remote>,
+            With<creatures::SeenCreature>,
+            With<creatures::Dying>,
+        )>,
+    >,
+    mut commands: Commands,
+) {
     for thing in &things {
         commands.entity(thing).try_despawn();
     }

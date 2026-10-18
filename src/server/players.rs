@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use bevy::math::I64Vec3;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, AsyncComputeTaskPool, Task};
 use bevy_replicon::prelude::*;
@@ -24,7 +25,7 @@ use crate::player::physics::top_speed;
 use crate::player::{arriving, Movement, Player, PlayerLook, PlayerOwner, BODY};
 use crate::protocol::{
     name_from_user_data, CommandOutput, GameModeChanged, InventoryChanged, PlayerMoved, PlayerPose,
-    Teleport, Welcome,
+    PlayerSwung, Swing, Teleport, Welcome,
 };
 use crate::save::{PlayerState, WorldSave};
 use crate::survival::{SpawnBed, Vitals};
@@ -317,6 +318,37 @@ fn in_solid(world: &World, feet: Vec3) -> bool {
     })
 }
 
+// How often a player's swings are passed on at most, as an arm takes about this long to
+// swing.
+const SWING_INTERVAL: Duration = Duration::from_millis(150);
+
+/// Passes each player's swings on to everyone else, no more often than an arm swings.
+pub(super) fn relay_swings(
+    mut swings: MessageReader<FromClient<Swing>>,
+    time: Res<Time>,
+    players: Query<(Entity, &PlayerOwner)>,
+    mut last: Local<HashMap<ClientId, Duration>>,
+    mut swung: MessageWriter<ToClients<PlayerSwung>>,
+) {
+    let now = time.elapsed();
+    for &FromClient { client_id, .. } in swings.read() {
+        let Some((player, _)) = players.iter().find(|(_, owner)| owner.0 == client_id) else {
+            continue;
+        };
+        if last
+            .get(&client_id)
+            .is_some_and(|&at| now < at + SWING_INTERVAL)
+        {
+            continue;
+        }
+        last.insert(client_id, now);
+        swung.write(ToClients {
+            targets: SendTargets::AllExcept(client_id),
+            message: PlayerSwung { player },
+        });
+    }
+}
+
 /// Tells everyone but the host where the host's player is, as often as clients tell theirs.
 pub(super) fn send_host_pose(
     time: Res<Time>,
@@ -385,10 +417,49 @@ pub(super) fn send_game_modes(
 
 #[cfg(test)]
 mod tests {
-    use bevy::math::Vec3;
+    use std::time::Duration;
 
-    use super::time_to_move;
-    use crate::player::Movement;
+    use bevy::prelude::*;
+    use bevy::time::TimeUpdateStrategy;
+    use bevy_replicon::prelude::{ClientId, FromClient, SendTargets, ToClients};
+
+    use super::{relay_swings, time_to_move};
+    use crate::player::{Movement, PlayerOwner};
+    use crate::protocol::{PlayerSwung, Swing};
+
+    #[test]
+    fn test_swings_are_passed_on_to_everyone_else_as_often_as_an_arm_swings() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .add_message::<FromClient<Swing>>()
+            .add_message::<ToClients<PlayerSwung>>()
+            .add_systems(Update, relay_swings);
+        let guest = ClientId::Client(Entity::from_raw_u32(9).unwrap());
+        let player = app.world_mut().spawn(PlayerOwner(guest)).id();
+        let mut relayed = Vec::new();
+        for _ in 0..10 {
+            for _ in 0..3 {
+                app.world_mut().write_message(FromClient {
+                    client_id: guest,
+                    message: Swing,
+                });
+            }
+            app.update();
+            let mut sent = app
+                .world_mut()
+                .resource_mut::<Messages<ToClients<PlayerSwung>>>();
+            relayed.extend(sent.drain());
+        }
+        // half a second's worth, one in every 150 ms
+        assert!((3..=4).contains(&relayed.len()), "{}", relayed.len());
+        for swung in relayed {
+            assert_eq!(PlayerSwung { player }, swung.message);
+            assert!(matches!(swung.targets, SendTargets::AllExcept(client) if client == guest));
+        }
+    }
 
     #[test]
     fn test_walking_is_held_to_walking_speed_and_flying_to_flying() {

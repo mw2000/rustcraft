@@ -8,7 +8,8 @@
 //! `InventoryClick`s naming it, and it's sent to them as `ContainerChanged` while it's open.
 //!
 //! Players are replicated to everyone but their owner, who moves its own (M0.6d): their name,
-//! game mode and what they hold, with where they are and look relayed as `PlayerMoved`.
+//! game mode and what they hold, with where they are and look relayed as `PlayerMoved`, and
+//! their arm's swings as they break and place as `PlayerSwung` (M-A2).
 //!
 //! Creatures are replicated to the clients whose players are near them (M3.1): their kind,
 //! their pose, which the server sets 20 times a second as they move, how many times they've
@@ -49,7 +50,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -124,7 +125,10 @@ impl Plugin for ProtocolPlugin {
             .replicate::<Condition>()
             .add_visibility_filter::<Whereabouts>()
             .add_mapped_client_message::<HitCreature>(Channel::Ordered)
-            .add_mapped_client_message::<UseCreature>(Channel::Ordered);
+            .add_mapped_client_message::<UseCreature>(Channel::Ordered)
+            // unreliable, as a swing missed is soon followed by another
+            .add_client_message::<Swing>(Channel::Unreliable)
+            .add_mapped_server_message::<PlayerSwung>(Channel::Unreliable);
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -436,6 +440,17 @@ pub struct PlayerMoved {
     pub position: Vec3,
     pub yaw: f32,
     pub pitch: f32,
+}
+
+/// A client's player swinging their arm, as they hit, break, place or use something.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Swing;
+
+/// Another player swinging their arm, for clients to draw.
+#[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerSwung {
+    #[entities]
+    pub player: Entity,
 }
 
 /// A player's name as a client sends it on connecting, in netcode's user data.

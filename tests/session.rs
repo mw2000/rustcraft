@@ -14,15 +14,18 @@ use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::RepliconRenetPlugins;
 use rustcraft::chunks::chunk_loader::ChunkLoader;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
+use rustcraft::client::creatures::{Dying, SeenCreature};
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::servers::ServerList;
 use rustcraft::client::ClientPlugin;
+use rustcraft::creatures::{Creature, CreatureKind, SavedCreature};
 use rustcraft::game_mode::GameModePlugin;
 use rustcraft::menu::{GameState, Menu, MenuPlugin, Page};
 use rustcraft::player::Player;
 use rustcraft::protocol::{ProtocolPlugin, DEFAULT_PORT};
 use rustcraft::save::worlds::WorldsDir;
 use rustcraft::save::{SavePlugin, WorldSave};
+use rustcraft::server::creatures::creature;
 use rustcraft::server::ServerPlugin;
 use rustcraft::session::{leave, Session, SessionPlugin};
 use rustcraft::settings::Settings;
@@ -119,6 +122,25 @@ fn play(app: &mut App, dir: &Path) -> Entity {
         .unwrap()
 }
 
+// A sheep beside `player`, which the client's seen, so quitting has a creature to put away.
+fn with_a_sheep(app: &mut App, player: Entity) {
+    let at = app.world().get::<Transform>(player).unwrap().translation + Vec3::X;
+    let sheep = SavedCreature::grown(CreatureKind::Sheep, at);
+    app.world_mut().spawn(creature(sheep, 0.0));
+    update_until(app, |app| {
+        let mut seen = app.world_mut().query::<&SeenCreature>();
+        seen.iter(app.world()).count() == 1
+    });
+}
+
+// Whether anything's left of creatures, seen or dying.
+fn creatures_left(app: &mut App) -> usize {
+    let mut left = app
+        .world_mut()
+        .query_filtered::<Entity, Or<(With<Creature>, With<SeenCreature>, With<Dying>)>>();
+    left.iter(app.world()).count()
+}
+
 fn quit_to_title(app: &mut App) {
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
@@ -144,11 +166,13 @@ fn test_quitting_to_title_saves_and_leaves_nothing_behind_for_the_next_world() {
     // the first time round makes what's kept between worlds, such as the systems the menus run
     let first = worlds.join("First");
     let player = play(&mut app, &first);
+    with_a_sheep(&mut app, player);
     app.world_mut()
         .get_mut::<Transform>(player)
         .unwrap()
         .translation = Vec3::new(5.0, 600.0, 9.0);
     quit_to_title(&mut app);
+    assert_eq!(0, creatures_left(&mut app));
     let between = entities(&mut app);
     for gone in [
         app.world().contains_resource::<World>(),
@@ -167,9 +191,11 @@ fn test_quitting_to_title_saves_and_leaves_nothing_behind_for_the_next_world() {
 
     // another world, played and left the same way, leaves the game as the first did
     let second = worlds.join("Second");
-    play(&mut app, &second);
+    let player = play(&mut app, &second);
+    with_a_sheep(&mut app, player);
     assert!(app.world().resource::<World>().is_served_here());
     quit_to_title(&mut app);
+    assert_eq!(0, creatures_left(&mut app));
     assert_eq!(between, entities(&mut app));
 
     // and the first opens again where it was left

@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use super::player::LocalPlayer;
 use crate::player::name::PlayerName;
 use crate::player::PlayerLook;
-use crate::protocol::PlayerMoved;
+use crate::protocol::{PlayerMoved, PlayerSwung};
 
 // How far behind their newest pose, in milliseconds, players are shown: two poses' worth, so a
 // late or lost one doesn't leave nothing to move towards.
@@ -25,8 +25,18 @@ const KEPT: usize = 8;
 /// its own, which goes with them.
 #[derive(Component)]
 #[relationship(relationship_target = Seen)]
-#[require(Poses, PlayerLook, Transform, Visibility = Visibility::Hidden)]
+#[require(Poses, PlayerLook, ArmSwing, Transform, Visibility = Visibility::Hidden)]
 pub struct SeenPlayer(pub Entity);
+
+/// How many seconds ago a player seen last swung their arm.
+#[derive(Component)]
+pub struct ArmSwing(pub f32);
+
+impl Default for ArmSwing {
+    fn default() -> Self {
+        Self(f32::INFINITY)
+    }
+}
 
 /// On another player, what this client sees of them.
 #[derive(Component)]
@@ -137,6 +147,22 @@ pub(super) fn receive_poses(
             yaw: moved.yaw,
             pitch: moved.pitch,
         });
+    }
+}
+
+/// Swings the arms of the players seen as they're told they swing them.
+pub(super) fn receive_swings(
+    mut swung: MessageReader<PlayerSwung>,
+    seen: Query<&Seen>,
+    mut swings: Query<&mut ArmSwing>,
+) {
+    for swung in swung.read() {
+        if let Ok(mut swing) = seen
+            .get(swung.player)
+            .and_then(|seen| swings.get_mut(seen.0))
+        {
+            swing.0 = 0.0;
+        }
     }
 }
 

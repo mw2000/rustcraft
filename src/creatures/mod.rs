@@ -28,8 +28,11 @@ pub struct Properties {
     /// How fast it walks about, and how fast it runs when it's frightened, in blocks a second.
     pub walk_speed: f32,
     pub run_speed: f32,
-    /// What it looks like, facing -z.
+    /// What it looks like, facing -z, and where its head turns from, in blocks from its feet.
     pub model: &'static [Part],
+    pub neck: Vec3,
+    /// Whether it lowers its head to graze now and then as it stands about.
+    pub grazes: bool,
     /// What it drops when it dies grown: each item, and how many of it, chosen evenly, so a
     /// range from 0 sometimes drops none.
     pub drops: &'static [(Item, RangeInclusive<u8>)],
@@ -49,16 +52,39 @@ pub struct Properties {
 }
 
 /// A box of a creature's model: its size and the middle of it, in blocks from the creature's
-/// feet as it faces -z, and its colour, in sRGB. A leg swings from its top as the creature
-/// walks, `1.0` or `-1.0` for which way it swings first, and anything else doesn't (`0.0`).
-/// Fleece is shown only while the creature isn't shorn.
+/// feet as it faces -z, its colour, in sRGB, what it moves with, and what it is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Part {
     pub size: Vec3,
     pub centre: Vec3,
     pub colour: [f32; 3],
-    pub swing: f32,
-    pub fleece: bool,
+    pub joint: Joint,
+    pub look: Look,
+}
+
+/// What a part of a model moves with (`client::creatures`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Joint {
+    /// The body, which breathes.
+    Body,
+    /// A leg, swinging from its top as the creature walks, `1.0` or `-1.0` for which way first.
+    Leg(f32),
+    /// The head, turning from the kind's neck to look about and graze.
+    Head,
+    /// A tail, swaying and flicking from where it meets the body.
+    Tail,
+    /// A wing on the side `1.0` (+x) or `-1.0`, flapping from its top as the creature flutters.
+    Wing(f32),
+}
+
+/// What a part of a model is, beyond a box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    Plain,
+    /// Fleece, shown only while the creature isn't shorn.
+    Fleece,
+    /// An eye, which blinks.
+    Eye,
 }
 
 /// Where a kind appears: in which biomes, by name, the base terrain's being `base`, on which
@@ -128,31 +154,38 @@ macro_rules! creatures {
     };
 }
 
-// A box that stays put.
+// A box of the body.
 const fn part(size: [f32; 3], centre: [f32; 3], colour: [f32; 3]) -> Part {
     Part {
         size: Vec3::from_array(size),
         centre: Vec3::from_array(centre),
         colour,
-        swing: 0.0,
-        fleece: false,
+        joint: Joint::Body,
+        look: Look::Plain,
     }
 }
 
-// A box of fleece, which shearing takes away.
-const fn fleece(size: [f32; 3], centre: [f32; 3], colour: [f32; 3]) -> Part {
+// The same box moving with `joint`.
+const fn on(joint: Joint, part: Part) -> Part {
+    Part { joint, ..part }
+}
+
+// The same box as fleece, which shearing takes away.
+const fn fleece(part: Part) -> Part {
     Part {
-        fleece: true,
-        ..part(size, centre, colour)
+        look: Look::Fleece,
+        ..part
     }
+}
+
+// A box of the head.
+const fn head(size: [f32; 3], centre: [f32; 3], colour: [f32; 3]) -> Part {
+    on(Joint::Head, part(size, centre, colour))
 }
 
 // A leg, `size` big, under the hip at `x`, `z`, swinging first the way `swing` says.
 const fn leg(size: [f32; 3], x: f32, z: f32, colour: [f32; 3], swing: f32) -> Part {
-    Part {
-        swing,
-        ..part(size, [x, size[1] / 2.0, z], colour)
-    }
+    on(Joint::Leg(swing), part(size, [x, size[1] / 2.0, z], colour))
 }
 
 // Four legs under a body, `x` either side of the middle and `z` before and behind it, the front
@@ -169,9 +202,17 @@ const fn legs(size: [f32; 3], x: f32, z: f32, colour: [f32; 3]) -> [Part; 4] {
 // Two eyes `size` across, `x` either side of the middle at `y`, on a face at `z`.
 const fn eyes(x: f32, y: f32, z: f32, size: f32) -> [Part; 2] {
     [
-        part([size, size, 0.02], [-x, y, z], EYES),
-        part([size, size, 0.02], [x, y, z], EYES),
+        eye([size, size, 0.02], [-x, y, z]),
+        eye([size, size, 0.02], [x, y, z]),
     ]
+}
+
+// An eye, `size` big, at `centre` on the face.
+const fn eye(size: [f32; 3], centre: [f32; 3]) -> Part {
+    Part {
+        look: Look::Eye,
+        ..head(size, centre, EYES)
+    }
 }
 
 const EYES: [f32; 3] = [0.08, 0.07, 0.07];
@@ -180,8 +221,8 @@ const WOOL: [f32; 3] = [0.91, 0.9, 0.86];
 const SHEEP_SKIN: [f32; 3] = [0.78, 0.66, 0.56];
 const SHEEP_LEGS: [f32; 3] = [0.72, 0.62, 0.54];
 
-// A body of wool over a shorn one of skin, on four legs, with a face out in front under a cap
-// of wool.
+// A body of wool over a shorn one of skin, on four legs, with a stub of a tail, and a face out
+// in front under a cap of wool, with ears.
 const SHEEP: &[Part] = &{
     let [a, b, c, d] = legs([0.22, 0.6, 0.22], 0.24, 0.38, SHEEP_LEGS);
     let [left, right] = eyes(0.13, 1.14, -1.0, 0.08);
@@ -191,9 +232,15 @@ const SHEEP: &[Part] = &{
         c,
         d,
         part([0.66, 0.5, 1.04], [0.0, 0.92, 0.04], SHEEP_SKIN),
-        fleece([0.86, 0.66, 1.2], [0.0, 0.92, 0.04], WOOL),
-        part([0.46, 0.46, 0.5], [0.0, 1.08, -0.74], SHEEP_SKIN),
-        fleece([0.52, 0.16, 0.36], [0.0, 1.32, -0.68], WOOL),
+        fleece(part([0.86, 0.66, 1.2], [0.0, 0.92, 0.04], WOOL)),
+        on(
+            Joint::Tail,
+            part([0.18, 0.24, 0.16], [0.0, 0.94, 0.64], WOOL),
+        ),
+        head([0.46, 0.46, 0.5], [0.0, 1.08, -0.74], SHEEP_SKIN),
+        fleece(head([0.52, 0.16, 0.36], [0.0, 1.32, -0.68], WOOL)),
+        head([0.08, 0.16, 0.12], [-0.27, 1.18, -0.62], SHEEP_SKIN),
+        head([0.08, 0.16, 0.12], [0.27, 1.18, -0.62], SHEEP_SKIN),
         left,
         right,
     ]
@@ -205,8 +252,8 @@ const HOOVES: [f32; 3] = [0.2, 0.15, 0.12];
 const MUZZLE: [f32; 3] = [0.8, 0.6, 0.55];
 const HORN: [f32; 3] = [0.86, 0.82, 0.7];
 
-// A deep brown body with pale patches on its flanks, on four dark legs, a broad head with a
-// pink muzzle and two short horns, and an udder.
+// A deep brown body with pale patches on its flanks, on four dark legs, an udder and a long
+// thin tail, and a broad head with a pink muzzle and two short horns.
 const COW: &[Part] = &{
     let [a, b, c, d] = legs([0.24, 0.7, 0.24], 0.26, 0.44, HOOVES);
     let [left, right] = eyes(0.15, 1.3, -1.05, 0.08);
@@ -219,10 +266,14 @@ const COW: &[Part] = &{
         part([0.92, 0.36, 0.42], [0.0, 1.12, 0.24], PATCH),
         part([0.92, 0.26, 0.3], [0.0, 0.96, -0.3], PATCH),
         part([0.3, 0.12, 0.3], [0.0, 0.66, 0.3], MUZZLE),
-        part([0.54, 0.5, 0.4], [0.0, 1.22, -0.84], HIDE),
-        part([0.4, 0.22, 0.12], [0.0, 1.07, -1.08], MUZZLE),
-        part([0.1, 0.16, 0.1], [-0.22, 1.54, -0.8], HORN),
-        part([0.1, 0.16, 0.1], [0.22, 1.54, -0.8], HORN),
+        on(
+            Joint::Tail,
+            part([0.08, 0.56, 0.08], [0.0, 1.08, 0.76], HIDE),
+        ),
+        head([0.54, 0.5, 0.4], [0.0, 1.22, -0.84], HIDE),
+        head([0.4, 0.22, 0.12], [0.0, 1.07, -1.08], MUZZLE),
+        head([0.1, 0.16, 0.1], [-0.22, 1.54, -0.8], HORN),
+        head([0.1, 0.16, 0.1], [0.22, 1.54, -0.8], HORN),
         left,
         right,
     ]
@@ -231,7 +282,8 @@ const COW: &[Part] = &{
 const PIG_SKIN: [f32; 3] = [0.93, 0.66, 0.64];
 const SNOUT: [f32; 3] = [0.84, 0.5, 0.5];
 
-// A round pink body low on four short legs, and a big head with a flat snout and ears.
+// A round pink body low on four short legs with a little tail, and a big head with a flat snout
+// and ears.
 const PIG: &[Part] = &{
     let [a, b, c, d] = legs([0.22, 0.34, 0.22], 0.2, 0.32, PIG_SKIN);
     let [left, right] = eyes(0.13, 0.76, -0.91, 0.07);
@@ -241,10 +293,14 @@ const PIG: &[Part] = &{
         c,
         d,
         part([0.7, 0.54, 1.0], [0.0, 0.6, 0.04], PIG_SKIN),
-        part([0.5, 0.46, 0.44], [0.0, 0.68, -0.68], PIG_SKIN),
-        part([0.26, 0.18, 0.08], [0.0, 0.6, -0.94], SNOUT),
-        part([0.14, 0.12, 0.04], [-0.17, 0.94, -0.74], SNOUT),
-        part([0.14, 0.12, 0.04], [0.17, 0.94, -0.74], SNOUT),
+        on(
+            Joint::Tail,
+            part([0.08, 0.14, 0.08], [0.0, 0.76, 0.56], SNOUT),
+        ),
+        head([0.5, 0.46, 0.44], [0.0, 0.68, -0.68], PIG_SKIN),
+        head([0.26, 0.18, 0.08], [0.0, 0.6, -0.94], SNOUT),
+        head([0.14, 0.12, 0.04], [-0.17, 0.94, -0.74], SNOUT),
+        head([0.14, 0.12, 0.04], [0.17, 0.94, -0.74], SNOUT),
         left,
         right,
     ]
@@ -262,13 +318,22 @@ const CHICKEN: &[Part] = &{
         leg([0.06, 0.26, 0.06], -0.08, 0.02, BEAK, 1.0),
         leg([0.06, 0.26, 0.06], 0.08, 0.02, BEAK, -1.0),
         part([0.36, 0.32, 0.46], [0.0, 0.42, 0.02], FEATHERS),
-        part([0.06, 0.22, 0.34], [-0.21, 0.44, 0.04], FEATHERS),
-        part([0.06, 0.22, 0.34], [0.21, 0.44, 0.04], FEATHERS),
-        part([0.24, 0.2, 0.08], [0.0, 0.58, 0.28], FEATHERS),
-        part([0.22, 0.28, 0.2], [0.0, 0.7, -0.22], FEATHERS),
-        part([0.12, 0.07, 0.1], [0.0, 0.7, -0.37], BEAK),
-        part([0.06, 0.1, 0.04], [0.0, 0.6, -0.33], COMB),
-        part([0.06, 0.08, 0.14], [0.0, 0.88, -0.22], COMB),
+        on(
+            Joint::Wing(-1.0),
+            part([0.06, 0.22, 0.34], [-0.21, 0.44, 0.04], FEATHERS),
+        ),
+        on(
+            Joint::Wing(1.0),
+            part([0.06, 0.22, 0.34], [0.21, 0.44, 0.04], FEATHERS),
+        ),
+        on(
+            Joint::Tail,
+            part([0.24, 0.2, 0.08], [0.0, 0.58, 0.28], FEATHERS),
+        ),
+        head([0.22, 0.28, 0.2], [0.0, 0.7, -0.22], FEATHERS),
+        head([0.12, 0.07, 0.1], [0.0, 0.7, -0.37], BEAK),
+        head([0.06, 0.1, 0.04], [0.0, 0.6, -0.33], COMB),
+        head([0.06, 0.08, 0.14], [0.0, 0.88, -0.22], COMB),
         left,
         right,
     ]
@@ -296,6 +361,8 @@ creatures! {
             walk_speed: 1.4,
             run_speed: 3.4,
             model: SHEEP,
+            neck: Vec3::from_array([0.0, 1.1, -0.5]),
+            grazes: true,
             drops: &[(Item::Mutton, 1..=2)],
             fleece: Some((Item::Wool, 1..=3)),
             food: &[Item::Wheat],
@@ -322,6 +389,8 @@ creatures! {
             walk_speed: 1.2,
             run_speed: 3.0,
             model: COW,
+            neck: Vec3::from_array([0.0, 1.2, -0.62]),
+            grazes: true,
             drops: &[(Item::Beef, 1..=3), (Item::Leather, 0..=2)],
             fleece: None,
             food: &[Item::Wheat],
@@ -348,6 +417,8 @@ creatures! {
             walk_speed: 1.3,
             run_speed: 3.2,
             model: PIG,
+            neck: Vec3::from_array([0.0, 0.66, -0.46]),
+            grazes: false,
             drops: &[(Item::Pork, 1..=3)],
             fleece: None,
             food: &[Item::Apple, Item::Wheat],
@@ -373,6 +444,8 @@ creatures! {
             walk_speed: 1.2,
             run_speed: 3.2,
             model: CHICKEN,
+            neck: Vec3::from_array([0.0, 0.6, -0.16]),
+            grazes: false,
             drops: &[(Item::Chicken, 1..=1), (Item::Feather, 0..=2)],
             fleece: None,
             food: &[Item::Seeds],
@@ -479,7 +552,7 @@ pub struct Flinches(pub u8);
 mod tests {
     use std::collections::HashSet;
 
-    use super::{CreatureKind, YOUNG_SCALE};
+    use super::{CreatureKind, Joint, Look, YOUNG_SCALE};
     use crate::items::Item;
 
     #[test]
@@ -522,9 +595,17 @@ mod tests {
                     "{name}"
                 );
             }
-            // and only a kind with a fleece has parts of one
-            let fleeced = properties.model.iter().any(|part| part.fleece);
-            assert_eq!(properties.fleece.is_some(), fleeced, "{kind:?}");
+            // only a kind with a fleece has parts of one, and every kind has a head with eyes
+            let has = |look| properties.model.iter().any(|part| part.look == look);
+            assert_eq!(properties.fleece.is_some(), has(Look::Fleece), "{kind:?}");
+            assert!(has(Look::Eye), "{kind:?}");
+            for part in properties
+                .model
+                .iter()
+                .filter(|part| part.look == Look::Eye)
+            {
+                assert_eq!(Joint::Head, part.joint);
+            }
         }
     }
 }

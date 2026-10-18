@@ -24,7 +24,9 @@ use crate::items::{Item, ToolKind};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
-use crate::protocol::{HitCreature, PickBlock, RequestEdit, StartBreaking, UseBlock, UseCreature};
+use crate::protocol::{
+    HitCreature, PickBlock, RequestEdit, StartBreaking, Swing, UseBlock, UseCreature,
+};
 use crate::world::World;
 
 // Just over a block wide, so the outline isn't hidden in the block's own faces.
@@ -36,6 +38,8 @@ const BREAK_REST: f32 = 0.25;
 // In pixels. Bevy's default 2 reads as a faint hairline once TAA's softened it, so the
 // outline was easy to miss against grass or in shade.
 const OUTLINE_WIDTH: f32 = 3.0;
+// How often, in seconds, the arm swings while a block's held on to break, as others see it.
+const SWING_EVERY: f32 = 0.3;
 
 /// The outline's own gizmo settings, so it's drawn a little thicker than other gizmos.
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -61,7 +65,13 @@ impl Plugin for InteractionPlugin {
                 Update,
                 (
                     target_block,
-                    (outline_target, break_target, use_target, use_station),
+                    (
+                        outline_target,
+                        break_target,
+                        use_target,
+                        use_station,
+                        swing_arm,
+                    ),
                 )
                     .chain()
                     // from where the player is this frame
@@ -270,6 +280,29 @@ fn break_target(
         }
         Some(BreakStep::Break(block)) => requests.edit(block, BlockType::Air, slot),
         None => {}
+    }
+}
+
+// Tells the server the player's arm swings, for others to see: as they click on a block or a
+// creature, and over and over while they hold on to a block breaking it.
+fn swing_arm(
+    time: Res<Time>,
+    controls: Controls,
+    target: Res<Target>,
+    creature: Res<TargetCreature>,
+    breaking: Res<Breaking>,
+    mut since: Local<f32>,
+    mut swings: MessageWriter<Swing>,
+) {
+    *since += time.delta_secs();
+    let aimed = target.0.is_some() || creature.0.is_some();
+    let clicked = [Action::Break, Action::Place]
+        .into_iter()
+        .any(|action| controls.just_pressed(action))
+        && aimed;
+    if clicked || (breaking.on.is_some() && *since >= SWING_EVERY) {
+        *since = 0.0;
+        swings.write(Swing);
     }
 }
 
