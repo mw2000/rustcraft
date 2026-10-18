@@ -18,13 +18,13 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::client::clock::{follow_clock, wind_clock};
+use rustcraft::client::command_bar::{command_bar_closed, CommandPlugin};
 use rustcraft::client::cracks::DrawCracksPlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::join::{join, server_address};
 use rustcraft::client::models::DrawPlayersPlugin;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
-use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::game_mode::GameModePlugin;
@@ -257,7 +257,7 @@ fn main() {
                 seed: World::requested_seed(),
                 time_of_day: start_time(),
                 region_distance: settings.renderer.lod_layout().region_reach() as u32,
-                name: PlayerName::own(),
+                host: Some(PlayerName::own()),
             })
             .add_systems(Startup, host_from_env);
     }

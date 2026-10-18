@@ -30,6 +30,8 @@ jobs:
       - run: cargo fmt --check
       # Release throughout, so clippy and the tests share one build of the dependencies.
       - run: cargo clippy --release --all-targets -- -D warnings
+      # the dedicated server's build, without the client, which nothing else builds
+      - run: cargo clippy --release --all-targets --no-default-features -- -D warnings
       - run: cargo test --release
 
   # Whether generation agrees across platforms (D-3): multiplayer needs every client to generate

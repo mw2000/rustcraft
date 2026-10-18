@@ -42,7 +42,7 @@ fn server(dir: &Path) -> App {
         seed: Some(3),
         time_of_day: None,
         region_distance: 16,
-        name: PlayerName::new("host"),
+        host: Some(PlayerName::new("host")),
     })
     // a second a frame, so the clock visibly moves
     .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)));

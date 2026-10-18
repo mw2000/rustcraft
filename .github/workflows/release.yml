@@ -27,14 +27,17 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
             exe: rustcraft
+            server: rustcraft-server
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
             exe: rustcraft.exe
+            server: rustcraft-server.exe
           - os: macos-latest
             target: aarch64-apple-darwin
             name: macos-aarch64
             exe: rustcraft
+            server: rustcraft-server
     steps:
       - uses: actions/checkout@v4
       # The same packages as ci.yml: gilrs needs libudev, and x11 windowing the X and xkbcommon headers.
@@ -47,10 +50,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      # The dedicated server (design.md 5.9) isn't built yet. When it exists, build it here with
-      # another `--bin` and add its executable to the package step below.
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} --bin rustcraft
+      # The dedicated server (design.md 5.9), without the client's window, rendering and input,
+      # so it needs no GPU, display or the system packages above to run.
+      - name: Build the server
+        run: cargo build --release --target ${{ matrix.target }} --bin rustcraft-server --no-default-features
+      # The game, with its assets, and the server in an archive of its own, as it needs none.
       - name: Package
         shell: bash
         run: |
@@ -58,22 +64,29 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" != tag ]; then
             version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)-dev"
           fi
-          dir="rustcraft-${version}-${{ matrix.name }}"
-          mkdir "$dir"
-          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "$dir/"
-          cp -r assets "$dir/assets"
-          cp README.md LICENSE-APACHE LICENSE-MIT "$dir/"
-          if [ "${{ runner.os }}" = Windows ]; then
-            7z a "$dir.zip" "$dir"
-            echo "ARCHIVE=$dir.zip" >> "$GITHUB_ENV"
-          else
-            tar czf "$dir.tar.gz" "$dir"
-            echo "ARCHIVE=$dir.tar.gz" >> "$GITHUB_ENV"
-          fi
+          mkdir archives
+          pack() {
+            if [ "${{ runner.os }}" = Windows ]; then
+              7z a "archives/$1.zip" "$1"
+            else
+              tar czf "archives/$1.tar.gz" "$1"
+            fi
+          }
+          game="rustcraft-${version}-${{ matrix.name }}"
+          mkdir "$game"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "$game/"
+          cp -r assets "$game/assets"
+          cp README.md LICENSE-APACHE LICENSE-MIT "$game/"
+          pack "$game"
+          server="rustcraft-server-${version}-${{ matrix.name }}"
+          mkdir "$server"
+          cp "target/${{ matrix.target }}/release/${{ matrix.server }}" "$server/"
+          cp README.md LICENSE-APACHE LICENSE-MIT "$server/"
+          pack "$server"
       - uses: actions/upload-artifact@v4
         with:
           name: rustcraft-${{ matrix.name }}
-          path: ${{ env.ARCHIVE }}
+          path: archives/*
           if-no-files-found: error
 
   release:
@@ -95,6 +108,9 @@ jobs:
           body: |
             Download the archive for your system, unpack it and run `rustcraft`. The game's controls
             and commands are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md#controls).
+
+            To keep a world open on an always-on machine, run `rustcraft-server` from its own archive,
+            which needs no display or GPU; see [Running a server](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md#running-a-server).
 
             macOS: these builds aren't notarised, so open `rustcraft` the first time with right-click, then Open.
             Linux: needs a Vulkan driver.

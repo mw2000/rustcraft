@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use bevy::math::Vec3;
 use bevy::math::{I64Vec3, IVec3, U16Vec3};
+use bevy::mesh::{Indices, Mesh, VertexAttributeValues};
 use bevy::platform::collections::HashMap;
-use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
 
 use crate::block::{BlockType, Tile};
 
@@ -942,7 +942,7 @@ fn test_lods_up_to_four_blocks_are_textured_with_the_texture_repeating_over_each
     assert!(!flags.is_empty() && flags.iter().all(|&f| f <= 0.0));
     // a face one cell wide spans four tiles, so none comes out a tile wide
     let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
-    let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else {
+    let bevy::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else {
         panic!()
     };
     let tiles = |axis: usize| uvs.iter().map(|uv| uv[axis]).fold(0.0f32, f32::max);
@@ -1192,7 +1192,7 @@ fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
         ))
     });
     let mesh = super::mesh::mesh_blocks(&lod, 1, style(true, false), &tint, &light).opaque;
-    let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) =
+    let Some(bevy::mesh::VertexAttributeValues::Float32x2(lights)) =
         mesh.attribute(Mesh::ATTRIBUTE_UV_1)
     else {
         panic!("no light on the mesh");
@@ -1961,7 +1961,7 @@ fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
     };
     let meshes = super::lod::generate_lod_mesh(regions, key).unwrap();
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
-    let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) =
+    let Some(bevy::mesh::VertexAttributeValues::Float32x3(pos)) =
         meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION)
     else {
         panic!()

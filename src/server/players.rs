@@ -9,13 +9,14 @@ use bevy_replicon_renet2::netcode::NetcodeServerTransport;
 use serde::{Deserialize, Serialize};
 
 use super::chat::ChatAllowances;
+use super::commands::CONSOLE_NAME;
 use super::edits::EditAllowances;
 use super::sync::SyncedArea;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::generate::checksum::world_checksum;
+use crate::collision::overlaps;
 use crate::game_mode::GameMode;
-use crate::hotbar::Hotbar;
-use crate::interaction::overlaps;
+use crate::inventory::Hotbar;
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::items::Item;
 use crate::player::name::PlayerName;
@@ -125,9 +126,11 @@ pub(super) fn welcome(
     let sent = transport
         .zip(clients.get(authorized.entity).ok())
         .and_then(|(transport, id)| transport.user_data(id.get()));
+    // and never the console's, so no one can speak as the server
+    let console = PlayerName::new(CONSOLE_NAME);
     let name = sent
         .map_or_else(|| PlayerName::new(""), |data| name_from_user_data(&data))
-        .unique_among(names.iter());
+        .unique_among(names.iter().chain([&console]));
     let player = save
         .player(&name)
         .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));

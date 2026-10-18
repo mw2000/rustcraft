@@ -334,8 +334,8 @@ mod tests {
 
     use super::{click_of, InventoryScreenPlugin, Screen};
     use crate::block::BlockType;
+    use crate::client::command_bar::CommandPlugin;
     use crate::client::player::LocalPlayer;
-    use crate::commands::CommandPlugin;
     use crate::crafting::{Recipe, Station};
     use crate::game_mode::GameMode;
     use crate::hotbar::HotbarPlugin;

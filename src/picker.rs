@@ -6,8 +6,8 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use crate::block::BlockType;
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
-use crate::hotbar::Hotbar;
 use crate::inventory::icons::{load_icons, ItemIcons};
+use crate::inventory::Hotbar;
 use crate::inventory::HOTBAR_SLOTS;
 use crate::items::Item;
 use crate::menu::{font, free_cursor, GameState, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
@@ -193,10 +193,11 @@ mod tests {
 
     use super::{Picker, PickerPlugin, Tile};
     use crate::block::BlockType;
+    use crate::client::command_bar::{CommandBar, CommandPlugin};
     use crate::client::player::LocalPlayer;
-    use crate::commands::{CommandBar, CommandPlugin};
     use crate::game_mode::GameMode;
-    use crate::hotbar::{Hotbar, HotbarPlugin};
+    use crate::hotbar::HotbarPlugin;
+    use crate::inventory::Hotbar;
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
     use crate::menu::{GameState, MenuPlugin};

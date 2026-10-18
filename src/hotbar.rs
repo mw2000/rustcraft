@@ -1,14 +1,11 @@
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
-use crate::block::BlockType;
+use crate::client::command_bar::command_bar_closed;
 use crate::client::player::LocalPlayer;
-use crate::commands::command_bar_closed;
 use crate::game_mode::GameMode;
 use crate::inventory::icons::{draw_stacks, load_icons, stack_view, ItemIcons, StackView};
-use crate::inventory::{Inventory, HOTBAR_SLOTS};
-use crate::items::{Item, ItemStack};
+use crate::inventory::{Hotbar, HOTBAR_SLOTS};
 use crate::menu::GameState;
 use crate::protocol::DropItem;
 
@@ -42,58 +39,6 @@ const STRIP_COLOR: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 const SLOT_BORDER_COLOR: Color = Color::srgba(0.55, 0.55, 0.55, 0.6);
 const SELECTED_BORDER_COLOR: Color = Color::WHITE;
 const SELECTED_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
-
-/// Which of the inventory's first nine slots, the hotbar along the bottom of the screen, the
-/// player holds, to place from (§5.2). Keys 1 to 9 and the mouse wheel select a slot. It's
-/// the client's to choose, as it changes nothing but what's asked for.
-#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "SavedHotbar")]
-pub struct Hotbar {
-    pub selected: usize,
-}
-
-impl Hotbar {
-    /// What's in the selected slot of `inventory`.
-    pub fn held(self, inventory: &Inventory) -> Option<ItemStack> {
-        inventory.slots[self.selected]
-    }
-
-    /// Moves the selection `by` slots to the right, or left if it's negative, wrapping round.
-    pub fn scroll(&mut self, by: i32) {
-        self.selected = (self.selected as i32 + by).rem_euclid(HOTBAR_SLOTS as i32) as usize;
-    }
-
-    /// Selects the slot in the hotbar holding `block`, as middle click does, returning whether
-    /// there's one.
-    pub fn pick(&mut self, block: BlockType, inventory: &Inventory) -> bool {
-        let holding = |slot: &Option<ItemStack>| slot.is_some_and(|s| s.item == Item::Block(block));
-        let slot = inventory.slots[..HOTBAR_SLOTS].iter().position(holding);
-        if let Some(slot) = slot {
-            self.selected = slot;
-        }
-        slot.is_some()
-    }
-}
-
-// How a hotbar is read, checked. Saves from before M1.1 have its blocks too, which are
-// ignored: the inventory holds them now.
-#[derive(Deserialize)]
-struct SavedHotbar {
-    selected: usize,
-}
-
-impl TryFrom<SavedHotbar> for Hotbar {
-    type Error = String;
-
-    fn try_from(saved: SavedHotbar) -> Result<Self, String> {
-        if saved.selected >= HOTBAR_SLOTS {
-            return Err(format!("the hotbar has no slot {}", saved.selected));
-        }
-        Ok(Self {
-            selected: saved.selected,
-        })
-    }
-}
 
 /// The player's hotbar on screen, choosing a slot in it and dropping what's in it, and the
 /// icons of items it and the other screens draw.
@@ -270,8 +215,8 @@ mod tests {
 
     use super::{drop_held, Hotbar, HotbarPlugin, HOTBAR_SLOTS};
     use crate::block::BlockType;
+    use crate::client::command_bar::CommandPlugin;
     use crate::client::player::LocalPlayer;
-    use crate::commands::CommandPlugin;
     use crate::game_mode::GameMode;
     use crate::inventory::icons::StackCount;
     use crate::inventory::Inventory;

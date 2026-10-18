@@ -64,6 +64,22 @@ Commands that change the world or other players, `/tp`, `/gamemode`, `/op` and `
 
 It's early days: connections aren't encrypted nor players' names checked, so anyone who can reach your world can join under any name, an operator's included, and take their place. Only open your world to friends you trust.
 
+## Running a server
+
+To keep a world open on an always-on machine, with no screen or graphics card, run the dedicated server, `rustcraft-server`, from its own archive on the [Releases page](../../releases), or build it yourself without the game's window and rendering:
+
+```
+cargo build --release --bin rustcraft-server --no-default-features
+./target/release/rustcraft-server --world <name> --port 25600
+```
+
+- `--world <name>` hosts that world, made if it doesn't exist yet, from the same worlds directory as the game (or give a path); `--port <port>` takes players on that UDP port, 25600 if it's left off; `--seed <seed>` gives a new world that seed. `RC_WORLD`, `RC_HOST` and `RC_SEED` do the same. `--help` prints these.
+- Friends join with `RC_JOIN=<address>` as above. Over the internet, forward UDP port 25600 to the server.
+- It logs to the terminal it's run in. Type into it to run any command, as an operator, with or without the /: `op <name>` makes the first operator, `list` names who's on, `say <text>` says something to everyone as Server, `help` lists the rest, and `stop`, or Ctrl-C, saves the world and stops. A command that acts on you, such as `tp 1 2 3`, needs a player named instead, as the server has none.
+- It saves every 30 seconds, as a player leaves and as it stops, the same way the game does, so a world can be copied between the game and a server. The time of day runs on while nobody's on.
+
+The same warning as above applies, more so: anyone who can reach the server can join under any name, an operator's included. Only run one for friends you trust, until names are checked.
+
 ## License
 
 Licensed under either of

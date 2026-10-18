@@ -6,7 +6,7 @@ use bevy::transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
 use crate::game_mode::GameMode;
-use crate::hotbar::Hotbar;
+use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
 use crate::survival::{SpawnBed, Vitals};
@@ -179,7 +179,7 @@ mod tests {
     use super::{PlayerState, WorldFile, FORMAT_VERSION};
     use crate::block::BlockType;
     use crate::game_mode::GameMode;
-    use crate::hotbar::Hotbar;
+    use crate::inventory::Hotbar;
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
     use crate::player::{Movement, PlayerLook};

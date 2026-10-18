@@ -79,6 +79,16 @@ fn sweep_axis(
     }
 }
 
+/// Whether a block at `block` would overlap a body of `body` at `position`. Touching doesn't
+/// count, so a block can go just under the player's feet.
+pub fn overlaps(body: Aabb, position: Vec3, block: I64Vec3) -> bool {
+    // a little slack, as collision has, for a body resting on a face give or take rounding
+    const SLACK: f32 = 1e-3;
+    let (min, max) = (position + body.min, position + body.max);
+    let block = block.as_vec3();
+    (min + SLACK).cmplt(block + 1.0).all() && (max - SLACK).cmpgt(block).all()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

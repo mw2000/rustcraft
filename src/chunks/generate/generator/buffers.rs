@@ -5,9 +5,9 @@ use crate::chunks::generate::biome::grass_tint;
 use crate::chunks::generate::noise::NoiseGenerator;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec3;
-use bevy::render::mesh::Indices;
-use bevy::render::mesh::Mesh;
-use bevy::render::mesh::VertexAttributeValues;
+use bevy::mesh::Indices;
+use bevy::mesh::Mesh;
+use bevy::mesh::VertexAttributeValues;
 use std::ops::Range;
 
 // Accumulates one mesh's worth of vertex/index/color data - one instance for the
@@ -167,7 +167,7 @@ impl MeshBuffers {
 
     pub(super) fn build_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
-            bevy::render::mesh::PrimitiveTopology::TriangleList,
+            bevy::mesh::PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
         );
         mesh.insert_indices(Indices::U32(self.indices));

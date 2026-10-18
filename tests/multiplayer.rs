@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 use bevy::ecs::message::{MessageCursor, Messages};
@@ -40,9 +41,9 @@ use rustcraft::protocol::{
     PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand, StartBreaking,
     Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
 };
-use rustcraft::save::{SavePlugin, WorldFile};
+use rustcraft::save::{SavePlugin, WorldFile, WorldSave};
 use rustcraft::server::drops::DroppedItem;
-use rustcraft::server::{serve, ServerPlugin, WorldToOpen};
+use rustcraft::server::{serve, Console, DedicatedServerPlugins, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
 use rustcraft::survival::Vitals;
 use rustcraft::world::World;
@@ -89,7 +90,7 @@ fn host(dir: &std::path::Path, clients: u16, saving: bool) -> (App, Vec<MemorySo
             seed: Some(3),
             time_of_day: None,
             region_distance: 16,
-            name: PlayerName::new("host"),
+            host: Some(PlayerName::new("host")),
         })
         .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
     if saving {
@@ -1447,5 +1448,125 @@ fn test_only_operators_wind_everyones_clock() {
     wind(&mut gathering, 1);
     gathering.wait();
     assert!(waited(&mut gathering) > unwound * 10.0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// A dedicated server for the world in `dir`, with seed 3, as `rustcraft-server` runs it: no
+// host, a console typed into by the sender returned, and sockets for two clients to join on.
+fn dedicated(dir: &std::path::Path) -> (App, Sender<String>, Vec<MemorySocketClient>) {
+    let (console, lines) = mpsc::channel();
+    let mut server = App::new();
+    server
+        .add_plugins((MinimalPlugins, DedicatedServerPlugins))
+        .insert_resource(WorldToOpen {
+            dir: dir.to_owned(),
+            seed: Some(3),
+            time_of_day: None,
+            region_distance: 0,
+            host: None,
+        })
+        .insert_resource(Console::new(lines))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
+    server.finish();
+    server.update();
+    let (socket, clients) = new_memory_sockets(vec![1, 2], true, true);
+    let channels = server.world().resource::<RepliconChannels>();
+    let (renet, transport) = serve(channels, socket).unwrap();
+    server.insert_resource(renet).insert_resource(transport);
+    (server, console, clients)
+}
+
+#[test]
+fn test_a_dedicated_server_has_no_player_of_its_own_and_takes_commands_from_its_console() {
+    let dir = temp_dir("dedicated");
+    let (mut server, console, mut sockets) = dedicated(&dir);
+    let mut answers = MessageCursor::<CommandOutput>::default();
+    assert!(owners(&mut server).is_empty());
+    console.send("list".into()).unwrap();
+    server.update();
+    assert_eq!(vec!["Nobody's here"], printed(&server, &mut answers));
+    // and the clock runs with nobody here
+    let started = server.world().resource::<TimeOfDay>().0;
+    server.update();
+    assert!(server.world().resource::<TimeOfDay>().0 > started);
+
+    let mut client = joiner(
+        &server,
+        sockets.remove(0),
+        "guest",
+        None,
+        Default::default(),
+    );
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    assert_eq!(1, owners(&mut server).len());
+
+    // the console makes them an operator and talks to them, as the server
+    let mut told = MessageCursor::<CommandOutput>::default();
+    let mut chat = MessageCursor::<ChatLine>::default();
+    console.send("op guest".into()).unwrap();
+    console.send("say welcome, guest".into()).unwrap();
+    update_until_sent(&mut server, &mut client, &mut told, |output| {
+        output.text == "Server made you an operator"
+    });
+    let said = update_until_sent(&mut server, &mut client, &mut chat, |_| true);
+    assert_eq!("Server", said.from.as_str());
+    assert_eq!("welcome, guest", said.text);
+    // with or without the /
+    console.send("/list".into()).unwrap();
+    server.update();
+    assert!(printed(&server, &mut answers).contains(&"1 player here: guest".into()));
+
+    // they play, building in the air, which roofs the chunk under it, recording nothing to
+    // redraw on a server no client of its own draws from, so nothing builds up
+    client
+        .world_mut()
+        .write_message(RunCommand("/gamemode creative".into()));
+    let spawn = server.world().resource::<World>().spawn();
+    let below = spawn.floor().as_i64vec3() - I64Vec3::Y;
+    update_until(&mut server, &mut client, |server, _| {
+        let player = guests_player(server);
+        let mode = *server.world().get::<GameMode>(player).unwrap();
+        let world = server.world().resource::<World>();
+        mode == GameMode::Creative && world.is_chunk_generated(ChunkCoordinate::containing(below))
+    });
+    client.world_mut().write_message(RequestEdit {
+        block: below,
+        to: BlockType::Bricks,
+        slot: 0,
+        seq: 1,
+    });
+    update_until(&mut server, &mut client, |_, client| {
+        client_has_edit(client, below, BlockType::Bricks)
+    });
+    let mut world = server.world_mut().resource_mut::<World>();
+    assert!(world.take_reroofed().is_empty() && world.take_relit().is_empty());
+
+    // and leave, which saves them
+    client
+        .world_mut()
+        .resource_mut::<RenetClient>()
+        .disconnect();
+    let saved = dir.join("players").join("guest.toml");
+    update_until(&mut server, &mut client, |server, _| {
+        owners(server).is_empty() && saved.exists()
+    });
+
+    // and nobody may take the console's name
+    let socket = sockets.remove(0);
+    let mut impostor = joiner(&server, socket, "server", None, Default::default());
+    update_until(&mut server, &mut impostor, |_, client| joined(client));
+    assert_eq!(["server2"], names(&mut server)[..]);
+
+    // `stop` saves everything and stops the server
+    console.send("stop".into()).unwrap();
+    server.update();
+    assert_eq!(Some(AppExit::Success), server.should_exit());
+    drop(server);
+    let (_, file, edits, ..) = WorldSave::open(dir.clone(), None).unwrap();
+    assert_eq!(vec!["guest".to_owned()], file.ops);
+    assert_eq!(None, file.player);
+    let coord = ChunkCoordinate::containing(below);
+    let local = ChunkCoordinate::local_block(below);
+    assert!(edits.in_chunk(coord).eq([(local, BlockType::Bricks)]));
     std::fs::remove_dir_all(&dir).unwrap();
 }

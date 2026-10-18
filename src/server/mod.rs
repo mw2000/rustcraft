@@ -7,6 +7,7 @@ mod chat;
 mod chunks;
 mod clock;
 mod commands;
+mod console;
 mod containers;
 mod crafting;
 pub mod drops;
@@ -21,21 +22,27 @@ mod sync;
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
 pub use commands::Operators;
+pub use console::{Console, ConsolePlugin};
 pub use host::{host, serve};
 pub use players::HeldItem;
 
 use std::path::PathBuf;
 
+use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
 use bevy::time::common_conditions::on_timer;
 use bevy_replicon::prelude::{ClientId, ClientState, ClientSystems, ServerSystems};
+use bevy_replicon::RepliconPlugins;
+use bevy_replicon_renet2::RepliconRenetPlugins;
 
 use crate::clock::TimeOfDay;
 use crate::containers::Containers;
 use crate::farming::Crops;
+use crate::game_mode::GameModePlugin;
 use crate::player::name::PlayerName;
-use crate::protocol::POSE_INTERVAL;
-use crate::save::{PlayerState, WorldSave};
+use crate::protocol::{ProtocolPlugin, POSE_INTERVAL};
+use crate::save::{PlayerState, SavePlugin, WorldSave};
 use crate::world::World;
 
 /// The server's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
@@ -166,6 +173,25 @@ impl Plugin for ServerPlugin {
     }
 }
 
+/// What a dedicated server runs on Bevy's `MinimalPlugins`: the server, saving and the console,
+/// with replicon and its transport, and nothing of the client's (§4.4). It needs a
+/// `WorldToOpen` with no host, a `Console`, and a transport to take players on, see `host`.
+pub struct DedicatedServerPlugins;
+
+impl PluginGroup for DedicatedServerPlugins {
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(StatesPlugin)
+            .add_group(RepliconPlugins)
+            .add_group(RepliconRenetPlugins)
+            .add(ProtocolPlugin)
+            .add(ServerPlugin)
+            .add(SavePlugin)
+            .add(GameModePlugin)
+            .add(ConsolePlugin)
+    }
+}
+
 /// Whether this App decides the game: it does unless it's a client connected to a server
 /// elsewhere, so in singleplayer, when hosting, and as a dedicated server.
 pub fn is_authority(state: Res<State<ClientState>>) -> bool {
@@ -183,12 +209,12 @@ pub struct WorldToOpen {
     pub time_of_day: Option<f32>,
     /// How far, in chunks, terrain is built from full-detail regions, see `World::new`.
     pub region_distance: u32,
-    /// The host's player's name.
-    pub name: PlayerName,
+    /// The host's player's name, or none for a dedicated server, which has no player of its own.
+    pub host: Option<PlayerName>,
 }
 
-/// Opens the world and its save, and spawns the host's player where they were saved, or at the
-/// world's spawn if they're new.
+/// Opens the world and its save, and spawns the host's player, if there's a host, where they
+/// were saved, or at the world's spawn if they're new.
 pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     let dir = &open.dir;
     let (save, saved, edits, containers, crops) = WorldSave::open(dir.clone(), open.seed)
@@ -200,16 +226,14 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
         saved.seed
     );
     // the host's, as `world.toml` holds, and players joining keep their own saves
-    let arrival = saved
-        .player
-        .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
-    let [x, y, z] = arrival.position;
-    info!("spawned at {x:?}, {y:?}, {z:?}");
-    commands.spawn(players::spawning(
-        &arrival,
-        ClientId::Server,
-        open.name.clone(),
-    ));
+    if let Some(name) = &open.host {
+        let arrival = saved
+            .player
+            .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
+        let [x, y, z] = arrival.position;
+        info!("spawned at {x:?}, {y:?}, {z:?}");
+        commands.spawn(players::spawning(&arrival, ClientId::Server, name.clone()));
+    }
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);

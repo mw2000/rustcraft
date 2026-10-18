@@ -1,6 +1,8 @@
+#[cfg(feature = "client")]
 pub mod input;
 pub mod name;
 pub mod physics;
+#[cfg(feature = "client")]
 pub mod underwater;
 
 use std::f32::consts::TAU;
@@ -15,8 +17,7 @@ use bevy_replicon::prelude::ClientId;
 use crate::{
     collision::Aabb,
     game_mode::GameMode,
-    hotbar::Hotbar,
-    inventory::Inventory,
+    inventory::{Hotbar, Inventory},
     save::PlayerState,
     survival::{SpawnBed, Vitals},
 };
@@ -103,6 +104,8 @@ impl PlayerLook {
     }
 }
 
+/// How far from the eye a block can be reached, in blocks.
+pub const REACH: f32 = 5.0;
 /// How high the eyes are above the player's feet, far enough under the top of its head that
 /// the camera's near plane stays out of the ceiling.
 pub const EYE_HEIGHT: f32 = 1.85;

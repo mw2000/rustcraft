@@ -5,26 +5,22 @@ use bevy::prelude::*;
 use crate::block::BlockType;
 use crate::breaking::{break_time, crack_stage};
 use crate::chunks::chunk::ChunkCoordinate;
+use crate::client::command_bar::command_bar_closed;
 use crate::client::player::LocalPlayer;
-use crate::collision::Aabb;
-use crate::commands::command_bar_closed;
 use crate::containers::Container;
 use crate::crafting::Station;
 use crate::farming::tilled;
 use crate::game_mode::GameMode;
-use crate::hotbar::Hotbar;
 use crate::inventory::furnace::ContainerView;
 use crate::inventory::recipes::CraftingStation;
+use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::items::{Item, ToolKind};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
-use crate::player::{PlayerLook, EYE_HEIGHT};
+use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
 use crate::protocol::{PickBlock, RequestEdit, StartBreaking, UseBlock};
 use crate::world::World;
-
-/// How far from the eye a block can be reached, in blocks.
-pub const REACH: f32 = 5.0;
 
 // Just over a block wide, so the outline isn't hidden in the block's own faces.
 const OUTLINE_SIZE: f32 = 1.004;
@@ -235,16 +231,6 @@ pub fn raycast(
     }
 }
 
-/// Whether a block at `block` would overlap a body of `body` at `position`. Touching doesn't
-/// count, so a block can go just under the player's feet.
-pub fn overlaps(body: Aabb, position: Vec3, block: I64Vec3) -> bool {
-    // a little slack, as collision has, for a body resting on a face give or take rounding
-    const SLACK: f32 = 1e-3;
-    let (min, max) = (position + body.min, position + body.max);
-    let block = block.as_vec3();
-    (min + SLACK).cmplt(block + 1.0).all() && (max - SLACK).cmpgt(block).all()
-}
-
 fn target_block(
     world: Res<World>,
     mut target: ResMut<Target>,
@@ -407,9 +393,11 @@ fn use_station(
 mod tests {
     use bevy::math::{I64Vec3, Vec3};
 
-    use super::{overlaps, raycast, BreakStep, Breaking, Hit, BREAK_REST, REACH};
+    use super::{raycast, BreakStep, Breaking, Hit, BREAK_REST};
     use crate::breaking::CRACK_STAGES;
+    use crate::collision::overlaps;
     use crate::player::BODY;
+    use crate::player::REACH;
 
     #[test]
     fn test_holding_on_a_block_starts_it_cracks_it_and_breaks_it_once_its_taken_long_enough() {
@@ -589,9 +577,9 @@ mod tests {
         use crate::client::ClientPlugin;
         use crate::crafting::Station;
         use crate::game_mode::GameMode;
-        use crate::hotbar::Hotbar;
         use crate::inventory::furnace::ContainerView;
         use crate::inventory::recipes::CraftingStation;
+        use crate::inventory::Hotbar;
         use crate::inventory::Inventory;
         use crate::items::{Item, ItemStack};
         use crate::menu::GameState;

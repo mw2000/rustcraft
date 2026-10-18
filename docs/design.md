@@ -69,7 +69,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
-| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
+| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
 | Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
@@ -637,13 +637,70 @@ The world's state beyond the seed (INV-1).
     and teleport them but not de-op them, and a `/deop` takes it away again; a joiner's
     winding changes nothing until they're an operator; `/msg` reaches only its target; and
     `/list`. Tests that `/tp` a joiner make them an operator first.
-- **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
-  `edits.rs`, `chunks.rs`, `commands.rs`, `chat.rs`, `allowances.rs`, `clock.rs`, `host.rs`,
-  `players.rs`, `sync.rs`); `src/save/`
-  under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup,
-  `edits.rs`, `player.rs`, `join.rs`, `others.rs`, `models.rs`).
-  Shared modules stay where they are. Later a default-on `client` cargo feature keeps wgpu and
-  winit out of the dedicated server binary.
+- **Built (M-R1):** the dedicated server (`src/bin/server.rs`, `src/server/console.rs`).
+  - **The binary:** `rustcraft-server` is `DedicatedServerPlugins` (`StatesPlugin`, replicon
+    and renet2, `ProtocolPlugin`, `ServerPlugin`, `SavePlugin`, `GameModePlugin` and
+    `ConsolePlugin`) on `MinimalPlugins`, logging to stdout, with Bevy's Ctrl-C handler, which
+    `ctrlc`'s `termination` feature makes catch SIGTERM too, so stopping it as a service saves.
+    It runs 30 frames a second: clients pose at 20 Hz and are seen 100 ms behind, nothing the
+    server runs needs more, and it halves what an idle server costs the machine; replicon's
+    fixed tick is set to match, so it sends once a frame. `--world <name or path>`, `--port`
+    and `--seed`, or `RC_WORLD`, `RC_HOST` and `RC_SEED`, and `--help`. It takes players with
+    `server::host`, and exits if it can't bind the port.
+  - **No host:** `WorldToOpen::host` is the host's name, or none, which spawns no player, so a
+    dedicated server only has joiners'. `world.toml`'s `[player]`, the host's from playing the
+    world in the game, is kept as it was, so a world moves between the game and a server.
+    Residency, roofs and light needed nothing: the server holds chunks round its players
+    alone, and `World` records reroofs and relighting only in chunks a client in the same App
+    holds, so with none it records nothing to drain (a test). The night's skipped once every
+    player there sleeps, all of them joiners. The clock runs while nobody's on, as furnaces do:
+    the world goes on, as a Minecraft server's does, and costs nothing with no chunks loaded.
+    `run_clock` now counts in an `f64` beside `TimeOfDay`: an `f32` of 1,024 days can't add a
+    30th of a second (5.6e-5 days), so a server left on for a week would have stopped its
+    clock, and crops with it, which grow by the days it counts.
+  - **Console:** a thread reads lines from stdin (`Console`), and `ConsolePlugin` writes each
+    as the App's own `RunCommand` or `Chat`, which replicon hands the server from
+    `ClientId::Server` as it does the host's, and logs the `CommandOutput` that comes back. So
+    it runs the server's commands as they are: always as an operator, with no player of its
+    own, so `~` is from the spawn and `/tp` and `/gamemode` must name a player, and `/list`
+    can say nobody's here. Commands are typed with or without the `/`; `say <text>` chats as
+    "Server" (`CONSOLE_NAME`), `stop` saves and exits, and `help` lists them. A server with
+    stdin closed, as a service, reads nothing and runs on.
+  - **The `client` feature**, on by default, gates Bevy's render, window, winit, gilrs, x11
+    and UI features and the modules that need them: `client`, `clouds`, `curvature`, `debug`,
+    `horizon`, `hotbar`, `hud`, `interaction`, `menu`, `picker`, `sky`, `sky_dome`, `tonemap`,
+    the inventory's screens, `player::{input, underwater}`, and the chunks' loaders, LOD
+    drawing, fades and materials (`TerrainPlugin` now in `chunks/terrain.rs`). What they held
+    that the server needs moved out: `Hotbar` to `inventory`, `overlaps` to `collision`,
+    `REACH` to `player`, and the command bar to `client::command_bar`, leaving `commands.rs`
+    the parsing the server runs. `cargo build --release --bin rustcraft-server
+    --no-default-features` builds 234 crates rather than 397, with no wgpu, winit, gilrs or
+    X11, into a 36 MB binary (20 MB stripped, against 105 MB with the client's features)
+    linking only libc, libm and libgcc. Idle, it takes 2% of a core and 28 MB. Bevy's `bevy_mesh` stays, as generation builds meshes
+    beside blocks, and `serialize`, for the entities messages name, which `bevy_window` turned
+    on before; `trace` moved to the client, as its spans marked every line of the server's log.
+    CI lints that build too; `lod_sim` and `tests/multiplayer.rs` need the feature.
+  - A joiner can't be called "Server", which `welcome` numbers like a name taken ("Server2"),
+    so nobody chats as the console. `PROTOCOL_VERSION` is 11.
+  - **Known gaps:** the console's `help` lists `[ and ]`, which it can't press. Started with interrupts
+    ignored, as a script's background job is, `ctrlc` declines to handle signals, so SIGTERM
+    stops the server without saving; from a terminal, systemd or Docker it saves. A client
+    quitting doesn't say so, so the server sees it leave only once it times out, about 15
+    seconds on. A client's clock still adds in an `f32` between syncs, so after 512 days at
+    60 frames a second its sky moves only at each sync, 5 seconds' worth at a time.
+  - `tests/multiplayer.rs` runs `DedicatedServerPlugins` with a console fed by a channel:
+    nobody's there until a client joins; `list`, `op` and `say` reach it, with or without the
+    `/`; the clock runs with nobody on; building in the air records no reroofs; leaving saves
+    the player; and `stop` saves the operators and edits with no `[player]`. `src/save/` checks
+    a host's `[player]` survives a server, and `server::clock` that the clock runs on at 2,000
+    days.
+- **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin`,
+  `DedicatedServerPlugins` and `is_authority`, `edits.rs`, `chunks.rs`, `commands.rs`,
+  `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`);
+  `src/save/` under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene
+  setup, `edits.rs`, `player.rs`, `join.rs`, `others.rs`, `models.rs`, `command_bar.rs`), all
+  behind the `client` feature with the rest of what draws. `src/bin/server.rs` is the dedicated
+  server. Shared modules stay where they are.
 
 ### 4.5 Game modes (proposed)
 
@@ -1298,8 +1355,9 @@ Windows x86_64 and macOS Apple Silicon (Intel macOS is skipped), packs each as
 the archives as workflow artifacts instead. The binary finds `assets/` next to itself
 (`settings::asset_path`, the same rule as Bevy's `AssetPlugin`), so double-clicking works, and
 Windows release builds open no console, so their logs go nowhere. macOS builds are not notarised.
-Still to come: the dedicated server binary (M0.5/M0.6), which gets a second `--bin` and archive
-entry in the workflow.
+The dedicated server (§4.4) is built beside it for each platform, with `--no-default-features` so
+it needs no GPU or display, and packed alone as `rustcraft-server-<version>-<target>/` with the
+README and licences but no assets, which it doesn't read.
 
 ---
 
@@ -1398,7 +1456,10 @@ Done when: **the world feels inhabited, and night is dangerous.**
 
 ### Throughout
 
-- ◐ **M-R1 Release builds** for Windows, macOS and Linux, and a dedicated server (§5.9). Release workflow done; the server binary is to come.
+- ☑ **M-R1 Release builds** for Windows, macOS and Linux, and a dedicated server (§5.9, §4.4).
+  - ☐ Follow-up: make `TimeOfDay` an `f64` of days, with `TimeSync`, `world.toml` and crops'
+    planting times, so a client's clock runs smoothly however many days have passed, as the
+    server's now does (§4.4, Built M-R1).
 
 ---
 

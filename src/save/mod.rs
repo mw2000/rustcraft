@@ -25,7 +25,7 @@ use crate::containers::Containers;
 use crate::edits::Edits;
 use crate::farming::Crops;
 use crate::game_mode::GameMode;
-use crate::hotbar::Hotbar;
+use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
@@ -76,6 +76,8 @@ pub struct WorldSave {
     unsaved: HashSet<Region>,
     // what `world.toml` was last written with, so it's only written again when it changes
     written: Option<WorldFile>,
+    // the host's player as it was opened, kept as it is by a dedicated server, which has none
+    host: Option<PlayerState>,
     // the players who've joined from elsewhere, by name, as they were saved or as they left
     players: HashMap<String, PlayerState>,
     // those of them changed since they were last written
@@ -185,6 +187,7 @@ impl WorldSave {
             dir,
             unsaved: HashSet::new(),
             written: Some(file.clone()),
+            host: file.player.clone(),
             players,
             unsaved_players: HashSet::new(),
             writing: None,
@@ -361,6 +364,7 @@ impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
         file.ops = self.operators.names().to_vec();
+        file.player = save.host.clone();
         for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players
         {
             let state = PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory)
@@ -452,7 +456,7 @@ mod tests {
     use crate::edits::Edits;
     use crate::farming::Crops;
     use crate::game_mode::GameMode;
-    use crate::hotbar::Hotbar;
+    use crate::inventory::Hotbar;
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
     use crate::player::name::PlayerName;
@@ -677,6 +681,11 @@ mod tests {
     // The game's saving, headless: a world played in one app is there in the next. The
     // server opens it and spawns its player, with no camera, as a server's players have none.
     fn play(dir: &TempDir) -> App {
+        play_hosted_by(dir, Some("host"))
+    }
+
+    // The same, with a host called `host`, or none as on a dedicated server.
+    fn play_hosted_by(dir: &TempDir, host: Option<&str>) -> App {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -691,7 +700,7 @@ mod tests {
             seed: None,
             time_of_day: None,
             region_distance: 16,
-            name: PlayerName::new("host"),
+            host: host.map(PlayerName::new),
         });
         app.finish();
         app.update();
@@ -787,5 +796,27 @@ mod tests {
             1,
             edits.in_chunk(ChunkCoordinate::containing(built)).count()
         );
+    }
+
+    #[test]
+    fn test_a_dedicated_server_leaves_the_hosts_player_as_it_was() {
+        let dir = TempDir::new("no-host");
+        let mut app = play(&dir);
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        drop(app);
+        let hosts = WorldSave::open(dir.world(), None).unwrap().1.player;
+        assert!(hosts.is_some());
+
+        let mut app = play_hosted_by(&dir, None);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+        let mut players = app.world_mut().query::<&Player>();
+        assert_eq!(0, players.iter(app.world()).count());
+        app.world_mut().resource_mut::<TimeOfDay>().0 = 2.0;
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        drop(app);
+        let (_, file, ..) = WorldSave::open(dir.world(), None).unwrap();
+        assert_eq!((2.0, hosts), (file.time_of_day, file.player));
     }
 }

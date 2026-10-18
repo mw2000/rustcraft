@@ -2,10 +2,15 @@
 //! player's inventory (INV-4), as clients ask it to (`InventoryClick` and the rest in
 //! `protocol.rs`); the screen showing it is `screen`.
 
+#[cfg(feature = "client")]
 mod chest;
+#[cfg(feature = "client")]
 pub mod furnace;
+#[cfg(feature = "client")]
 pub mod icons;
+#[cfg(feature = "client")]
 pub mod recipes;
+#[cfg(feature = "client")]
 pub mod screen;
 
 use std::ops::Range;
@@ -274,6 +279,58 @@ impl TryFrom<SavedInventory> for Inventory {
             }
         }
         Ok(inventory)
+    }
+}
+
+/// Which of the inventory's first nine slots, the hotbar along the bottom of the screen, the
+/// player holds, to place from (§5.2). Keys 1 to 9 and the mouse wheel select a slot. It's
+/// the client's to choose, as it changes nothing but what's asked for.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "SavedHotbar")]
+pub struct Hotbar {
+    pub selected: usize,
+}
+
+impl Hotbar {
+    /// What's in the selected slot of `inventory`.
+    pub fn held(self, inventory: &Inventory) -> Option<ItemStack> {
+        inventory.slots[self.selected]
+    }
+
+    /// Moves the selection `by` slots to the right, or left if it's negative, wrapping round.
+    pub fn scroll(&mut self, by: i32) {
+        self.selected = (self.selected as i32 + by).rem_euclid(HOTBAR_SLOTS as i32) as usize;
+    }
+
+    /// Selects the slot in the hotbar holding `block`, as middle click does, returning whether
+    /// there's one.
+    pub fn pick(&mut self, block: BlockType, inventory: &Inventory) -> bool {
+        let holding = |slot: &Option<ItemStack>| slot.is_some_and(|s| s.item == Item::Block(block));
+        let slot = inventory.slots[..HOTBAR_SLOTS].iter().position(holding);
+        if let Some(slot) = slot {
+            self.selected = slot;
+        }
+        slot.is_some()
+    }
+}
+
+// How a hotbar is read, checked. Saves from before M1.1 have its blocks too, which are
+// ignored: the inventory holds them now.
+#[derive(Deserialize)]
+struct SavedHotbar {
+    selected: usize,
+}
+
+impl TryFrom<SavedHotbar> for Hotbar {
+    type Error = String;
+
+    fn try_from(saved: SavedHotbar) -> Result<Self, String> {
+        if saved.selected >= HOTBAR_SLOTS {
+            return Err(format!("the hotbar has no slot {}", saved.selected));
+        }
+        Ok(Self {
+            selected: saved.selected,
+        })
     }
 }
 

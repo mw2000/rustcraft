@@ -27,9 +27,23 @@ impl Default for ClockRate {
     }
 }
 
-/// Moves the clock on with the game's time.
-pub fn run_clock(time: Res<Time>, rate: Res<ClockRate>, mut clock: ResMut<TimeOfDay>) {
-    clock.0 += time.delta_secs() * rate.0;
+/// Moves the clock on with the game's time. It's counted in an `f64`, kept with what it last
+/// set the clock to, as an `f32` of a thousand days can't count a frame's worth: a server left
+/// running for a week would otherwise stop its clock, and crops grow by the days it counts.
+pub fn run_clock(
+    time: Res<Time>,
+    rate: Res<ClockRate>,
+    mut clock: ResMut<TimeOfDay>,
+    mut counted: Local<(f64, f32)>,
+) {
+    let (days, set) = &mut *counted;
+    // or as it's been set since, by sleeping through the night or opening a world
+    if clock.0 != *set {
+        *days = f64::from(clock.0);
+    }
+    *days += time.delta_secs_f64() * f64::from(rate.0);
+    clock.0 = *days as f32;
+    *set = clock.0;
 }
 
 /// Winds the clock back or forward as operators ask, for looking at the sky at any hour, or
@@ -154,6 +168,21 @@ mod tests {
             app.update();
         }
         assert_eq!(connected, time(&app));
+    }
+
+    #[test]
+    fn test_the_clock_runs_on_however_many_days_have_passed() {
+        let mut app = server();
+        // a 30th of a second, a dedicated server's frame, is less than half of what an `f32`
+        // of 2,000 days can count
+        let frame = Duration::from_secs_f32(1.0 / 30.0);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(frame));
+        app.world_mut().resource_mut::<TimeOfDay>().0 = 2000.0;
+        for _ in 0..300 {
+            app.update();
+        }
+        let ran = 300.0 * frame.as_secs_f32() * DAY_RATE;
+        assert!((time(&app) - (2000.0 + ran)).abs() < 2e-4, "{}", time(&app));
     }
 
     #[test]

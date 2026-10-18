@@ -9,8 +9,9 @@ use bevy::ui_widgets::Activate;
 
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
-use crate::hotbar::{Hotbar, HOTBAR_TOP};
+use crate::hotbar::HOTBAR_TOP;
 use crate::interaction::{is_used, Target};
+use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::menu::{button, font, free_cursor, label, GameState, TEXT_SHADOW};
 use crate::player::input::follow_look;

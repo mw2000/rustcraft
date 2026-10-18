@@ -15,17 +15,50 @@ serde = { version = "1.0", features = ["serde_derive"] }
 # saved edits' encoding (D-6), and the platform's data directory to save worlds in
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 dirs = "6"
-# the default features minus wayland, which needs system libs we don't have
+# what the dedicated server needs, to which the `client` feature adds the rest of the default
+# features but wayland, which needs system libs we don't have: bevy_mesh for the meshes
+# generation builds beside a chunk's blocks, and serialize for the entities messages name
 bevy = { version = "0.20", default-features = false, features = [
-    "trace", "async_executor", "bevy_asset", "bevy_log", "bevy_state", "reflect_auto_register",
-    "std", "bevy_gilrs", "bevy_winit", "bevy_clipboard", "default_font", "multi_threaded", "x11", "custom_cursor",
-    "common_api", "3d_bevy_render", "ui_api", "ui_bevy_render", "bevy_ui_widgets", "ui_picking",
+    "async_executor", "bevy_asset", "bevy_log", "bevy_state", "reflect_auto_register", "std",
+    "multi_threaded", "bevy_mesh", "serialize",
 ] }
 # client/server messages and replication (D-1), with no transport until M0.6
 bevy_replicon = { version = "=0.45.2", default-features = false, features = ["client", "server"] }
 # replicon's transport over UDP, with renet2's netcode (D-1)
 bevy_replicon_renet2 = { version = "=1.0.0", default-features = false, features = ["client", "server", "native_transport"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
+# Bevy's Ctrl-C handler, which saves as it stops, made to catch SIGTERM too, as a dedicated
+# server run as a service is stopped by it
+ctrlc = { version = "3.4", features = ["termination"] }
+
+[features]
+default = ["client"]
+# The game's window, rendering, input and UI, which the dedicated server is built without:
+# `cargo build --release --bin rustcraft-server --no-default-features`. And Bevy's spans for
+# profiling, which would otherwise mark every line of the server's log.
+client = [
+    "bevy/trace", "bevy/bevy_gilrs", "bevy/bevy_winit", "bevy/bevy_clipboard", "bevy/default_font",
+    "bevy/x11", "bevy/custom_cursor", "bevy/common_api", "bevy/3d_bevy_render", "bevy/ui_api",
+    "bevy/ui_bevy_render", "bevy/bevy_ui_widgets", "bevy/ui_picking",
+]
+
+[[bin]]
+name = "rustcraft"
+path = "src/main.rs"
+required-features = ["client"]
+
+# the dedicated server (§5.9)
+[[bin]]
+name = "rustcraft-server"
+path = "src/bin/server.rs"
+
+[[example]]
+name = "lod_sim"
+required-features = ["client"]
+
+[[test]]
+name = "multiplayer"
+required-features = ["client"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

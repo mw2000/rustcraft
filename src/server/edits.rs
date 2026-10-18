@@ -12,13 +12,13 @@ use crate::block::BlockType;
 use crate::breaking::{break_time, harvests};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::clock::TimeOfDay;
+use crate::collision::overlaps;
 use crate::containers::Containers;
 use crate::farming::{tilled, Crops};
 use crate::game_mode::GameMode;
-use crate::interaction::{overlaps, REACH};
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::items::{ItemStack, ToolKind};
-use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT};
+use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT, REACH};
 use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking};
 use crate::world::World;
 

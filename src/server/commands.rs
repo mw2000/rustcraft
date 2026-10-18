@@ -15,6 +15,8 @@ use crate::world::World;
 
 // How far above the ground `/tp x z` puts the player.
 const SURFACE_CLEARANCE: f32 = 2.0;
+/// Who a dedicated server's console speaks as, as it has no player of its own.
+pub(super) const CONSOLE_NAME: &str = "Server";
 
 /// The players who may run the commands that change the world or other players besides the
 /// host, who always may, by name, as `world.toml` keeps them. Names aren't checked as players
@@ -84,7 +86,8 @@ struct Found {
 /// Runs the commands clients type, each for the player who typed it, and tells only them what
 /// it printed. Those that change the world or other players are only for operators. A player
 /// from elsewhere `/tp` moves is told where they've been put, as they decide their own movement,
-/// and a player another changes is told who did it.
+/// and a player another changes is told who did it. A dedicated server's console runs them as
+/// the server (`ClientId::Server`) with no player, so only on others.
 pub(super) fn run_commands(mut lines: MessageReader<FromClient<RunCommand>>, mut running: Running) {
     for FromClient {
         client_id: client,
@@ -100,21 +103,26 @@ pub(super) fn run_commands(mut lines: MessageReader<FromClient<RunCommand>>, mut
 }
 
 impl Running<'_, '_> {
-    // Runs `line` for the client's player, returning what it prints.
+    // Runs `line` for the client's player, or for the console, returning what it prints.
     fn run(&mut self, client: ClientId, line: &str) -> Result<String, String> {
         let sender = self.players.iter().find(|(_, owner, ..)| owner.0 == client);
-        let Some((player, ..)) = sender else {
-            return Err("You have no player to run commands as".into());
+        let sender = sender.map(|(player, ..)| self.found(player));
+        let (player, name, at) = match &sender {
+            Some(found) => (Some(found.player), found.name.clone(), found.at),
+            // `~` is from the world's spawn
+            None if client == ClientId::Server => {
+                (None, PlayerName::new(CONSOLE_NAME), self.world.spawn())
+            }
+            None => return Err("You have no player to run commands as".into()),
         };
-        let Found {
-            player, name, at, ..
-        } = self.found(player);
         let op = self.operators.allow(client, &name);
+        // the sender's own player, for a command that names no other
+        let own = || sender.ok_or_else(|| "Name a player, as the console has none".to_owned());
         match parse(line, at, op)? {
             Command::Teleport { who, to } => {
                 let target = match who {
                     Some(who) => self.find(&who)?,
-                    None => self.found(player),
+                    None => own()?,
                 };
                 let to = match to {
                     Destination::Exact(to) => to,
@@ -127,7 +135,7 @@ impl Running<'_, '_> {
                 };
                 self.teleport(target.player, to);
                 let at = format!("{:.1}, {:.1}, {:.1}", to.x, to.y, to.z);
-                if target.player == player {
+                if Some(target.player) == player {
                     return Ok(format!("Teleported to {at}"));
                 }
                 let by = format!("{} teleported you to {at}", name.as_str());
@@ -138,11 +146,11 @@ impl Running<'_, '_> {
             Command::GameMode { mode, who } => {
                 let target = match who {
                     Some(who) => self.find(&who)?,
-                    None => self.found(player),
+                    None => own()?,
                 };
                 let (.., mut game_mode, _) = self.players.get_mut(target.player).unwrap();
                 *game_mode = mode;
-                if target.player == player {
+                if Some(target.player) == player {
                     return Ok(format!("Game mode set to {}", mode.name()));
                 }
                 let by = format!("{} set your game mode to {}", name.as_str(), mode.name());
@@ -156,6 +164,7 @@ impl Running<'_, '_> {
                 let mut names: Vec<_> = names.collect();
                 names.sort_unstable_by_key(|name| name.to_lowercase());
                 let count = match names.len() {
+                    0 => return Ok("Nobody's here".into()),
                     1 => "1 player".into(),
                     n => format!("{n} players"),
                 };

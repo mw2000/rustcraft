@@ -16,7 +16,8 @@ use crate::protocol::NETCODE_PROTOCOL_ID;
 const MAX_PLAYERS: usize = 16;
 
 /// Opens the world to players joining over UDP on `port`, from any network this machine is on,
-/// as well as the host's own player. Returns the address to give friends on the local network.
+/// beside the host's own player if there's a host. Returns the address to give friends on the
+/// local network.
 pub fn host(
     commands: &mut Commands,
     channels: &RepliconChannels,

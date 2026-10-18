@@ -16,7 +16,7 @@ use super::player::LocalPlayer;
 use crate::chunks::generate::checksum::world_checksum;
 use crate::edits::Edits;
 use crate::game_mode::GameMode;
-use crate::hotbar::Hotbar;
+use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{arriving, Player, PlayerLook};

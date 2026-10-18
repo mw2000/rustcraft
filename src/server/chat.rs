@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::allowances::Allowances;
+use super::commands::CONSOLE_NAME;
 use crate::player::name::PlayerName;
 use crate::player::PlayerOwner;
 use crate::protocol::{Chat, ChatLine, CommandOutput, MAX_CHAT_LENGTH};
@@ -25,8 +26,8 @@ impl Default for ChatAllowances {
 /// What a client saying more than its allowance is told.
 pub(super) const TOO_QUICK: &str = "You're sending messages too quickly, wait a moment";
 
-/// Passes on what each player says to everyone, by their name, tidied and kept to the
-/// allowance.
+/// Passes on what each player, or a dedicated server's console, says to everyone, by their
+/// name, tidied and kept to the allowance.
 pub(super) fn receive_chat(
     mut said: MessageReader<FromClient<Chat>>,
     mut allowances: ResMut<ChatAllowances>,
@@ -42,8 +43,11 @@ pub(super) fn receive_chat(
     {
         let text = tidy(text);
         let from = players.iter().find(|(owner, _)| owner.0 == *client);
-        let Some((_, from)) = from else {
-            continue;
+        let from = match from {
+            Some((_, from)) => from.clone(),
+            // a dedicated server's console
+            None if *client == ClientId::Server => PlayerName::new(CONSOLE_NAME),
+            None => continue,
         };
         if text.is_empty() {
             continue;
@@ -61,10 +65,7 @@ pub(super) fn receive_chat(
         info!("<{}> {text}", from.as_str());
         lines.write(ToClients {
             targets: SendTargets::All,
-            message: ChatLine {
-                from: from.clone(),
-                text,
-            },
+            message: ChatLine { from, text },
         });
     }
 }

@@ -497,7 +497,7 @@ mod tests {
                 false,
             );
             mesh.opaque
-                .contains_attribute(bevy::render::mesh::Mesh::ATTRIBUTE_TANGENT)
+                .contains_attribute(bevy::mesh::Mesh::ATTRIBUTE_TANGENT)
         };
         // a floor to light, across both chunks
         for x in 0..2 * size {
