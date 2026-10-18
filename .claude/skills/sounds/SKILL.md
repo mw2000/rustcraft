@@ -5,10 +5,11 @@ description: Synthesise or change rustcraft's sounds (footsteps and breaking by 
 
 # Sounds
 
-Every sound the game plays is made by `synth.py` from filtered noise, struck modes, bubbles,
-chirps and plucked strings, so it's ours to ship (INV-8). Nothing is recorded or taken from a pack:
-Minecraft and its resource packs (Enhanced Audio among them) are inspiration only (D-10). A Kenney
-CC0 file is allowed if a synthesised one is clearly worse, credited in `assets/CREDITS.md`.
+Nearly every sound the game plays is made by `synth.py` from filtered noise, struck modes,
+bubbles, chirps and plucked strings, so it's ours to ship (INV-8). Minecraft and its resource packs
+(Enhanced Audio among them) are inspiration only (D-10). A CC0 recording is allowed where a
+synthesised sound is clearly worse, credited in `assets/CREDITS.md`, and the ambience has some
+(below). The wind isn't a file at all: `src/client/sound/ambience/wind.rs` makes it as it plays.
 
 ## Setup
 
@@ -44,6 +45,19 @@ named `<name>_1.ogg` to `_4`; `src/client/sound/mod.rs` has the same count and t
 - **Music:** pads under a few plucked or bell notes wandering a pentatonic scale, in a big room,
   about a minute each, played rarely (`src/client/sound/ambience.rs`).
 
+## Recordings
+
+The ambience's sea, birds, crickets, under water, desert and leaves loops and the owl's hoot are
+CC0 recordings ported from upstream rustcraft (#77), cut and looped there, listed with their
+sources in `assets/CREDITS.md`. `synth.py` doesn't make them (it makes only the cave's loop of
+the ambience), so a full run leaves them be. `recordings.py SOURCE_DIR` levels the originals to
+the targets below, once, as one is added; don't run it again on its own output. Upstream's own
+volume balance between them is `Loop::volume` in `src/client/sound/ambience/mod.rs`.
+
+The wind is the decoder in `ambience/wind.rs`: `RC_WIND_OUT=dir cargo test --release
+render_wind -- --ignored` writes two minutes of it at a few strengths as raw 44.1 kHz f32 stereo,
+to look at as below (`np.fromfile(..., dtype="<f4").reshape(-1, 2)`).
+
 ## Check
 
 You can't listen, so look:
@@ -60,5 +74,5 @@ sample-to-sample step: under 1 is no click) and the level either side of it. Rea
 footsteps should be short bursts that die away within 0.15 s, breaks fuller and longer, loops
 even, with no stripe at the ends.
 
-Keep `assets/sounds/` small (about 3.5 MB now): one-offs are mono at Vorbis quality 0.6, loops 0.4
+Keep `assets/sounds/` small (about 5 MB now, 2 MB of it the recorded loops): one-offs are mono at Vorbis quality 0.6, loops 0.4
 and music 0.3 (`quality` in `main`, as libsndfile's compression level).

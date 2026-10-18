@@ -1,7 +1,9 @@
 //! Sound (§5.10): footsteps by surface, digging and building, the player's own noises, other
 //! players heard where they are, ambience by where the player is and the time of day, and now
-//! and then a little music. Every sound is made by the sounds skill's `synth.py` (INV-8). Only
-//! the client has any of it: the dedicated server builds without Bevy's audio.
+//! and then a little music. Every sound is made by the sounds skill's `synth.py` but the wind,
+//! synthesised as it plays, and the recorded ambience loops and owl ported from upstream (#77),
+//! credited in `assets/CREDITS.md` (INV-8). Only the client has any of it: the dedicated server
+//! builds without Bevy's audio.
 
 mod ambience;
 mod creatures;

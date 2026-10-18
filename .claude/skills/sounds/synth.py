@@ -518,107 +518,6 @@ def cluck(rng):
 LOOP_DB = -27
 
 
-def wind(rng, high=False):
-    n = samples(20)
-    gusts = lfo(n, rng, (1, 2, 3, 5, 7), smooth=0.8)
-    low = periodic_band(n, rng, 60, 500, -1.0)
-    mid = periodic_band(n, rng, 250, 1400, -0.6)
-    x = low * (0.5 + 0.5 * lfo(n, rng)) + mid * (0.15 + 0.85 * gusts) ** 2
-    if high:
-        # whistling round peaks: narrow bands that swell with the gusts
-        for f in (520, 690, 880):
-            q = f * rng.uniform(0.97, 1.03)
-            whistle = around(lambda x: resonator(x, q, 25), periodic_band(n, rng, f / 1.3, f * 1.3))
-            x += whistle * lfo(n, rng, (2, 3, 4)) ** 3 * gusts * 1.5
-        x += periodic_band(n, rng, 2000, 8000, -0.5) * gusts**2 * 0.25
-    return level(x, LOOP_DB + (2 if high else 0), window=20)
-
-
-def sea(rng):
-    n = samples(24)
-    phase = 2 * np.pi * np.arange(n) / n
-    # four waves in the loop, each one's break coming a little differently
-    swell = np.zeros(n)
-    for k, sharp in ((4, 4.0), (3, 2.0)):
-        swell += (0.5 + 0.5 * np.sin(k * phase + rng.uniform(0, 2 * np.pi))) ** sharp
-    swell /= swell.max()
-    rumble = periodic_band(n, rng, 40, 400, -1.0) * (0.4 + 0.6 * swell)
-    wash = periodic_band(n, rng, 400, 2500, -0.7) * swell**2
-    foam = periodic_band(n, rng, 1500, 9000, -0.4) * swell**4 * 0.7
-    return level(rumble + wash + foam, LOOP_DB + 1, window=24)
-
-
-def bird_call(rng, kind):
-    if kind == 0:
-        # a quick run of falling tweets
-        notes = []
-        f = rng.uniform(3800, 5200)
-        for _ in range(rng.integers(3, 6)):
-            d = rng.uniform(0.04, 0.07)
-            notes.append(chirp(d, f, f * 0.65, 0.7) * np.hanning(samples(d)))
-            notes.append(np.zeros(samples(rng.uniform(0.05, 0.09))))
-            f *= rng.uniform(0.95, 1.05)
-        return np.concatenate(notes)
-    if kind == 1:
-        # a two-note whistle, falling, with a little vibrato
-        out = []
-        f = rng.uniform(2600, 3300)
-        for ratio in (1.0, rng.uniform(0.75, 0.85)):
-            d = rng.uniform(0.16, 0.24)
-            t = times(samples(d))
-            vib = 1 + 0.012 * np.sin(2 * np.pi * 9 * t)
-            out.append(np.sin(2 * np.pi * np.cumsum(f * ratio * vib) / SR) * envelope(len(t), 0.02, d / 3, hold=d / 3))
-            out.append(np.zeros(samples(0.06)))
-        return np.concatenate(out)
-    # a trill, a fast flutter on one note sliding up
-    d = rng.uniform(0.35, 0.6)
-    t = times(samples(d))
-    f = rng.uniform(4000, 4800) * (1 + 0.08 * t / d)
-    flutter = 0.5 + 0.5 * np.sin(2 * np.pi * rng.uniform(22, 30) * t)
-    return np.sin(2 * np.pi * np.cumsum(f) / SR) * flutter**2 * envelope(len(t), 0.03, d / 2, hold=d / 3)
-
-
-def birds(rng):
-    n = samples(30)
-    calls = np.zeros(n)
-    at = rng.uniform(0, 1)
-    while at < 30:
-        kind = rng.integers(0, 3)
-        near = rng.uniform(0.15, 1.0)
-        call = bird_call(rng, kind)
-        # far ones are quieter and duller
-        call = lowpass(call, 3000 + 6000 * near) * near**1.5
-        place(calls, call, samples(at), wrap=True)
-        at += rng.exponential(1.4) + 0.3
-    calls = calls + convolve(calls, reverb_ir(0.6, rng, bright=0.6), wrap=True) * 0.35
-    leaves = periodic_band(n, rng, 2500, 9000, -0.5) * (0.2 + 0.8 * lfo(n, rng)) * 0.02
-    return level(calls + leaves, LOOP_DB, window=30)
-
-
-def crickets(rng):
-    n = samples(16)
-    out = np.zeros(n)
-    for _ in range(5):
-        f = rng.uniform(4200, 5400)
-        near = rng.uniform(0.25, 1.0)
-        pulses, pulse_rate = rng.integers(3, 5), rng.uniform(32, 45)
-        pulse = samples(0.009)
-        tone = (np.sin(2 * np.pi * f * times(pulse)) + 0.2 * np.sin(4 * np.pi * f * times(pulse))) * np.hanning(pulse)
-        chirp_ = np.zeros(samples(pulses / pulse_rate))
-        for p in range(pulses):
-            place(chirp_, tone, samples(p / pulse_rate))
-        chirp_ = lowpass(chirp_, 5000 + 6000 * near) * near**1.5
-        # each sings at its own steady rate, with now and then a rest
-        period = rng.uniform(0.35, 0.6)
-        at = rng.uniform(0, period)
-        while at < 16:
-            if rng.random() > 0.08:
-                place(out, chirp_ * rng.uniform(0.8, 1.0), samples(at), wrap=True)
-            at += period * rng.uniform(0.97, 1.03)
-    air = periodic_band(n, rng, 80, 600, -1.0) * 0.05
-    return level(out + air, LOOP_DB - 2, window=16)
-
-
 def cave(rng):
     n = samples(24)
     phase = 2 * np.pi * np.arange(n) / n
@@ -636,18 +535,6 @@ def cave(rng):
     room = reverb_ir(2.4, rng, bright=0.25, early=((0.09, 0.5), (0.17, 0.35), (0.31, 0.2)))
     drips = drips * 0.4 + convolve(drips, room, wrap=True) * 1.1
     return level(hum * 0.7 + tone * 0.15 + drips, LOOP_DB, window=24)
-
-
-def underwater(rng):
-    n = samples(12)
-    muffled = periodic_band(n, rng, 30, 350, -1.5) * (0.6 + 0.4 * lfo(n, rng))
-    bubbles = np.zeros(n)
-    at = 0.3
-    while at < 12:
-        for _ in range(rng.integers(2, 6)):
-            place(bubbles, bubble(rng) * rng.uniform(0.2, 0.6), samples(at + rng.uniform(0, 0.25)), wrap=True)
-        at += rng.uniform(1.0, 3.0)
-    return level(muffled + around(lambda x: lowpass(x, 1500), bubbles) * 0.6, LOOP_DB, window=12)
 
 
 # --- music ---------------------------------------------------------------------------------------
@@ -757,16 +644,9 @@ def catalogue():
             out[f"{name}_{v + 1}"] = (make, 5000 + v)
     for name, make in (("death", death), ("chest_open", chest_open), ("chest_close", chest_close), ("click", click)):
         out[name] = (make, 7)
-    for name, make in (
-        ("wind", wind),
-        ("wind_high", lambda rng: wind(rng, high=True)),
-        ("sea", sea),
-        ("birds", birds),
-        ("crickets", crickets),
-        ("cave", cave),
-        ("underwater", underwater),
-    ):
-        out[f"ambience/{name}"] = (make, 11)
+    # the other loops and the owl are recordings, levelled once and kept as they are, see
+    # SKILL.md's Recordings
+    out["ambience/cave"] = (cave, 11)
     for name, make in (("morning", morning), ("drift", drift), ("embers", embers)):
         out[f"music/{name}"] = (make, 3)
     return out

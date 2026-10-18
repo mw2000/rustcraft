@@ -78,7 +78,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | The renderer's defaults, and the player's own settings over them, volumes too, from the Settings screen | `assets/settings.toml`, `src/settings.rs`, `src/preferences.rs`, `src/client/sound/volume.rs` |
 | Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; so far sheep, which give mutton (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
-| Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time, rare music, all synthesised (§5.10) | `src/client/sound/`, `assets/sounds/` |
+| Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time from recordings and synthesis, rare music (§5.10) | `src/client/sound/`, `assets/sounds/` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
@@ -1942,11 +1942,11 @@ README and licences but no assets, which it doesn't read.
   - **Audio:** Bevy's `bevy_audio` and `vorbis` (lewton) features, in the `client` feature, so
     the dedicated server links no audio crate, which CI checks with `cargo tree`. With no audio
     device Bevy plays nothing and the game runs on.
-  - **Sounds:** all synthesised by the sounds skill's `synth.py` (`.claude/skills/sounds/`) into
-    `assets/sounds/`: 110 Ogg Vorbis files, 3.5 MB. Footsteps and breaking for nine surfaces
+  - **Sounds:** synthesised by the sounds skill's `synth.py` (`.claude/skills/sounds/`) into
+    `assets/sounds/`, but for the ambience's recordings (below): 123 Ogg Vorbis files, 4.9 MB. Footsteps and breaking for nine surfaces
     (grass, dirt, sand, gravel, stone, wood, snow, leaves, ice), each four takes, and four of
     swimming, splashing, picking up, eating, being hurt and a sheep-like bleat; dying, a chest
-    opening and closing and a click; seven ambience loops and three pieces of music. `Surface::of`
+    opening and closing and a click; the cave's ambience loop and three pieces of music. `Surface::of`
     names a few blocks and goes by the breaking tool for the rest (pickaxe stone, axe wood,
     shovel dirt, plants leaves), so a new block sounds right unasked. `analyse.py` checks levels,
     clipping and loop seams and draws spectrograms, as they can't be listened to here.
@@ -1963,14 +1963,31 @@ README and licences but no assets, which it doesn't read.
     they're drawn, and their edits where they are: on a joiner from the server's `BlockChanged`
     before it's put in the world, on the host from the joiners' requests before its server makes
     them, and this player's own from its requests.
-  - **Ambience:** loops of wind, high wind, the sea, birds, crickets, a cave (a hum and drips
-    in a reverberant room) and being under water, faded over 2.5 seconds to what's wanted, which
-    is looked at twice a second from the eyes (`mix`, about 6 µs): under water only that, in a cave
-    (under ground and 3 blocks below the generated surface) only it, and otherwise wind rising
-    with height, the high wind on peaks and in the cold, the sea where land round about is under
-    sea level, birds by day where it's mild, more among trees, and crickets by night, both thinning
-    up the mountains. Biomes come in by climate and trees, so new ones need nothing here. Loops
-    faded out are paused.
+  - **Ambience** (`ambience/`, merged with upstream's, ported from rornic/rustcraft #77 by Aymen
+    Qader): what's heard is looked at twice a second from the eyes (`mix`), and loops fade over
+    2.5 seconds to it. Under water only that, in a cave (under ground and 3 blocks below the
+    generated surface) only it, and otherwise: the **wind**, rising with height above the ground,
+    on peaks and in the cold, and with speed; the **sea** where land round about is under sea
+    level, unless it's frozen; **birds** by day where it's mild, more among trees, and
+    **crickets** by night, both thinning up the mountains and off the ground; **owls** hooting
+    now and then, 20 to 45 blocks off, in the woods at night; a **desert's** air where the
+    climate is the desert's; and **leaves** rustling under the trees' crowns (centre and a ring
+    16 blocks out, near the ground) as the wind's breezes stir them. Birds, crickets and the
+    desert come and go on their own, as wandering values (`Gust`) gate them. Biomes come in by
+    climate and trees, so new ones need nothing here. Loops faded out, and the wind in still air,
+    are paused.
+    - **Recordings** (CC0, from Freesound and BigSoundBank, chosen, cut and looped upstream,
+      credited in `assets/CREDITS.md`): the sea, birds, crickets, under water, the desert, the
+      leaves and the owl, which beat our synthesised loops of the same things. Levelled here
+      once to the skill's targets (`recordings.py`), with upstream's balance between them as
+      `Loop::volume`.
+    - **Synthesised:** the cave (a hum and drips in a reverberant room), which upstream lacks,
+      by `synth.py`; and the wind, upstream's, made as it plays on the audio thread (a low-passed
+      roar that swells in spells and gusts, and a whistle rising with them), steered through
+      atomics so the game never waits on it (INV-7). It replaced our two 20-second wind loops,
+      which by analysis repeated exactly every 20 seconds and were a flat band cut off at 3 kHz;
+      it never repeats, follows height and speed continuously, and at a gale is as loud as the
+      high wind was.
   - **Music:** the first piece 1½ to 4 minutes in, then 8 to 18 minutes of quiet between.
   - **Volume:** master, effects, ambience and music, from − and + rows in the pause menu, kept in
     `volume.toml` in the data directory beside `worlds/`, written off the main thread. **Since
@@ -2122,7 +2139,8 @@ Done when: **the world feels inhabited, and night is dangerous.**
   ambience (wind, water, birds by day, cave drips and echo underground), creature sounds and a
   little music — inspired by packs like Enhanced Audio, from CC0 sources or made by our own
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
-  silent and audio-free. Built: all synthesised, §5.10.
+  silent and audio-free. Built: synthesised, with upstream's recorded ambience and wind merged
+  in (#77), §5.10.
 - ☑ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
   every setting lives in menus rather than environment variables:
   - **Title screen:** Singleplayer, Multiplayer, Settings, Quit, over a slowly panning view of a
@@ -2306,5 +2324,8 @@ For agents and contributors:
   with the `profile` skill and `examples/lod_sim.rs`, and report the numbers in the PR (INV-7).
 - **Textures:** new block textures with the `block-textures` skill.
 - **Sounds:** new or changed sounds with the `sounds` skill.
+- **Upstream ports:** work from rornic/rustcraft is ported onto this fork's code, merged with what
+  we have rather than beside it, its author kept on the commit: so far #77's ambience (Aymen
+  Qader), §5.10.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.
