@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bevy::ecs::entity::MapEntities;
 use bevy::math::{I64Vec3, U16Vec3};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::netcode::NETCODE_USER_DATA_BYTES;
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::authoring::Selection;
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
+use crate::chunks::lod::CellEdits;
 use crate::containers::Container;
 use crate::crafting::Recipe;
 use crate::game_mode::GameMode;
@@ -40,7 +42,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -77,6 +79,8 @@ impl Plugin for ProtocolPlugin {
             .add_server_message::<InventoryChanged>(Channel::Ordered)
             .add_server_message::<ChunkEdits>(Channel::Ordered)
             .add_client_message::<EditReach>(Channel::Ordered)
+            // in order, as each cell is told as it is now, so the last told is the server's
+            .add_server_message::<EditSummary>(Channel::Ordered)
             // after the station it's made at's opened
             .add_client_message::<UseBlock>(Channel::Ordered)
             .add_client_message::<Craft>(Channel::Ordered)
@@ -227,9 +231,86 @@ pub struct Welcome {
 }
 
 /// How far from its player, in chunks, a client draws blocks at full detail, and so wants the
-/// edits of the chunks that far, told as it's welcomed.
+/// edits of the chunks that far, and how far it draws at all, and so wants their LOD edits
+/// (`EditSummary`), told as it's welcomed.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EditReach(pub u32);
+pub struct EditReach {
+    pub full_detail: u32,
+    pub view: u32,
+}
+
+/// Edits as LOD nodes draw them (§4.2), for a client to draw the builds it sees but hasn't the
+/// edits of: some of the 2-block cells edits have changed, by chunk, each as where it is in its
+/// chunk, an index into a palette of its commonest block built, and how many of its 8 blocks are
+/// built and cleared, a nibble each. Every cell goes as it is when it's sent, so a client
+/// putting them in as they come in order ends up with the server's.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EditSummary {
+    palette: Vec<BlockType>,
+    chunks: Vec<(I64Vec3, Vec<SummaryCell>)>,
+}
+
+// A cell of an `EditSummary`: where it is in its chunk, its block's index in the palette, and its
+// counts.
+type SummaryCell = (u16, u8, u8);
+
+// A chunk is this many 2-block cells across.
+const SUMMARY_CELLS: i64 = CHUNK_SIZE as i64 / 2;
+
+impl EditSummary {
+    /// `cells`, each 2-block cell as level 1 counts them, and what edits have made of it.
+    pub fn new(cells: impl IntoIterator<Item = (I64Vec3, CellEdits)>) -> Self {
+        let mut palette = Vec::new();
+        let mut indices = [None; BlockType::ALL.len()];
+        let mut chunks: Vec<(I64Vec3, Vec<SummaryCell>)> = Vec::new();
+        let mut chunk_index = HashMap::new();
+        for (cell, edits) in cells {
+            let block = *indices[edits.block as usize].get_or_insert_with(|| {
+                palette.push(edits.block);
+                palette.len() as u8 - 1
+            });
+            let coord = cell.div_euclid(I64Vec3::splat(SUMMARY_CELLS));
+            let local = cell - coord * SUMMARY_CELLS;
+            let at = ((local.x * SUMMARY_CELLS + local.y) * SUMMARY_CELLS + local.z) as u16;
+            let counts = (edits.built as u8) << 4 | edits.cleared as u8;
+            let chunk = *chunk_index.entry(coord).or_insert_with(|| {
+                chunks.push((coord, Vec::new()));
+                chunks.len() - 1
+            });
+            chunks[chunk].1.push((at, block, counts));
+        }
+        Self { palette, chunks }
+    }
+
+    pub fn cell_count(&self) -> usize {
+        self.chunks.iter().map(|(_, cells)| cells.len()).sum()
+    }
+
+    /// Each cell, as level 1 counts them, and what edits have made of it. Any a server never
+    /// sends, out of its chunk or the palette or with more than 8 blocks, are left out.
+    pub fn cells(&self) -> impl Iterator<Item = (I64Vec3, CellEdits)> + '_ {
+        self.chunks.iter().flat_map(move |(coord, cells)| {
+            cells.iter().filter_map(move |&(at, block, counts)| {
+                let (built, cleared) = ((counts >> 4) as u32, (counts & 15) as u32);
+                let at = at as i64;
+                if at >= SUMMARY_CELLS.pow(3) || built + cleared > 8 {
+                    return None;
+                }
+                let local = I64Vec3::new(
+                    at / SUMMARY_CELLS.pow(2),
+                    at / SUMMARY_CELLS % SUMMARY_CELLS,
+                    at % SUMMARY_CELLS,
+                );
+                let edits = CellEdits {
+                    block: *self.palette.get(block as usize)?,
+                    built,
+                    cleared,
+                };
+                Some((coord * SUMMARY_CELLS + local, edits))
+            })
+        })
+    }
+}
 
 /// The edits made in a chunk, for a client coming near it, as a region file has them: each
 /// block as where it is in the chunk and an index into a palette of the blocks edited to, so
@@ -474,7 +555,7 @@ mod tests {
     use bevy::prelude::Entity;
     use bevy_replicon::prelude::ClientId;
 
-    use super::{name_from_user_data, name_to_user_data, BlockChanged, ChunkEdits};
+    use super::{name_from_user_data, name_to_user_data, BlockChanged, ChunkEdits, EditSummary};
     use crate::block::BlockType;
     use crate::chunks::chunk::ChunkCoordinate;
     use crate::player::name::PlayerName;
@@ -519,5 +600,44 @@ mod tests {
         assert_eq!((coord, 7), (received.coord(), received.changes_before()));
         // a few bytes an edit, and a name a block
         assert!(bytes.len() < 40, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn test_a_houses_lod_edits_round_trip_in_a_few_hundred_bytes() {
+        use crate::chunks::lod::LodEdits;
+        use crate::edits::Edits;
+        // a house 7 by 7, with walls 4 high round a floor, a roof and a doorway
+        let corner = I64Vec3::new(1234, 470, -5678);
+        let mut edits = Edits::default();
+        for x in 0..7 {
+            for z in 0..7 {
+                for y in 0..6 {
+                    let wall = x == 0 || x == 6 || z == 0 || z == 6;
+                    let door = x == 3 && z == 0 && (1..=2).contains(&y);
+                    if (y == 0 || y == 5 || wall) && !door {
+                        edits.set(corner + I64Vec3::new(x, y, z), BlockType::Planks);
+                    }
+                }
+            }
+        }
+        let lod_edits = LodEdits::of(&edits);
+        let cells: Vec<_> = edits
+            .chunks()
+            .flat_map(|coord| lod_edits.chunk_cells(coord).collect::<Vec<_>>())
+            .collect();
+        let sent = EditSummary::new(cells.iter().copied());
+        let bytes = postcard::to_stdvec(&sent).unwrap();
+        let received: EditSummary = postcard::from_bytes(&bytes).unwrap();
+        let mut got: Vec<_> = received.cells().collect();
+        let mut expected = cells.clone();
+        got.sort_by_key(|(cell, _)| cell.to_array());
+        expected.sort_by_key(|(cell, _)| cell.to_array());
+        assert_eq!(expected, got);
+        println!(
+            "a house of 172 blocks in {} cells: {} bytes",
+            cells.len(),
+            bytes.len()
+        );
+        assert!(bytes.len() < 400, "{} bytes", bytes.len());
     }
 }

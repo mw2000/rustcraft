@@ -12,7 +12,8 @@ use super::chunk_loader::{
 use super::fade::{apply_fades, FadeMaterials};
 use super::group::{build_groups, load_groups, rebuild_groups};
 use super::lod::{
-    load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodLoader,
+    load_lods, load_rebuilt_lods, rebuild_lods, refresh_lod_visibility, retire_lods, spawn_lods,
+    update_lod_selection, LodLoader,
 };
 use super::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 use crate::settings::{DebugSettings, RendererSettings};
@@ -43,8 +44,11 @@ impl Plugin for TerrainPlugin {
                     .before(unload_chunks),
                 (
                     update_lod_selection,
+                    // ahead of spawning, as a node spawned takes in the edits made so far
+                    rebuild_lods,
                     spawn_lods,
                     load_lods,
+                    load_rebuilt_lods,
                     retire_lods,
                     refresh_lod_visibility,
                     apply_fades,

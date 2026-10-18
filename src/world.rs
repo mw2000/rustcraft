@@ -11,6 +11,7 @@ use crate::chunks::generate::light::BLOCK_LIGHT_REACH;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 use crate::chunks::generate::WORLD_HEIGHT;
+use crate::chunks::lod::LodEdits;
 use crate::edits::Edits;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, ColumnSet, CHUNK_SIZE};
@@ -47,6 +48,10 @@ pub struct World {
     // what holds each chunk loaded or on its way, as a bit for each `Holder`
     holders: HashMap<ChunkCoordinate, u8>,
     edits: Edits,
+    // the edits as LOD nodes draw them, worked out from `edits`, or for a client joined to a
+    // server, sent by it, as it has only the edits near its player (§4.4)
+    lod_edits: LodEdits,
+    lod_edits_sent: bool,
     // chunks whose roofs edits have changed, see `take_reroofed`
     reroofed: Vec<Reroofed>,
     // blocks whose edits have changed block light, see `take_relit`
@@ -82,6 +87,8 @@ impl World {
             height,
             chunks: HashMap::new(),
             holders: HashMap::new(),
+            lod_edits: LodEdits::of(&edits),
+            lod_edits_sent: false,
             edits,
             reroofed: Vec::new(),
             relit: Vec::new(),
@@ -92,6 +99,15 @@ impl World {
                     .with_resident_cap(resident_cap_for(region_distance_blocks)),
             ),
             spawn: Vec3::new(spawn_x as f32, spawn_height as f32 + 20.0, spawn_z as f32),
+        }
+    }
+
+    /// The world with the given seed for a client joined to a server, which is sent the edits
+    /// near its player and, as LOD nodes draw them, those further off.
+    pub fn joined(seed: u32, region_distance: u32) -> Self {
+        Self {
+            lod_edits_sent: true,
+            ..Self::from_save(seed, Edits::default(), region_distance)
         }
     }
 
@@ -111,6 +127,14 @@ impl World {
 
     pub fn edits_mut(&mut self) -> &mut Edits {
         &mut self.edits
+    }
+
+    pub fn lod_edits(&self) -> &LodEdits {
+        &self.lod_edits
+    }
+
+    pub fn lod_edits_mut(&mut self) -> &mut LodEdits {
+        &mut self.lod_edits
     }
 
     pub fn spawn(&self) -> Vec3 {
@@ -166,6 +190,9 @@ impl World {
             }
         }
         self.edits.set(block, to);
+        if !self.lod_edits_sent {
+            self.lod_edits.update(&self.edits, block);
+        }
         true
     }
 

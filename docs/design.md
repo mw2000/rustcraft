@@ -186,10 +186,52 @@ The world's state beyond the seed (INV-1).
   neither.
 - Chunks with heavy edits (a big build) can switch to storing their whole contents rather than a
   sparse map.
-- **Edits in LODs (later, M2.x):** to keep INV-5 for big builds, LOD nodes take the edited chunks
-  they cover into account, so a tower shows up from far away. Phase 0 needs only to keep this
-  possible: keep edits queryable by area. Note that `src/chunks/lod/spawn.rs:108` assumes
-  generated chunks only and must change when edits reach the LODs.
+- **Edits in LODs:** to keep INV-5 for big builds, LOD nodes take the edits they cover into
+  account, so a tower shows up from far away.
+- **Built (M2.8):** `LodEdits` (`src/chunks/lod/edits.rs`), held by `World` beside `Edits`.
+  - **What a cell draws:** for each LOD level from 1 (2-block cells) to `EDITED_LEVELS` (8,
+    256-block cells), the cells with edits in them, each a `CellEdits`: how many of its blocks
+    are built of something LODs draw (cubes and water), the commonest of those, and how many
+    are cleared, to air or to what only full detail draws, such as torches and plants. Level 1's
+    are counted from the blocks, and each coarser cell is the sum of the 8 under it, its block
+    the one most of their built blocks are (the first if two tie, so it's the same wherever
+    it's worked out). A cell draws as structures do (§5.6): its commonest block where at least
+    half of it is built, air where at least half is built or cleared, and otherwise what
+    generated. So a brick tower is a column of cells and a pit a hole at every level whose
+    cells it fills half of, and level 1 is exactly that majority of full detail's blocks.
+    Coarser levels would need half a cell 512 wide, 67 million blocks, to show anything.
+  - **By node:** a level's cells are its LOD nodes' cells, so they're kept by node, in a map
+    from where each is in the node, including the ring of cells round it a mesh looks at (a
+    cell on a node's edge is in its neighbours' too). A node finds what it draws with one
+    lookup, as an `Arc` its mesh task takes, copied on write only if an edit lands while one's
+    being built. `LodBlocks::sample` puts the drawn cells over what generated, before surface
+    tops, skirts and light are worked out. A node is no longer `known_empty` if any of its
+    cells, or its ring's, draw edits, so a tower in the sky or a hollow in the rock is meshed.
+  - **Redrawing:** `World::edit` brings the 2-block cell over the block up to date and walks up
+    the levels, stopping at the first cell that doesn't change. Where a cell's drawn block
+    changes, its nodes are noted (`take_redrawn`, recorded only once something asks, so a
+    dedicated server keeps none); a block that changes no cell's look, like a single block or
+    one more on a big wall, redraws nothing. `rebuild_lods` (before `spawn_lods`) meshes each
+    such node again on the async compute pool, swapping the new mesh onto the same entity with
+    the same materials (`load_rebuilt_lods`), so it neither flickers nor fades; a node that had
+    nothing to draw gets an entity, and one left with nothing is despawned. A node still being
+    meshed waits until it's done, so edits in quick succession are taken in together; a node
+    not drawn yet just takes in the edits when it's spawned. Edits wholly within full detail
+    never reach a node drawn, as only levels 1 and up are LODs.
+  - **Loading:** `LodEdits::of` works out a saved world's at once, bottom up (3 ms for 50,000
+    edits). A client joined to a server makes its `World::joined`, whose LOD edits are sent by
+    the server (§4.4, M2.8) rather than worked out from the few edits it has.
+  - **Cost** (INV-7): with no edits nearby a node pays a lookup in an empty or small map;
+    unedited LOD meshes are unchanged (bench vertex counts identical, times within noise). An
+    edit costs about 1.3 µs more than before (50,000 into the world in 62 ms rather than
+    2 ms), so a structure placed in one go still costs a frame or so. Meshing a node with a
+    50,000-block tower in it costs about 35 µs more at level 1 and nothing measurable coarser.
+    `lod_sim`, flying with a 50,000-block tower going up 1.5 km off at 400 blocks a frame,
+    shows no holes and frames no slower than without.
+  - **Known gaps:** edits don't take away what coarse nodes draw as boxes, so a structure
+    demolished or a forest felled still stands in cells 4 or more wide. A build narrower than
+    half a cell vanishes at that level: a 5-wide tower is gone beyond about 1 km. Boxes for
+    builds, as structures have, would keep thin ones in sight further.
 
 ### 4.3 Saving (proposed)
 
@@ -285,11 +327,11 @@ The world's state beyond the seed (INV-1).
 - **Shared:** blocks, generation, `World`, `Edits`, collision, the movement step as a pure
   function, `GameMode`, `raycast` and `overlaps`, and the protocol in `src/protocol.rs`.
 - **Protocol.** Blocks travel by name, or by a palette sent on joining (§4.1). Client to server:
-  `RequestEdit { block, to, slot, seq }`, `RunCommand`, `Chat`, the inventory's requests
+  `RequestEdit { block, to, slot, seq }`, `RunCommand`, `Chat`, `EditReach` (M0.6c, M2.8), the inventory's requests
   (`InventoryClick`, `CloseInventory`, `DropItem`, `PickBlock`, §5.2), `UseBlock` and `Craft`
   (§5.3), `StartBreaking` (§5.1), and from M0.6
   `PlayerPose` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
-  time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
+  time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move), `EditSummary` (LOD edits of those in view, M2.8),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
   `CommandOutput`, `ChatLine`, and since M1.6 `ContainerChanged` (§5.2). Players are replicated entities, and so are dropped items; a
   player's `Inventory` goes to their owner alone (as `InventoryChanged` since M0.6a); poses go out as unreliable messages
@@ -527,6 +569,29 @@ The world's state beyond the seed (INV-1).
     once and undone when it's refused; edits sent while a slow client checks its world wait
     for it; a chunk's edits and a change overtaking each other (injected) leave the newer; and
     the cost of joining among 50,000 edits.
+- **Built (M2.8):** LOD edits for what a client sees beyond full detail (§4.2).
+  - **Protocol:** `EditReach { full_detail, view }` now says how far the client draws, in
+    chunks, as well as how far it wants edits, and `EditSummary` carries LOD edits: by chunk,
+    each 2-block cell's place in it (0–511), its commonest block built as an index into a
+    palette, and its built and cleared counts, a nibble each, 3 or 4 bytes a cell. Every cell
+    goes as it is when it's sent, on one ordered channel, so a client putting them in as they
+    come, `LodEdits::set` working out the coarser cells as the server does, ends up with the
+    server's. `PROTOCOL_VERSION` is 13.
+  - **Areas:** `SyncedArea` keeps a second, wider area out to the view: as its player moves,
+    chunks with edits that have come into view are lined up, nearest first, and those more
+    than 4 chunks beyond it forgotten. Every change through `BlockChanges` notes its 2-block
+    cell for the clients that see its chunk, and a chunk with no edits before is taken into
+    view by its first. `send_edit_summaries` sends each client the cells changed and as many
+    chunks' cells as make up 4,096 cells a frame, in one `EditSummary`. A client uses only
+    these for its LODs, near and far, and its `ChunkEdits` and `BlockChanged`s for full detail.
+  - **Bandwidth:** a house of 172 blocks is 44 cells, 179 bytes; a 50,000-block tower 1.6 km
+    off, 6,300 cells, 23 KB, against 149 KB as `ChunkEdits`. A block changed far off is about
+    20 bytes.
+  - **Known gaps:** the view is the set render distance, so flying high, which draws further,
+    shows no edits beyond it.
+  - `tests/multiplayer.rs` adds: a client 1.6 km from a 50,000-block tower, with none of its
+    edits, is sent its LOD edits and has every level's cells as the host has them, and a change
+    there by the host reaches it.
 - **Built (M0.6d):** other players (`src/server/players.rs`, `src/client/others.rs`,
   `src/client/models.rs`, `src/player/name.rs`).
   - **Names:** `PlayerName`, up to 16 letters, digits, `_` and `-`, so it's safe as a file name
@@ -1506,7 +1571,7 @@ start.**
 - ☐ **M2.5 Regional ores and higher tiers.** (§5.3)
 - ☐ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☐ **M2.7 Landmarks.** (§5.7)
-- ☐ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2).
+- ☑ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2, §4.4).
 - ☑ **M2.9 Map.** (§5.7)
 
 ### Phase 3: life

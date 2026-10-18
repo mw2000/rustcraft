@@ -15,7 +15,6 @@ use super::edits::{EditOrder, Predictions};
 use super::player::LocalPlayer;
 use crate::authoring::Selection;
 use crate::chunks::generate::checksum::world_checksum;
-use crate::edits::Edits;
 use crate::game_mode::GameMode;
 use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
@@ -112,7 +111,7 @@ pub(super) struct Checking {
 
 /// Spawns this client's player where the server has them, starts checking the world it's
 /// welcomed to, on a task as that takes a fraction of a second (INV-7), and asks for the edits
-/// of the chunks it draws at full detail.
+/// of the chunks it draws at full detail, and as LOD nodes draw them as far as it draws.
 pub(super) fn arrive(
     mut welcomes: MessageReader<Welcome>,
     checksum: Res<GenerationChecksum>,
@@ -126,9 +125,11 @@ pub(super) fn arrive(
     };
     predictions.me = Some(welcome.you);
     commands.insert_resource(EditOrder::default());
-    reach.write(EditReach(
-        settings.renderer.lod_layout().full_detail_reach(),
-    ));
+    let layout = settings.renderer.lod_layout();
+    reach.write(EditReach {
+        full_detail: layout.full_detail_reach(),
+        view: layout.render_distance().ceil() as u32,
+    });
     let (seed, GenerationChecksum(checksum)) = (welcome.seed, *checksum);
     commands.insert_resource(Checking {
         seed,
@@ -169,7 +170,7 @@ pub(super) fn check_world(
         return;
     }
     let region_distance = settings.renderer.lod_layout().region_reach() as u32;
-    let world = World::from_save(checking.seed, Edits::default(), region_distance);
+    let world = World::joined(checking.seed, region_distance);
     commands.insert_resource(world);
 }
 

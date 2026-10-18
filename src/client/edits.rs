@@ -6,7 +6,7 @@ use bevy_replicon::prelude::ClientId;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk_loader::ChunkLoader;
-use crate::protocol::{BlockChanged, ChunkEdits, EditRejected, RequestEdit};
+use crate::protocol::{BlockChanged, ChunkEdits, EditRejected, EditSummary, RequestEdit};
 use crate::world::World;
 
 /// The edits a client joined to a server has made in its own world without waiting for the
@@ -141,6 +141,23 @@ pub fn apply_chunk_edits(
                 chunk_loader.rebuild_edited(&mut world, block);
             }
         }
+    }
+}
+
+/// Puts the LOD edits the server sends into this client's world, for its LOD nodes to draw,
+/// which redraws those they change. Those that come before the world's made wait for it.
+pub fn apply_edit_summaries(
+    mut summaries: MessageReader<EditSummary>,
+    world: Option<ResMut<World>>,
+    mut waiting: Local<Vec<EditSummary>>,
+) {
+    let Some(mut world) = world else {
+        waiting.extend(summaries.read().cloned());
+        return;
+    };
+    let lod_edits = world.lod_edits_mut();
+    for summary in std::mem::take(&mut *waiting).iter().chain(summaries.read()) {
+        lod_edits.set(summary.cells());
     }
 }
 

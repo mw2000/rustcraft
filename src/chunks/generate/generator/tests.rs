@@ -337,7 +337,7 @@ fn test_lod_level_zero_matches_full_detail_chunk() {
         I64Vec3::new(0, 2, -1),
     ] {
         let chunk = generate_chunk(regions.clone(), ChunkCoordinate(coord));
-        let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+        let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord }, None);
         let columns = regions.chunk_columns(&mut regions.sampler(), coord.x, coord.z);
         for x in 0..16 {
             for y in 0..16 {
@@ -843,7 +843,7 @@ fn test_lod_ground_under_open_sky_is_lit_to_its_edges() {
     ));
     let regions = Arc::new(RegionStore::new(noise));
     let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-    let mesh = super::lod::generate_lod_mesh(regions, key)
+    let mesh = super::lod::generate_lod_mesh(regions, key, None)
         .expect("no mesh")
         .opaque;
     let lights = top_lights(&mesh);
@@ -878,7 +878,7 @@ fn test_lods_wider_than_four_blocks_are_untextured() {
     let key = crate::chunks::lod::LodKey::containing(chunk, 5);
     assert!(key.cell_size() > super::buffers::BOX_TEXTURE_MAX_CELL);
     let flags = untextured_flags(
-        &super::lod::generate_lod_mesh(regions, key)
+        &super::lod::generate_lod_mesh(regions, key, None)
             .expect("no mesh")
             .opaque,
     );
@@ -909,7 +909,7 @@ fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
     let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
     let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), 3);
     assert!(key.cell_size() <= super::buffers::BOX_TEXTURE_MAX_CELL);
-    let opaque = super::lod::generate_lod_mesh(regions, key)
+    let opaque = super::lod::generate_lod_mesh(regions, key, None)
         .expect("no mesh")
         .opaque;
     let flags = untextured_flags(&opaque);
@@ -934,7 +934,7 @@ fn test_lods_up_to_four_blocks_are_textured_with_the_texture_repeating_over_each
     let regions = Arc::new(RegionStore::new(noise));
     let key = crate::chunks::lod::LodKey::containing(chunk, 2);
     assert_eq!(4, key.cell_size());
-    let mesh = super::lod::generate_lod_mesh(regions, key)
+    let mesh = super::lod::generate_lod_mesh(regions, key, None)
         .expect("no mesh")
         .opaque;
     let flags = untextured_flags(&mesh);
@@ -1247,7 +1247,7 @@ fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
                     level,
                     coord: I64Vec3::new(x, (WATER_LEVEL / 16).div_euclid(width), z),
                 };
-                let lod = LodBlocks::sample(&regions, key);
+                let lod = LodBlocks::sample(&regions, key, None);
                 for cx in 0..lod.size {
                     for cz in 0..lod.size {
                         let column = LodBlocks::column(lod.size, cx, cz);
@@ -1401,7 +1401,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
     let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
     for level in [1u8, 2, 3, 4, 5] {
         let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), level);
-        let blocks = LodBlocks::sample(&regions, key);
+        let blocks = LodBlocks::sample(&regions, key, None);
         let cell = key.cell_size();
         let leaf_cells = blocks
             .cells
@@ -1472,7 +1472,7 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
             ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))),
             level,
         );
-        let blocks = LodBlocks::sample(&regions, key);
+        let blocks = LodBlocks::sample(&regions, key, None);
         let cell = key.cell_size() as f32;
         let at = |block: i64, min: i64| (block - min) as f32 / cell - 0.5;
         let (min_x, min_z) = (key.min_block().x, key.min_block().z);
@@ -1565,7 +1565,7 @@ fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
             ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))),
             level,
         );
-        let blocks = LodBlocks::sample(&regions, key);
+        let blocks = LodBlocks::sample(&regions, key, None);
         let cell = key.cell_size();
         let span = 16 * cell;
         let min = key.min_block();
@@ -1624,7 +1624,7 @@ fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
             ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))),
             level,
         );
-        let blocks = LodBlocks::sample(&regions, key);
+        let blocks = LodBlocks::sample(&regions, key, None);
         let canopy: Vec<_> = blocks
             .boxes
             .iter()
@@ -1746,7 +1746,7 @@ fn test_cells_wider_than_real_trees_tint_forest_instead_of_drawing_leaves() {
     let tree = trees.first().expect("no trees");
     let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), 6);
     assert!(key.cell_size() > super::canopy::TREE_MAX_CELL);
-    let blocks = LodBlocks::sample(&regions, key);
+    let blocks = LodBlocks::sample(&regions, key, None);
     assert_eq!(
         0,
         blocks
@@ -1830,7 +1830,7 @@ fn test_every_level_grows_the_trees_full_detail_does() {
 // Triangles of a node's opaque mesh in world space, placed as `lod_transform` does, less
 // `MESH_OFFSET`.
 fn world_triangles(regions: &Arc<RegionStore>, key: LodKey) -> Vec<[Vec3; 3]> {
-    let Some(meshes) = super::lod::generate_lod_mesh(regions.clone(), key) else {
+    let Some(meshes) = super::lod::generate_lod_mesh(regions.clone(), key, None) else {
         return Vec::new();
     };
     let cell = key.cell_size() as f32;
@@ -1959,7 +1959,7 @@ fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
         level: 1,
         coord: I64Vec3::new(6, 13, 4),
     };
-    let meshes = super::lod::generate_lod_mesh(regions, key).unwrap();
+    let meshes = super::lod::generate_lod_mesh(regions, key, None).unwrap();
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
     let Some(bevy::mesh::VertexAttributeValues::Float32x3(pos)) =
         meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION)
@@ -2505,7 +2505,7 @@ fn test_plants_grow_on_the_grass_at_full_detail_and_never_in_lods() {
                 let coord = spawn + I64Vec3::new(dx, dy, dz);
                 let chunk = generate_chunk(regions.clone(), ChunkCoordinate(coord));
                 let below = generate_chunk(regions.clone(), ChunkCoordinate(coord - I64Vec3::Y));
-                let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+                let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord }, None);
                 for (at, block) in chunk.iter_non_air().filter(|(_, b)| b.is_plant()) {
                     plants += 1;
                     let ground = match at.y {
@@ -2637,7 +2637,7 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
         let (low, high) = placed.bounds();
         // level 0 is full detail itself, caves aside, and they keep under structures
         for coord in chunks_over(low, high) {
-            let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+            let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord }, None);
             for x in 0..16 {
                 for z in 0..16 {
                     for y in 0..16 {
@@ -2658,7 +2658,7 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
             .map(|c| c.div_euclid(I64Vec3::splat(2)))
         {
             let key = LodKey { level: 1, coord };
-            let lod = LodBlocks::sample(&regions, key);
+            let lod = LodBlocks::sample(&regions, key, None);
             let base = key.min_block();
             for x in 0..16 {
                 for z in 0..16 {
@@ -2702,7 +2702,7 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
         for level in 2..=6 {
             let key = LodKey::containing(chunk, level);
             let (base, cell) = (key.min_block().as_vec3(), key.cell_size() as f32);
-            let lod = LodBlocks::sample(&regions, key);
+            let lod = LodBlocks::sample(&regions, key, None);
             let boxes: Vec<_> = lod
                 .boxes
                 .iter()
@@ -2738,5 +2738,87 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
                 min.y
             );
         }
+    }
+}
+
+#[test]
+fn test_lods_draw_edits_as_full_detail_has_them_within_their_cells() {
+    use crate::edits::Edits;
+    use crate::world::World;
+    let mut world = World::from_save(3, Edits::default(), 16);
+    let regions = world.region_store.clone();
+    let spawn = world.spawn().as_i64vec3();
+    let ground = regions.sampler().height(spawn.x, spawn.z).round() as i64;
+    // a brick tower from under the ground to high over it, not lined up with any cells, and a
+    // pit dug beside it
+    let tower = (spawn.with_y(ground - 10) + 5, I64Vec3::new(40, 130, 40));
+    let pit = (
+        spawn.with_y(ground - 34) + I64Vec3::new(-40, 0, 5),
+        I64Vec3::new(34, 34, 34),
+    );
+    let blocks = |(min, size): (I64Vec3, I64Vec3)| {
+        (0..size.x).flat_map(move |x| {
+            (0..size.y).flat_map(move |y| (0..size.z).map(move |z| min + I64Vec3::new(x, y, z)))
+        })
+    };
+    for block in blocks(tower) {
+        world.edit(block, BlockType::Bricks);
+    }
+    for block in blocks(pit) {
+        world.edit(block, BlockType::Air);
+    }
+    let inside = |(min, size): (I64Vec3, I64Vec3), low: I64Vec3, width: i64| {
+        low.cmpge(min).all() && (low + width).cmple(min + size).all()
+    };
+    for level in 1..=4u8 {
+        let mut drawn = (0, 0);
+        let width = 1i64 << level;
+        let corners = [tower.0, tower.0 + tower.1 - 1, pit.0, pit.0 + pit.1 - 1];
+        let mut keys: Vec<LodKey> = corners
+            .iter()
+            .map(|&block| LodKey::containing(ChunkCoordinate::containing(block), level))
+            .collect();
+        keys.sort_by_key(|key| key.coord.to_array());
+        keys.dedup();
+        for key in keys {
+            let edits = world.lod_edits().node(key);
+            let lod = LodBlocks::sample(&regions, key, edits.as_deref());
+            let unedited = LodBlocks::sample(&regions, key, None);
+            for at in (0..16 * 16 * 16).map(|i| IVec3::new(i % 16, i / 16 % 16, i / 256)) {
+                let low = key.min_block() + at.as_i64vec3() * width;
+                let cell = lod.raw(at);
+                if inside(tower, low, width) {
+                    assert_eq!(BlockType::Bricks, cell, "level {level} at {low}");
+                    drawn.0 += 1;
+                } else if inside(pit, low, width) {
+                    assert_eq!(BlockType::Air, cell, "level {level} at {low}");
+                    drawn.1 += 1;
+                } else if level == 1 {
+                    // and on their edges, what most of the cell's blocks are, as edited
+                    let (mut built, mut cleared) = (0, 0);
+                    for block in blocks((low, I64Vec3::splat(2))) {
+                        match world.edits().get(block) {
+                            Some(BlockType::Bricks) => built += 1,
+                            Some(_) => cleared += 1,
+                            None => {}
+                        }
+                    }
+                    let expected = if built >= 4 {
+                        BlockType::Bricks
+                    } else if built + cleared >= 4 {
+                        BlockType::Air
+                    } else {
+                        unedited.raw(at)
+                    };
+                    assert_eq!(expected, cell, "level 1 at {low}");
+                } else if !inside((tower.0 - width, tower.1 + 2 * width), low, width)
+                    && !inside((pit.0 - width, pit.1 + 2 * width), low, width)
+                {
+                    // and further off, as generated
+                    assert_eq!(unedited.raw(at), cell, "level {level} at {low}");
+                }
+            }
+        }
+        assert!(drawn.0 > 0 && drawn.1 > 0, "level {level}: {drawn:?}");
     }
 }

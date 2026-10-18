@@ -71,6 +71,7 @@ impl Plugin for ClientPlugin {
                         .run_if(resource_exists::<World>),
                     edits::apply_chunk_edits,
                     edits::apply_block_changes,
+                    edits::apply_edit_summaries,
                     (edits::roll_back_refused, rebuild_groups).run_if(resource_exists::<World>),
                 )
                     .chain()

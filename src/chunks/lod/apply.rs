@@ -7,8 +7,10 @@ use crate::chunks::fade::fade_out_and_despawn;
 use crate::chunks::fade::set_shown;
 use crate::chunks::fade::Fade;
 use crate::chunks::fade::SolidWater;
+use crate::chunks::generate::generator::ChunkMeshes;
 use crate::chunks::group::BuiltGroup;
 use crate::chunks::group::ChunkGroup;
+use crate::chunks::material::ChunkMaterial;
 use bevy::asset::Assets;
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::entity::Entity;
@@ -48,35 +50,17 @@ pub fn load_lods(
         };
 
         let has_mesh = result.is_some();
-        if let Some(chunk_meshes) = result {
-            commands.entity(entity).insert(lod_aabb());
-            // open sea is all water, with no opaque faces to upload
-            if chunk_meshes.opaque.count_vertices() > 0 {
-                commands.entity(entity).insert((
-                    Mesh3d(meshes.add(chunk_meshes.opaque)),
-                    MeshMaterial3d(lods.material.clone()),
-                ));
-            }
-            if let Some(water_mesh) = chunk_meshes.water {
-                let solid = node.key.level >= SOLID_WATER_LEVEL;
-                let water_material = if solid {
-                    &lods.solid_water_material
-                } else {
-                    &lods.water_material
-                }
-                .clone();
-                commands.entity(entity).with_children(|parent| {
-                    let mut water = parent.spawn((
-                        Mesh3d(meshes.add(water_mesh)),
-                        MeshMaterial3d(water_material),
-                        Transform::default(),
-                        lod_aabb(),
-                    ));
-                    if solid {
-                        water.insert(SolidWater);
-                    }
-                });
-            }
+        if let Some(new) = result {
+            draw_meshes(
+                &mut commands,
+                &lods,
+                &mut meshes,
+                entity,
+                node.key,
+                new,
+                false,
+                None,
+            );
         }
         if has_mesh {
             commands.entity(entity).remove::<GenerateLodMesh>();
@@ -90,6 +74,59 @@ pub fn load_lods(
         if start.elapsed() >= LOD_APPLY_TIME_BUDGET {
             break;
         }
+    }
+}
+
+/// Draws `new` for the node at `key` on `entity`, which has an opaque mesh already if
+/// `has_opaque`, and a water mesh as its child `water` if it has one, replacing them.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_meshes(
+    commands: &mut Commands,
+    lods: &LodLoader,
+    meshes: &mut Assets<Mesh>,
+    entity: Entity,
+    key: LodKey,
+    new: ChunkMeshes,
+    has_opaque: bool,
+    water: Option<Entity>,
+) {
+    let mut node = commands.entity(entity);
+    node.insert(lod_aabb());
+    // open sea is all water, with no opaque faces to upload
+    if new.opaque.count_vertices() > 0 {
+        node.insert(Mesh3d(meshes.add(new.opaque)));
+        if !has_opaque {
+            node.insert(MeshMaterial3d(lods.material.clone()));
+        }
+    } else if has_opaque {
+        node.remove::<(Mesh3d, MeshMaterial3d<ChunkMaterial>)>();
+    }
+    match (new.water, water) {
+        (Some(mesh), Some(child)) => {
+            commands.entity(child).insert(Mesh3d(meshes.add(mesh)));
+        }
+        (Some(mesh), None) => {
+            let solid = key.level >= SOLID_WATER_LEVEL;
+            let water_material = if solid {
+                &lods.solid_water_material
+            } else {
+                &lods.water_material
+            }
+            .clone();
+            commands.entity(entity).with_children(|parent| {
+                let mut water = parent.spawn((
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(water_material),
+                    Transform::default(),
+                    lod_aabb(),
+                ));
+                if solid {
+                    water.insert(SolidWater);
+                }
+            });
+        }
+        (None, Some(child)) => commands.entity(child).despawn(),
+        (None, None) => {}
     }
 }
 

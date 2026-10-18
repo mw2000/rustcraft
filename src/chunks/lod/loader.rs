@@ -60,6 +60,8 @@ pub struct LodLoader {
     // farthest first, so popping yields the nearest
     pub(super) to_spawn: Vec<LodKey>,
     pub(super) retiring: Vec<LodKey>,
+    // nodes whose edits have changed what they draw, waiting to be meshed again
+    pub(super) redrawn: HashSet<LodKey>,
     // areas whose nodes and chunks need their visibility rechecked
     pub(super) dirty_areas: Vec<LodKey>,
     pub(super) refresh_all: bool,
@@ -211,6 +213,7 @@ impl LodLoader {
             populated: HashMap::new(),
             to_spawn: Vec::new(),
             retiring: Vec::new(),
+            redrawn: HashSet::new(),
             dirty_areas: Vec::new(),
             refresh_all: false,
             material,

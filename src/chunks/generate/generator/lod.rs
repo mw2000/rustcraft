@@ -23,7 +23,7 @@ use crate::chunks::generate::trees::TreeGround;
 use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::THIN_TRUNK_CELL;
 use crate::chunks::generate::WATER_LEVEL;
-use crate::chunks::lod::LodKey;
+use crate::chunks::lod::{LodKey, NodeEdits};
 use bevy::math::I64Vec2;
 use bevy::math::I64Vec3;
 use bevy::math::IVec3;
@@ -130,17 +130,22 @@ impl LodBlocks {
         Self::column(self.size, column(position.x), column(position.z))
     }
 
-    pub(super) fn sample(regions: &RegionStore, key: LodKey) -> Self {
+    // The node at `key`, with the `edits` made in it.
+    pub(super) fn sample(regions: &RegionStore, key: LodKey, edits: Option<&NodeEdits>) -> Self {
         if key.cell_size() >= COARSE_CELL {
-            Self::sample_coarse(regions, key)
+            Self::sample_coarse(regions, key, edits)
         } else {
-            Self::sample_regions(regions, key)
+            Self::sample_regions(regions, key, edits)
         }
     }
 
     // From the noise at each cell's centre, with the real trees where the cells are narrow
     // enough, and forests as a tint on the ground where they're not.
-    pub(super) fn sample_coarse(regions: &RegionStore, key: LodKey) -> Self {
+    pub(super) fn sample_coarse(
+        regions: &RegionStore,
+        key: LodKey,
+        edits: Option<&NodeEdits>,
+    ) -> Self {
         let size = CHUNK_SIZE as i32;
         let padded = (size + 2) as usize;
         let cell = key.cell_size();
@@ -290,6 +295,7 @@ impl LodBlocks {
                 }
             }
         }
+        apply_edits(&mut cells, edits);
         Self {
             ground_heights,
             canopy_tops,
@@ -300,7 +306,11 @@ impl LodBlocks {
     }
 
     // From full-detail regions, with real trees.
-    pub(super) fn sample_regions(regions: &RegionStore, key: LodKey) -> Self {
+    pub(super) fn sample_regions(
+        regions: &RegionStore,
+        key: LodKey,
+        edits: Option<&NodeEdits>,
+    ) -> Self {
         let size = CHUNK_SIZE as i32;
         let padded = (size + 2) as usize;
         let cell = key.cell_size();
@@ -373,6 +383,7 @@ impl LodBlocks {
             }
         }
 
+        apply_edits(&mut cells, edits);
         Self {
             ground_heights,
             trees: TreeTints::new(&trees, base, cell),
@@ -590,15 +601,20 @@ impl BlockSource for LodBlocks {
     }
 }
 
-pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
+/// The meshes of the LOD node at `key`, with the `edits` made in it, if it has anything to draw.
+pub fn generate_lod_mesh(
+    regions: Arc<RegionStore>,
+    key: LodKey,
+    edits: Option<&NodeEdits>,
+) -> Option<ChunkMeshes> {
     let cell_size = key.cell_size();
     // matches `lod_transform`, less `MESH_OFFSET`
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
     let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
-    let blocks = LodBlocks::sample(&regions, key);
+    let blocks = LodBlocks::sample(&regions, key, edits);
     let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
-    // the padded cells are already in `SkyLight::index` order, and LODs leave out edits, so
-    // there are no torches to give block light
+    // the padded cells are already in `SkyLight::index` order, and torches are too small to
+    // draw, so there's no block light
     let light = LazyCell::new(|| {
         let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
         Light::sky(SkyLight::new(
@@ -662,6 +678,13 @@ fn structure_boxes(
             faces: BoxFaces::NoBottom,
         })
         .collect()
+}
+
+// Puts the cells `edits` change into the padded `cells`, over what generated there.
+fn apply_edits(cells: &mut [BlockType], edits: Option<&NodeEdits>) {
+    for (at, block) in edits.into_iter().flat_map(NodeEdits::drawn) {
+        cells[LodBlocks::index(CHUNK_SIZE as i32, at)] = block;
+    }
 }
 
 // Fills the cells up column (`cx`, `cz`) of the node with its lowest block and cell size at

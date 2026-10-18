@@ -5,6 +5,7 @@ use bevy::{
     platform::collections::{HashMap, HashSet},
 };
 
+use super::edits::LodEdits;
 use super::key::LodKey;
 use super::layout::LodLayout;
 use super::loader::LodLoader;
@@ -439,14 +440,16 @@ fn test_known_empty_nodes_have_nothing_to_mesh() {
         })
         .collect();
     // nothing is known until the regions under a node are computed
-    assert!(nodes
-        .iter()
-        .all(|&key| !super::spawn::known_empty(key, &regions)));
+    assert!(nodes.iter().all(|&key| !super::spawn::known_empty(
+        key,
+        &regions,
+        &LodEdits::default()
+    )));
 
     let mut empty = 0;
     for &key in &nodes {
-        let meshed = generate_lod_mesh(regions.clone(), key).is_some();
-        if super::spawn::known_empty(key, &regions) {
+        let meshed = generate_lod_mesh(regions.clone(), key, None).is_some();
+        if super::spawn::known_empty(key, &regions, &LodEdits::default()) {
             assert!(!meshed, "{key:?} was taken as empty but has a mesh");
             empty += 1;
         }
@@ -478,11 +481,11 @@ fn test_nodes_drawing_a_structure_are_not_known_empty() {
             // the node holding its floor draws it, and those over it may draw some of it
             let floor = LodKey::containing(ChunkCoordinate::containing(placed.min), level);
             let over = LodKey::containing(ChunkCoordinate::containing(top), level);
-            assert!(generate_lod_mesh(regions.clone(), floor).is_some());
+            assert!(generate_lod_mesh(regions.clone(), floor, None).is_some());
             for key in [floor, over] {
-                let meshed = generate_lod_mesh(regions.clone(), key).is_some();
+                let meshed = generate_lod_mesh(regions.clone(), key, None).is_some();
                 assert!(
-                    !(meshed && super::spawn::known_empty(key, &regions)),
+                    !(meshed && super::spawn::known_empty(key, &regions, &LodEdits::default())),
                     "{key:?}"
                 );
             }
@@ -691,4 +694,103 @@ fn test_full_detail_changes_only_where_the_stand_ins_change() {
             }
         }
     }
+}
+
+#[test]
+fn test_nodes_whose_edits_change_what_they_draw_are_not_known_empty() {
+    use crate::block::BlockType;
+    use crate::chunks::generate::generator::generate_lod_mesh;
+    use crate::edits::Edits;
+    use crate::world::World;
+
+    let mut world = World::from_save(3, Edits::default(), 16);
+    let spawn = world.spawn().as_i64vec3();
+    let regions = world.region_store.clone();
+    let ground = regions.sampler().height(spawn.x, spawn.z).round() as i64;
+    for level in [1, 3] {
+        // a node high in the sky, and one deep in the rock
+        let sky = LodKey::containing(
+            ChunkCoordinate::containing(spawn.with_y(ground + 300)),
+            level,
+        );
+        let rock = LodKey::containing(
+            ChunkCoordinate::containing(spawn.with_y(ground - 200)),
+            level,
+        );
+        for key in [sky, rock] {
+            assert!(generate_lod_mesh(regions.clone(), key, None).is_none());
+            assert!(super::spawn::known_empty(key, &regions, world.lod_edits()));
+        }
+        // a block of bricks in one, and a hollow dug in the other, a cell of theirs across
+        let cell = sky.cell_size();
+        for (key, to) in [(sky, BlockType::Bricks), (rock, BlockType::Air)] {
+            let min = key.min_block() + cell * 5;
+            for i in 0..cell * cell * cell {
+                let at = I64Vec3::new(i % cell, i / cell % cell, i / cell / cell);
+                world.edit(min + at, to);
+            }
+            assert!(!super::spawn::known_empty(key, &regions, world.lod_edits()));
+            let edits = world.lod_edits().node(key);
+            assert!(generate_lod_mesh(regions.clone(), key, edits.as_deref()).is_some());
+        }
+    }
+}
+
+#[test]
+fn test_edits_far_off_mesh_again_only_the_nodes_whose_cells_they_change() {
+    use super::loader::LodNode;
+    use super::rebuild::{load_rebuilt_lods, rebuild_lods, RebuildLodMesh};
+    use crate::block::BlockType;
+    use crate::edits::Edits;
+    use crate::world::World;
+    use bevy::prelude::*;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .init_resource::<Assets<Mesh>>()
+        .insert_resource(World::from_save(3, Edits::default(), 16))
+        .insert_resource(loader())
+        .add_systems(Update, (rebuild_lods, load_rebuilt_lods).chain());
+    // a block of bricks 16 across, high in the sky 10 km out: as wide as a level-4 cell, and
+    // an eighth of a level-5 one
+    let corner = I64Vec3::new(10_000, 900, 10_000).div_euclid(I64Vec3::splat(256)) * 256 + 80;
+    let chunk = ChunkCoordinate::containing(corner);
+    let keys: Vec<LodKey> = (1..=5)
+        .map(|level| LodKey::containing(chunk, level))
+        .collect();
+    // drawn at every level, level 4 with nothing to draw till now
+    let mut entities = HashMap::new();
+    for &key in &keys {
+        let entity = (key.level != 4).then(|| app.world_mut().spawn(LodNode { key }).id());
+        app.world_mut()
+            .resource_mut::<LodLoader>()
+            .add_node(key, entity);
+        entities.insert(key.level, entity);
+    }
+    app.update();
+    let mut world = app.world_mut().resource_mut::<World>();
+    for i in 0..16 * 16 * 16 {
+        world.edit(
+            corner + I64Vec3::new(i % 16, i / 16 % 16, i / 256),
+            BlockType::Bricks,
+        );
+    }
+    app.update();
+    let node =
+        |app: &App, level: u8| app.world().resource::<LodLoader>().nodes[&keys[level as usize - 1]];
+    // meshed again with the bricks, and level 4 given an entity for them, but not level 5
+    let meshed = |app: &App, level: u8| {
+        node(app, level).is_some_and(|entity| app.world().get::<Mesh3d>(entity).is_some())
+    };
+    let start = std::time::Instant::now();
+    while !(1..=4).all(|level| meshed(&app, level)) {
+        assert!(start.elapsed().as_secs() < 10, "never meshed");
+        app.update();
+    }
+    assert_eq!(entities[&5], node(&app, 5));
+    assert!(app
+        .world()
+        .get::<RebuildLodMesh>(entities[&5].unwrap())
+        .is_none());
+    assert!(app.world().get::<Mesh3d>(entities[&5].unwrap()).is_none());
 }

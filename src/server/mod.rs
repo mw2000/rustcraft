@@ -113,6 +113,7 @@ impl Plugin for ServerPlugin {
                     sync::receive_reaches,
                     sync::follow_players,
                     sync::send_chunk_edits,
+                    sync::send_edit_summaries,
                 )
                     .chain()
                     .after(players::move_players)

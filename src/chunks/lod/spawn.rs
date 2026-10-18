@@ -10,6 +10,7 @@ use crate::chunks::generate::structures::STRUCTURE_HEIGHT;
 use crate::chunks::generate::trees::TREE_HEIGHT;
 use crate::chunks::generate::trees::TREE_REACH;
 use crate::chunks::generate::WATER_LEVEL;
+use crate::chunks::lod::LodEdits;
 use crate::world::World;
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::query::With;
@@ -70,7 +71,7 @@ pub fn spawn_lods(
             continue;
         }
         // nothing to mesh, so the node is ready as soon as it exists
-        if known_empty(key, &world.region_store) {
+        if known_empty(key, &world.region_store, world.lod_edits()) {
             lods.add_node(key, None);
             if stand_in {
                 lods.retiring.push(key);
@@ -83,12 +84,13 @@ pub fn spawn_lods(
             break;
         }
 
-        let regions = world.region_store.clone();
+        let (regions, edits) = (world.region_store.clone(), world.lod_edits().node(key));
         let entity = commands
             .spawn((
                 LodNode { key },
                 GenerateLodMesh {
-                    task: task_pool.spawn(async move { generate_lod_mesh(regions, key) }),
+                    task: task_pool
+                        .spawn(async move { generate_lod_mesh(regions, key, edits.as_deref()) }),
                 },
                 lod_transform(key),
                 Visibility::Hidden,
@@ -102,13 +104,15 @@ pub fn spawn_lods(
     }
 }
 
-// Whether `key` is known to have nothing to draw, going by regions or coarse columns
-// already sampled - never samples one, so it can run on the main thread. That's when the terrain its mesh
-// would sample is all below it with only air or only water above, or all above it so it's
-// buried in rock. Only knows about generated terrain, with the trees and structures standing on
-// it, since LOD meshes are built from them alone - if they ever show player edits or caves,
-// those must stop counting as empty here.
-pub(super) fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
+// Whether `key` is known to have nothing to draw, going by regions or coarse columns already
+// sampled - never samples one, so it can run on the main thread. That's when the terrain its
+// mesh would sample is all below it with only air or only water above, or all above it so it's
+// buried in rock, and no `edits` change what it draws, as a tower in the sky or a pit dug into
+// the rock would. LOD meshes leave caves out, so they don't count.
+pub(super) fn known_empty(key: LodKey, regions: &RegionStore, edits: &LodEdits) -> bool {
+    if edits.node(key).is_some() {
+        return false;
+    }
     let min = key.min_block();
     let cell = key.cell_size();
     let width = key.width() * CHUNK_SIZE as i64;

@@ -1,7 +1,10 @@
 //! Keeping each client's copy of the edit layer in step with the server's near its player
 //! (§4.4): the edits of chunks coming near as `ChunkEdits`, and changes there as `BlockChanged`.
+//! Further off, as far as it draws, it's kept in step with them as LOD nodes draw them, as
+//! `EditSummary`s of the chunks coming into view and of the cells changed since.
 
 use bevy::ecs::system::SystemParam;
+use bevy::math::I64Vec3;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
@@ -9,12 +12,14 @@ use bevy_replicon::prelude::*;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::edits::Edits;
 use crate::player::PlayerOwner;
-use crate::protocol::{BlockChanged, ChunkEdits, EditReach};
+use crate::protocol::{BlockChanged, ChunkEdits, EditReach, EditSummary};
 use crate::world::World;
 
 // About a full chunk's worth of edits a frame for each client, a dozen kilobytes, so a client
 // joining among a big build gets it over a few frames, nearest first, rather than in one.
 const EDITS_PER_FRAME: usize = 4096;
+// About as many bytes again of 2-block cells of LOD edits, 3 or 4 bytes each.
+const SUMMARY_CELLS_PER_FRAME: usize = 4096;
 // A chunk's sent edits are forgotten only this many chunks beyond a client's reach, so walking
 // to and fro over the edge of it doesn't send the same chunks again and again.
 const FORGET_SLACK: f32 = 4.0;
@@ -32,6 +37,13 @@ pub struct SyncedArea {
     unsent: Vec<ChunkCoordinate>,
     // how many `BlockChanged`s the client's been sent, see `ChunkEdits`
     changes_sent: u64,
+    // in chunks, how far the client draws, 0 until it says
+    view: f32,
+    // the chunks in view whose LOD edits the client's been sent or is to be, those it's to be,
+    // the farthest first, and the 2-block cells changed in them since
+    summarised: HashSet<ChunkCoordinate>,
+    unsummarised: Vec<ChunkCoordinate>,
+    resummarised: HashSet<I64Vec3>,
 }
 
 impl SyncedArea {
@@ -46,10 +58,15 @@ impl SyncedArea {
         self.sent.contains(&coord) || self.reaches(coord)
     }
 
+    fn sees(&self, coord: ChunkCoordinate) -> bool {
+        self.centre
+            .is_some_and(|centre| distance(centre, coord) <= self.view)
+    }
+
     // Moves the area to the player's chunk at `centre`, forgetting what's been sent well beyond
     // it, as the client would be sent changes there for nothing, and lining up the chunks with
-    // edits that have come into reach. Looks at every chunk with edits, which is quick even
-    // for a big world, and done only as the player crosses into another chunk.
+    // edits that have come into reach, and into view. Looks at every chunk with edits, which is
+    // quick even for a big world, and done only as the player crosses into another chunk.
     fn move_to(&mut self, centre: ChunkCoordinate, edits: &Edits) {
         self.centre = Some(centre);
         let forget = self.reach + FORGET_SLACK;
@@ -58,8 +75,33 @@ impl SyncedArea {
             .chunks()
             .filter(|&coord| self.reaches(coord) && !self.sent.contains(&coord))
             .collect();
-        self.unsent
-            .sort_unstable_by(|&a, &b| distance(centre, b).total_cmp(&distance(centre, a)));
+        let forget = self.view + FORGET_SLACK;
+        self.summarised
+            .retain(|&coord| distance(centre, coord) <= forget);
+        let coming: Vec<ChunkCoordinate> = edits
+            .chunks()
+            .filter(|&coord| self.sees(coord) && !self.summarised.contains(&coord))
+            .collect();
+        self.summarised.extend(coming.iter().copied());
+        let summarised = &self.summarised;
+        self.unsummarised.retain(|coord| summarised.contains(coord));
+        self.unsummarised.extend(coming);
+        let farthest_first = |a: &ChunkCoordinate, b: &ChunkCoordinate| {
+            distance(centre, *b).total_cmp(&distance(centre, *a))
+        };
+        self.unsent.sort_unstable_by(farthest_first);
+        self.unsummarised.sort_unstable_by(farthest_first);
+    }
+
+    // Notes a change to `block` for the client's LOD edits, if it's in view or was. A chunk in
+    // view not summarised had no edits as the area last moved, so this cell is all it has.
+    fn resummarise(&mut self, block: I64Vec3) {
+        let coord = ChunkCoordinate::containing(block);
+        if self.sees(coord) || self.summarised.contains(&coord) {
+            self.summarised.insert(coord);
+            self.resummarised
+                .insert(block.div_euclid(I64Vec3::splat(2)));
+        }
     }
 }
 
@@ -77,7 +119,8 @@ pub(super) fn receive_reaches(
             .entity()
             .and_then(|client| areas.get_mut(client).ok())
         {
-            area.reach = message.0 as f32;
+            area.reach = message.full_detail as f32;
+            area.view = message.view as f32;
             area.centre = None;
         }
     }
@@ -123,6 +166,36 @@ pub(super) fn send_chunk_edits(
     }
 }
 
+/// Sends each client the LOD edits of the cells changed in view, and of the chunks come into
+/// view, a few frames' worth at a time.
+pub(super) fn send_edit_summaries(
+    world: Res<World>,
+    mut areas: Query<(Entity, &mut SyncedArea)>,
+    mut sent: MessageWriter<ToClients<EditSummary>>,
+) {
+    let lod_edits = world.lod_edits();
+    for (client, mut area) in &mut areas {
+        let area = &mut *area;
+        let mut cells: Vec<_> = area
+            .resummarised
+            .drain()
+            .filter_map(|cell| Some((cell, lod_edits.cell(1, cell)?)))
+            .collect();
+        while cells.len() < SUMMARY_CELLS_PER_FRAME {
+            let Some(coord) = area.unsummarised.pop() else {
+                break;
+            };
+            cells.extend(lod_edits.chunk_cells(coord));
+        }
+        if !cells.is_empty() {
+            sent.write(ToClients {
+                targets: SendTargets::Single(ClientId::Client(client)),
+                message: EditSummary::new(cells),
+            });
+        }
+    }
+}
+
 /// Tells of the server's changes to blocks: the host, whose client shares the server's world,
 /// and the clients whose areas take in the block's chunk. The rest are sent it with the chunk's
 /// edits as they come near.
@@ -140,6 +213,7 @@ impl BlockChanges<'_, '_> {
         });
         let coord = ChunkCoordinate::containing(change.block);
         for (client, mut area) in &mut self.areas {
+            area.resummarise(change.block);
             if area.takes_in(coord) {
                 area.changes_sent += 1;
                 self.changes.write(ToClients {

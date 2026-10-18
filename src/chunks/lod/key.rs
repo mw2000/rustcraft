@@ -31,6 +31,11 @@ impl LodKey {
         self.coord * self.width()
     }
 
+    /// Its lowest cell, counted in cells of its level.
+    pub fn min_cell(self) -> I64Vec3 {
+        self.coord * CHUNK_SIZE as i64
+    }
+
     pub fn min_block(self) -> I64Vec3 {
         self.min_chunk() * CHUNK_SIZE as i64
     }

@@ -39,8 +39,8 @@ use rustcraft::player::name::PlayerName;
 use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
     BlockChanged, Chat, ChatLine, ChunkEdits, CommandOutput, ContainerChanged, EditRejected,
-    PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand, StartBreaking,
-    Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
+    EditSummary, PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand,
+    StartBreaking, Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
 };
 use rustcraft::save::{SavePlugin, WorldFile, WorldSave};
 use rustcraft::server::drops::DroppedItem;
@@ -809,6 +809,107 @@ fn test_joining_among_many_edits() {
     });
     assert!(bytes < 200_000, "{bytes} bytes");
     assert!(frames > 1 && frames < 30, "{frames} frames");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_client_draws_a_build_far_off_in_its_lods() {
+    use rustcraft::chunks::lod::{LodKey, EDITED_LEVELS};
+    let dir = temp_dir("lod-edits");
+    let (mut server, sockets) = host(&dir, 1, false);
+    let mut client = joiner(
+        &server,
+        sockets.into_iter().next().unwrap(),
+        "guest",
+        None,
+        GenerationChecksum::default(),
+    );
+    // drawing as the game's settings do, 16 chunks at full detail and 16 km in all
+    let mut settings = Settings::default();
+    (
+        settings.renderer.full_detail_distance,
+        settings.renderer.render_distance,
+    ) = (16, 1024);
+    client.insert_resource(settings);
+    // a tower of 50,000 bricks 1.6 km off, 20 by 20 and 125 tall, far beyond full detail
+    let mut world = server.world_mut().resource_mut::<World>();
+    let corner = world.spawn().floor().as_i64vec3() + FAR;
+    let blocks: Vec<I64Vec3> = (0..20 * 125 * 20)
+        .map(|i| corner + I64Vec3::new(i % 20, i / 20 % 125, i / 2500))
+        .collect();
+    for &block in &blocks {
+        world.edit(block, BlockType::Bricks);
+    }
+    let cells: usize = world
+        .edits()
+        .chunks()
+        .map(|coord| world.lod_edits().chunk_cells(coord).count())
+        .sum();
+    let mut sent = MessageCursor::<EditSummary>::default();
+    let (mut bytes, mut received_cells) = (0, 0);
+    update_until(&mut server, &mut client, |_, client| {
+        for summary in received(client, &mut sent) {
+            bytes += postcard::to_stdvec(&summary).unwrap().len();
+            received_cells += summary.cell_count();
+        }
+        received_cells == cells && joined(client)
+    });
+    client.update();
+    println!("a 50,000-block tower in {cells} cells: {bytes} bytes");
+    assert!(bytes < 30_000, "{bytes} bytes");
+    // with none of its edits, it draws it in its LODs as the host does
+    assert!(!client_has_edit(&mut client, corner, BlockType::Bricks));
+    let (host, guest) = (
+        server.world().resource::<World>(),
+        client.world().resource::<World>(),
+    );
+    let middle = corner + I64Vec3::new(10, 60, 10);
+    for level in 1..=EDITED_LEVELS {
+        let cell = middle.div_euclid(I64Vec3::splat(1 << level));
+        assert_eq!(
+            host.lod_edits().cell(level, cell),
+            guest.lod_edits().cell(level, cell)
+        );
+        let key = LodKey::containing(ChunkCoordinate::containing(middle), level);
+        let drawn = |world: &World| {
+            let mut drawn: Vec<_> = world
+                .lod_edits()
+                .node(key)
+                .iter()
+                .flat_map(|n| n.drawn().collect::<Vec<_>>())
+                .collect();
+            drawn.sort_by_key(|(at, _)| at.to_array());
+            drawn
+        };
+        assert_eq!(drawn(host), drawn(guest), "level {level}");
+        // a cell 16 blocks wide fits in the tower, but none 32 wide
+        assert_eq!(
+            level <= 4,
+            drawn(guest)
+                .iter()
+                .any(|&(_, block)| block == BlockType::Bricks)
+        );
+    }
+
+    // and a change there by the host, far from the guest, comes as its LOD edits
+    let top = corner + I64Vec3::new(4, 125, 4);
+    let host = player_of(&mut server, ClientId::Server);
+    move_player(&mut server, host, (top + I64Vec3::new(2, 0, 0)).as_vec3());
+    update_until(&mut server, &mut client, |server, _| {
+        let world = server.world().resource::<World>();
+        world.is_chunk_generated(ChunkCoordinate::containing(top))
+    });
+    server.world_mut().write_message(RequestEdit {
+        block: top,
+        to: BlockType::Planks,
+        slot: 0,
+        seq: 1,
+    });
+    let cell = top.div_euclid(I64Vec3::splat(2));
+    update_until(&mut server, &mut client, |server, client| {
+        let edits = |app: &App| app.world().resource::<World>().lod_edits().cell(1, cell);
+        edits(server).is_some_and(|e| e.built == 1) && edits(client) == edits(server)
+    });
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

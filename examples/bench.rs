@@ -137,7 +137,7 @@ fn lods(regions: &Arc<RegionStore>, spawn: I64Vec3) {
     };
     let mesh = |level: u8| {
         keys(level)
-            .filter_map(|key| generate_lod_mesh(regions.clone(), key))
+            .filter_map(|key| generate_lod_mesh(regions.clone(), key, None))
             .map(|meshes| meshes.opaque.count_vertices())
             .sum::<usize>()
     };
