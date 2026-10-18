@@ -425,7 +425,7 @@ mod tests {
         let mut app = app();
         let mut full = Inventory {
             slots: [Some(ItemStack::full(SAND)); SLOTS],
-            cursor: None,
+            ..Inventory::default()
         };
         full.slots[0] = Some(ItemStack::new(DIRT, 62));
         let player = player(&mut app, Vec3::new(4.5, 1.0, 4.5), full);

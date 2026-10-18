@@ -22,6 +22,7 @@ use crate::items::{Item, ItemStack};
 use crate::player::{Player, PlayerOwner};
 use crate::protocol::{HitCreature, UseCreature};
 use crate::server::drops::{Chance, DroppedItem};
+use crate::server::survival::{Combat, Footing};
 use crate::server::HeldItem;
 use crate::world::World;
 
@@ -130,6 +131,8 @@ fn player(app: &mut App, feet: Vec3, held: Option<ItemStack>) -> Entity {
             HeldItem(held.map(|stack| stack.item)),
             inventory,
             Transform::from_translation(feet),
+            Combat::default(),
+            Footing::default(),
         ))
         .id()
 }
@@ -220,9 +223,13 @@ fn every_creature(app: &mut App) -> Vec<Entity> {
     query.iter(app.world()).collect()
 }
 
-// Kills a creature with a hit, dropping what it drops.
+// Kills a creature with a hit, dropping what it drops, however soon after the last.
 fn kill(app: &mut App, creature: Entity) {
     app.world_mut().get_mut::<Health>(creature).unwrap().points = 1;
+    let mut players = app.world_mut().query::<&mut Combat>();
+    for mut combat in players.iter_mut(app.world_mut()) {
+        combat.ready_at = 0.0;
+    }
     hit(app, creature);
     app.update();
     assert!(app.world().get_entity(creature).is_err());
@@ -359,11 +366,15 @@ fn test_a_sheep_killed_drops_mutton_and_wool_and_wears_the_tool() {
     let player = player(&mut app, Vec3::new(0.5, FEET, 0.5), Some(axe));
     let sheep = sheep(&mut app, Vec3::new(2.5, FEET, 0.5));
     app.update();
-    // an iron axe hits for 5
+    // an iron axe hits for 6, and swings again after 0.9 s
     hit(&mut app, sheep);
     app.update();
-    assert_eq!(3, health(&app, sheep));
+    assert_eq!(2, health(&app, sheep));
     run(&mut app, 0.6);
+    hit(&mut app, sheep);
+    app.update();
+    assert_eq!(2, health(&app, sheep));
+    run(&mut app, 0.3);
     hit(&mut app, sheep);
     app.update();
     assert!(app.world().get_entity(sheep).is_err());

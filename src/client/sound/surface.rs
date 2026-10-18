@@ -37,7 +37,7 @@ impl Surface {
                 Some(ToolKind::Shovel | ToolKind::Hoe) => Self::Dirt,
                 // wool's soft and muffled, as snow is
                 Some(ToolKind::Shears) => Self::Snow,
-                Some(ToolKind::Axe) | None => Self::Wood,
+                Some(ToolKind::Axe | ToolKind::Sword) | None => Self::Wood,
             },
         })
     }

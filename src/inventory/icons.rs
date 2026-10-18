@@ -319,7 +319,7 @@ pub(crate) fn draw_stacks(
     let counted = !mode.has_every_block();
     for (shows, mut image, mut visibility, children) in &mut views {
         let stack = match *shows {
-            StackView::Slot(slot) => inventory.slots[slot],
+            StackView::Slot(slot) => inventory.get(slot),
             StackView::Cursor => inventory.cursor,
             StackView::Container(slot) => container
                 .as_ref()

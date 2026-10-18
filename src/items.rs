@@ -8,6 +8,8 @@ use crate::block::BlockType;
 
 /// How many of an item make a full stack, unless its row says otherwise.
 pub const MAX_STACK: u8 = 64;
+/// How long a bare hand, or anything that isn't a tool, takes to hit again, in seconds.
+pub const HAND_COOLDOWN: f32 = 0.4;
 
 /// An item's row in the table: how it behaves.
 struct Properties {
@@ -19,6 +21,8 @@ struct Properties {
     fills: u8,
     /// The block it's planted as, if it's planted, as seeds are wheat's first stage.
     plants: Option<BlockType>,
+    /// What it does as armour, if it's worn.
+    armour: Option<Armour>,
 }
 
 // What every block item has, and every row of the table unless it says otherwise: blocks
@@ -28,6 +32,7 @@ const PLAIN: Properties = Properties {
     tool: None,
     fills: 0,
     plants: None,
+    armour: None,
 };
 
 /// What a tool is for: each is quick at breaking the blocks whose row names it (M1.2).
@@ -40,7 +45,61 @@ pub enum ToolKind {
     Hoe,
     /// Shears sheep (§5.8), and cuts wool quicker.
     Shears,
+    /// Hits hardest and quickest (M3.3), and breaks nothing quicker.
+    Sword,
 }
+
+impl ToolKind {
+    // How much harder than a hand it hits, before its tier's added, and how long it takes to
+    // swing again, in seconds: a sword hits hard and often, an axe as hard but slower, and the
+    // rest are tools first.
+    fn blow(self) -> (u8, f32) {
+        match self {
+            ToolKind::Sword => (3, 0.6),
+            ToolKind::Axe => (2, 0.9),
+            ToolKind::Pickaxe => (1, 0.7),
+            ToolKind::Shovel | ToolKind::Hoe | ToolKind::Shears => (0, 0.7),
+        }
+    }
+}
+
+/// Where a piece of armour is worn, in the order of the inventory's armour slots.
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum Piece {
+    Helmet,
+    Chestplate,
+    Leggings,
+    Boots,
+}
+
+impl Piece {
+    pub const ALL: [Piece; 4] = [
+        Piece::Helmet,
+        Piece::Chestplate,
+        Piece::Leggings,
+        Piece::Boots,
+    ];
+
+    /// Its slot among the four armour slots.
+    pub fn slot(self) -> usize {
+        self as usize
+    }
+}
+
+/// An armour row's columns in the table.
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct Armour {
+    pub piece: Piece,
+    /// How much of a blow it takes, in points of `ARMOUR_POINT` each.
+    pub points: u8,
+    /// How many blows it takes before it's worn out.
+    pub durability: u16,
+    /// What colour it's drawn on a player, in sRGB.
+    pub colour: [f32; 3],
+}
+
+/// How much of a blow a point of armour takes: 4%, so a full set of bright steel takes 72%.
+pub const ARMOUR_POINT: f32 = 0.04;
 
 /// A tool's columns in the table.
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -87,6 +146,28 @@ const SHEARS: Properties = Properties {
     }),
     ..PLAIN
 };
+
+// Each material's armour: the points of its helmet, chestplate, leggings and boots, how many
+// blows each piece lasts, and its colour. Leather is a first night's, iron halves a blow, and
+// bright steel, the furthest, takes nearly three quarters of one.
+const LEATHER: ([u8; 4], u16, [f32; 3]) = ([1, 3, 2, 1], 80, [0.52, 0.32, 0.18]);
+const IRON: ([u8; 4], u16, [f32; 3]) = ([2, 5, 4, 2], 200, [0.74, 0.74, 0.78]);
+const BRIGHT_STEEL: ([u8; 4], u16, [f32; 3]) = ([3, 7, 5, 3], 320, [0.66, 0.76, 0.88]);
+
+// A row's properties as the `piece` of armour of `material`.
+const fn armour(piece: Piece, material: ([u8; 4], u16, [f32; 3])) -> Properties {
+    let (points, durability, colour) = material;
+    Properties {
+        max_stack: 1,
+        armour: Some(Armour {
+            piece,
+            points: points[piece as usize],
+            durability,
+            colour,
+        }),
+        ..PLAIN
+    }
+}
 
 // A row's properties as food that fills `fills` of the food bar.
 const fn food(fills: u8) -> Properties {
@@ -143,14 +224,15 @@ macro_rules! items {
     (@properties $properties:expr) => { $properties };
 }
 
-use ToolKind::{Axe, Hoe, Pickaxe, Shovel};
+use Piece::{Boots, Chestplate, Helmet, Leggings};
+use ToolKind::{Axe, Hoe, Pickaxe, Shovel, Sword};
 
 // Coal comes from coal ore, ingots from smelting ore in a furnace, and the tools are made from
-// planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
+// planks, cobblestone and ingots at a crafting table (`crafting`), swords and armour too (M3.3).
 // Apples come from leaves, now and then, seeds from tall grass, and wheat from the seeds sown
 // (`farming`), which bread is baked from. Meat comes from animals (§5.8) and cooks in a furnace;
 // wool from sheep, shorn with shears or killed, and leather and feathers from cows and chickens,
-// which wait for armour, books and arrows to be of use. Gold, frost crystal and jade come from
+// leather for armour, and feathers, which wait for books and arrows to be of use. Gold, frost crystal and jade come from
 // ores under far climates, and any of them blended with iron smelts into bright steel, the best
 // tools; embers come from the deepest ore.
 items! {
@@ -200,6 +282,23 @@ items! {
     CookedPork { name: "cooked_pork", food(8) },
     Chicken { name: "chicken", food(2) },
     CookedChicken { name: "cooked_chicken", food(6) },
+    WoodenSword { name: "wooden_sword", tool(Sword, 1) },
+    StoneSword { name: "stone_sword", tool(Sword, 2) },
+    CopperSword { name: "copper_sword", tool(Sword, 3) },
+    IronSword { name: "iron_sword", tool(Sword, 4) },
+    BrightSteelSword { name: "bright_steel_sword", tool(Sword, 5) },
+    LeatherHelmet { name: "leather_helmet", armour(Helmet, LEATHER) },
+    LeatherChestplate { name: "leather_chestplate", armour(Chestplate, LEATHER) },
+    LeatherLeggings { name: "leather_leggings", armour(Leggings, LEATHER) },
+    LeatherBoots { name: "leather_boots", armour(Boots, LEATHER) },
+    IronHelmet { name: "iron_helmet", armour(Helmet, IRON) },
+    IronChestplate { name: "iron_chestplate", armour(Chestplate, IRON) },
+    IronLeggings { name: "iron_leggings", armour(Leggings, IRON) },
+    IronBoots { name: "iron_boots", armour(Boots, IRON) },
+    BrightSteelHelmet { name: "bright_steel_helmet", armour(Helmet, BRIGHT_STEEL) },
+    BrightSteelChestplate { name: "bright_steel_chestplate", armour(Chestplate, BRIGHT_STEEL) },
+    BrightSteelLeggings { name: "bright_steel_leggings", armour(Leggings, BRIGHT_STEEL) },
+    BrightSteelBoots { name: "bright_steel_boots", armour(Boots, BRIGHT_STEEL) },
 }
 
 impl Item {
@@ -230,9 +329,27 @@ impl Item {
     }
 
     /// How much hitting a creature with it hurts, in half hearts: a bare hand's or anything
-    /// else's 1, and a tool's more the better its tier. Weapons wait for combat (M3.3).
+    /// else's 1, and a tool's more the better its tier, a sword's most.
     pub fn damage(self) -> u8 {
-        self.tool().map_or(1, |tool| 1 + tool.tier)
+        self.tool()
+            .map_or(1, |tool| (tool.kind.blow().0 + tool.tier).max(1))
+    }
+
+    /// How long a hit with it takes to swing again, in seconds.
+    pub fn cooldown(self) -> f32 {
+        self.tool().map_or(HAND_COOLDOWN, |tool| tool.kind.blow().1)
+    }
+
+    /// What it does as armour, if it's worn.
+    pub fn armour(self) -> Option<Armour> {
+        self.properties().armour
+    }
+
+    /// How many uses it has before it's worn out, if it wears: a tool's blocks or blows, and
+    /// armour's blows taken.
+    pub fn durability(self) -> Option<u16> {
+        let tool = self.tool().map(|tool| tool.durability);
+        tool.or(self.armour().map(|armour| armour.durability))
     }
 
     /// How much of the food bar eating one fills, if it's food.
@@ -287,7 +404,7 @@ impl<'de> Deserialize<'de> for Item {
 pub struct ItemStack {
     pub item: Item,
     pub count: u8,
-    /// How many blocks a tool has broken, of its durability. Nothing else wears.
+    /// How many uses a tool or armour has had, of its durability. Nothing else wears.
     pub wear: u16,
 }
 
@@ -344,21 +461,21 @@ impl ItemStack {
         (moved < other.count).then(|| ItemStack::new(other.item, other.count - moved))
     }
 
-    /// A tool after breaking a block with it, or nothing if that wore it out. Anything else
-    /// doesn't wear.
+    /// A tool after breaking a block or hitting with it, or armour after a blow, or nothing if
+    /// that wore it out. Anything else doesn't wear.
     pub fn worn(self) -> Option<Self> {
-        let Some(tool) = self.item.tool() else {
+        let Some(durability) = self.item.durability() else {
             return Some(self);
         };
         let wear = self.wear + 1;
-        (wear < tool.durability).then_some(Self { wear, ..self })
+        (wear < durability).then_some(Self { wear, ..self })
     }
 
-    /// How much of a worn tool's durability is left, from 1 when new down towards 0, or none
-    /// if it isn't a tool or is new, as only a worn one shows it.
+    /// How much of a worn tool's or armour's durability is left, from 1 when new down towards
+    /// 0, or none if it doesn't wear or is new, as only a worn one shows it.
     pub fn durability_left(self) -> Option<f32> {
-        let tool = self.item.tool().filter(|_| self.wear > 0)?;
-        Some(1.0 - f32::from(self.wear) / f32::from(tool.durability))
+        let durability = self.item.durability().filter(|_| self.wear > 0)?;
+        Some(1.0 - f32::from(self.wear) / f32::from(durability))
     }
 }
 
@@ -397,7 +514,7 @@ impl TryFrom<SavedStack> for ItemStack {
         if !(1..=item.max_stack()).contains(&count) {
             return Err(format!("a stack of {} can't hold {count}", item.name()));
         }
-        let durability = item.tool().map_or(0, |tool| tool.durability);
+        let durability = item.durability().unwrap_or(0);
         if wear > 0 && wear >= durability {
             return Err(format!("{} can't be worn {wear}", item.name()));
         }
@@ -618,7 +735,7 @@ mod tests {
             assert!(better.durability > worse.durability && better.speed > worse.speed);
         }
         for item in Item::all() {
-            match item.tool() {
+            match item.durability() {
                 Some(_) => assert_eq!(1, item.max_stack(), "{item:?}"),
                 None => assert_eq!(MAX_STACK, item.max_stack(), "{item:?}"),
             }
@@ -632,7 +749,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::CookedChicken.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::BrightSteelBoots.sprite());
     }
 
     #[test]
@@ -682,5 +799,68 @@ mod tests {
         ] {
             assert!(toml::from_str::<ItemStack>(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn test_swords_hit_hardest_and_quickest_and_get_better_by_tier() {
+        let swords = [
+            Item::WoodenSword,
+            Item::StoneSword,
+            Item::CopperSword,
+            Item::IronSword,
+            Item::BrightSteelSword,
+        ];
+        assert_eq!([4, 5, 6, 7, 8], swords.map(Item::damage));
+        // an axe as hard as a sword a tier below, and slower, and a hand or a stick hits for 1
+        assert_eq!(6, Item::IronAxe.damage());
+        assert!(Item::IronAxe.cooldown() > Item::IronSword.cooldown());
+        assert_eq!((1, 1), (Item::Stick.damage(), Item::Shears.damage()));
+        assert_eq!(1, Item::Block(BlockType::Dirt).damage());
+        assert_eq!(ToolKind::Sword, Item::StoneSword.tool().unwrap().kind);
+    }
+
+    #[test]
+    fn test_armour_is_worn_in_its_piece_better_by_material_and_wears() {
+        use super::{Piece, ARMOUR_POINT};
+        let sets = [
+            [
+                Item::LeatherHelmet,
+                Item::LeatherChestplate,
+                Item::LeatherLeggings,
+                Item::LeatherBoots,
+            ],
+            [
+                Item::IronHelmet,
+                Item::IronChestplate,
+                Item::IronLeggings,
+                Item::IronBoots,
+            ],
+            [
+                Item::BrightSteelHelmet,
+                Item::BrightSteelChestplate,
+                Item::BrightSteelLeggings,
+                Item::BrightSteelBoots,
+            ],
+        ];
+        let mut last = 0;
+        for set in sets {
+            for (item, piece) in set.into_iter().zip(Piece::ALL) {
+                assert_eq!(piece, item.armour().unwrap().piece, "{item:?}");
+                assert_eq!(1, item.max_stack());
+            }
+            let points: u8 = set.iter().map(|item| item.armour().unwrap().points).sum();
+            assert!(
+                points > last && f32::from(points) * ARMOUR_POINT < 0.75,
+                "{points}"
+            );
+            last = points;
+        }
+        assert_eq!(None, Item::IronSword.armour());
+        // a piece wears out after as many blows as it lasts, as a tool does
+        let mut boots = Some(ItemStack::new(Item::LeatherBoots, 1));
+        for _ in 0..80 {
+            boots = boots.and_then(ItemStack::worn);
+        }
+        assert_eq!(None, boots);
     }
 }

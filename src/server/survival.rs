@@ -1,5 +1,6 @@
-//! Survival on the server (§5.5, INV-4): falling, drowning, hunger, healing, eating, dying and
-//! respawning, for players in survival. Creative takes no damage and needs no food.
+//! Survival on the server (§5.5, INV-4): falling, drowning, blows from creatures through the
+//! armour worn, hunger, healing, eating, dying and respawning, for players in survival.
+//! Creative takes no damage and needs no food.
 //!
 //! Movement is the client's to decide (§4.4), so falls are judged from where the server sees a
 //! player frame by frame, whether by their own client's poses or, for the host, their body
@@ -21,13 +22,14 @@ use crate::block::shape::Use;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::collision::boxes_at;
+use crate::creatures::CreatureKind;
 use crate::game_mode::GameMode;
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::player::name::PlayerName;
 use crate::player::{PlayerOwner, BODY, EYE_HEIGHT};
-use crate::protocol::{CommandOutput, Eat, Respawn, Teleport, VitalsChanged};
+use crate::protocol::{CommandOutput, Eat, Respawn, Struck, Teleport, VitalsChanged};
 use crate::survival::{
-    fall_damage, on_bed, Asleep, SpawnBed, Vitals, MAX_AIR, MAX_FOOD, MAX_HEALTH,
+    fall_damage, on_bed, Asleep, Bruise, SpawnBed, Vitals, MAX_AIR, MAX_FOOD, MAX_HEALTH,
 };
 use crate::world::World;
 
@@ -63,6 +65,11 @@ const SPRINT_WINDOW: f32 = 0.5;
 const TELEPORT_DISTANCE: f32 = 8.0;
 // How close to a block's top, in blocks, feet must be to stand on it.
 const STANDING: f32 = 0.05;
+// How long after a blow lands, in seconds, another can't, so a crowd's blows at once land as
+// one and a player has a moment to get away.
+const GRACE: f32 = 0.5;
+// How hard a blow lifts a player standing, in blocks a second.
+const KNOCK_LIFT: f32 = 4.0;
 
 /// What the server has seen of how a player moves, to judge their falls, jumps and sprinting by.
 #[derive(Component, Debug, Default)]
@@ -78,6 +85,25 @@ pub(super) struct Footing {
     peak: Option<f32>,
     // how far they've gone across the ground, and in how long, in this sprint window
     window: (f32, f32),
+}
+
+/// How a player stands in a fight: until when, by the server's clock in seconds, no blow can
+/// land on them, and when they can next hit, after their last.
+#[derive(Component, Debug, Default)]
+pub(super) struct Combat {
+    pub(super) safe_until: f32,
+    pub(super) ready_at: f32,
+}
+
+/// A blow at a player by a creature (M3.3): how hard, from where, how hard it knocks them back,
+/// in blocks a second, and what struck it.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct Blow {
+    pub player: Entity,
+    pub damage: u8,
+    pub from: Vec3,
+    pub knockback: f32,
+    pub by: CreatureKind,
 }
 
 /// Where a player's body is, as far as falling and drowning go.
@@ -104,6 +130,16 @@ pub(super) struct Moved {
 }
 
 impl Footing {
+    /// Whether they're coming down from a jump or a fall, as of their last step, which makes
+    /// their hits land harder.
+    pub(super) fn is_falling(&self) -> bool {
+        let below_peak = self
+            .last
+            .zip(self.peak)
+            .is_some_and(|(at, peak)| at.y < peak - 0.1);
+        !self.grounded && below_peak
+    }
+
     /// Follows a player to `at` over `dt` seconds, `around` them there.
     pub(super) fn step(&mut self, at: Vec3, around: Surroundings, dt: f32) -> Moved {
         let mut moved = Moved::default();
@@ -196,6 +232,7 @@ pub(super) fn surroundings(world: &World, feet: Vec3) -> Surroundings {
 pub(super) enum Death {
     Fell,
     Drowned,
+    Slain(CreatureKind),
 }
 
 impl Death {
@@ -203,6 +240,9 @@ impl Death {
         match self {
             Death::Fell => format!("{name} fell from a high place"),
             Death::Drowned => format!("{name} drowned"),
+            Death::Slain(kind) => {
+                format!("{name} was slain by a {}", kind.name().replace('_', " "))
+            }
         }
     }
 }
@@ -321,6 +361,7 @@ pub(super) fn start_living(add: On<Add<Vitals>>, vitals: Query<&Vitals>, mut com
         commands.entity(add.entity).insert((
             Footing::default(),
             Metabolism::of(vitals),
+            Combat::default(),
             Told::default(),
         ));
     }
@@ -375,20 +416,26 @@ type Living<'w, 's> = Query<
         &'static mut Metabolism,
         &'static mut Inventory,
         Option<&'static mut Eating>,
+        &'static mut Combat,
+        &'static mut Bruise,
     ),
 >;
 
-/// Each frame of survival for every player: falling, breathing, hunger, healing, starving and
-/// eating, and dying of it. Everyone's told of a death in the command bar.
+/// Each frame of survival for every player: falling, the blows that land on them, breathing,
+/// hunger, healing, starving and eating, and dying of it. Everyone's told of a death in the
+/// command bar.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn live(
     time: Res<Time>,
     world: Res<World>,
+    mut blows: MessageReader<Blow>,
     mut players: Living,
     mut chance: ResMut<Chance>,
     mut output: MessageWriter<ToClients<CommandOutput>>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
+    let blows: Vec<Blow> = blows.read().copied().collect();
     for (
         player,
         name,
@@ -399,6 +446,8 @@ pub(super) fn live(
         mut metabolism,
         mut inventory,
         eating,
+        mut combat,
+        mut bruise,
     ) in &mut players
     {
         let around = surroundings(&world, body.translation);
@@ -407,7 +456,31 @@ pub(super) fn live(
             continue;
         }
         let mut now = *vitals;
-        let died = metabolism.live(&mut now, around.head_under, moved, dt);
+        let mut died = None;
+        for blow in blows.iter().filter(|blow| blow.player == player) {
+            if time.elapsed_secs() < combat.safe_until {
+                break;
+            }
+            combat.safe_until = time.elapsed_secs() + GRACE;
+            died = died.or(hurt(
+                &mut now,
+                inventory.blunt(blow.damage),
+                Death::Slain(blow.by),
+            ));
+            inventory.wear_armour();
+            let away = (body.translation - blow.from).xz().normalize_or_zero() * blow.knockback;
+            let lift = if blow.knockback > 0.0 {
+                KNOCK_LIFT
+            } else {
+                0.0
+            };
+            *bruise = Bruise {
+                from: blow.from,
+                push: Vec3::new(away.x, lift, away.y),
+                count: bruise.count.wrapping_add(1),
+            };
+        }
+        let died = died.or_else(|| metabolism.live(&mut now, around.head_under, moved, dt));
         if let Some(mut eating) = eating {
             eating.left -= dt;
             if !can_eat(*mode, now, &inventory, eating.slot) {
@@ -427,8 +500,7 @@ pub(super) fn live(
             info!("{said}");
             announce(&mut output, said);
             // everything they carried, where they fell
-            let carried = std::mem::take(&mut *inventory);
-            for stack in carried.slots.into_iter().chain([carried.cursor]).flatten() {
+            for stack in inventory.empty() {
                 commands.spawn((
                     DroppedItem::scattered(stack, body.translation, &mut chance.0),
                     Replicated,
@@ -501,6 +573,21 @@ pub(super) fn receive_respawns(
 /// What a client was last told of its player, to tell it again only when that's changed.
 #[derive(Component, Debug, Default)]
 pub(super) struct Told(Option<VitalsChanged>);
+
+/// Tells each client of the blows its player takes, to feel them, as the host feels its own.
+pub(super) fn send_bruises(
+    players: Query<(&PlayerOwner, &Bruise), Changed<Bruise>>,
+    mut struck: MessageWriter<ToClients<Struck>>,
+) {
+    for (owner, &bruise) in &players {
+        if owner.0 != ClientId::Server && bruise.count > 0 {
+            struck.write(ToClients {
+                targets: SendTargets::Single(owner.0),
+                message: Struck(bruise),
+            });
+        }
+    }
+}
 
 /// Tells each client of its player's vitals, and whether they're asleep, when they change.
 pub(super) fn send_vitals(
@@ -975,6 +1062,64 @@ mod tests {
             SpawnBed(None),
             *app.world().get::<SpawnBed>(player).unwrap()
         );
+    }
+
+    // A creature's blow at the player from 3 blocks along -x.
+    fn strike(app: &mut App, player: Entity, damage: u8) {
+        app.world_mut().write_message(Blow {
+            player,
+            damage,
+            from: FLOOR - Vec3::X * 3.0,
+            knockback: 6.0,
+            by: CreatureKind::Sheep,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn test_blows_land_once_in_a_while_through_armour_which_wears_and_knock_back() {
+        let (mut app, player) = server();
+        strike(&mut app, player, 4);
+        assert_eq!(MAX_HEALTH - 4, vitals(&app, player).health);
+        let bruise = *app.world().get::<Bruise>(player).unwrap();
+        assert_eq!(1, bruise.count);
+        // away from where it came from, and up
+        assert!(bruise.push.x > 5.0 && bruise.push.y > 0.0, "{bruise:?}");
+        // another straight after doesn't land, but one after a moment does
+        strike(&mut app, player, 4);
+        assert_eq!(MAX_HEALTH - 4, vitals(&app, player).health);
+        run(&mut app, 0.5);
+        // iron chestplate and leggings take 36% of it, and wear
+        inventory(&mut app, player).armour[1] = Some(ItemStack::new(Item::IronChestplate, 1));
+        inventory(&mut app, player).armour[2] = Some(ItemStack::new(Item::IronLeggings, 1));
+        strike(&mut app, player, 10);
+        assert_eq!(MAX_HEALTH - 4 - 6, vitals(&app, player).health);
+        let worn = inventory(&mut app, player)
+            .armour
+            .map(|s| s.map(|s| s.wear));
+        assert_eq!([None, Some(1), Some(1), None], worn);
+        // in creative, nothing lands
+        run(&mut app, 0.5);
+        app.world_mut()
+            .entity_mut(player)
+            .insert(GameMode::Creative);
+        strike(&mut app, player, 10);
+        assert_eq!(MAX_HEALTH - 10, vitals(&app, player).health);
+    }
+
+    #[test]
+    fn test_a_killing_blow_drops_the_armour_too_and_says_what_struck() {
+        let (mut app, player) = server();
+        inventory(&mut app, player).armour[0] = Some(ItemStack::new(Item::LeatherHelmet, 1));
+        messages::<CommandOutput>(&mut app);
+        app.world_mut().get_mut::<Vitals>(player).unwrap().health = 2;
+        strike(&mut app, player, 5);
+        assert!(vitals(&app, player).is_dead());
+        assert_eq!(Inventory::default(), *inventory(&mut app, player));
+        let said = messages::<CommandOutput>(&mut app);
+        assert_eq!("Player was slain by a sheep", said[0].text);
+        let mut dropped = app.world_mut().query::<&DroppedItem>();
+        assert_eq!(1, dropped.iter(app.world()).count());
     }
 
     #[test]

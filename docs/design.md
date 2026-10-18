@@ -1251,6 +1251,40 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     and the dungeon embers and gold; each now and then bright steel, ingots or a tool.
   - `PROTOCOL_VERSION` is unchanged: blocks, items and recipes travel by name. The golden
     checksum changed.
+- **Built (M3.3): swords and armour.**
+  - **Swords** are tools of kind `Sword`, one a tier (wooden, stone, copper, iron, bright
+    steel), made at a table from 2 of the material and a stick, wearing and lasting as the
+    tier's other tools do (`TIERS`). They break nothing quicker. What a thing hits for and how
+    soon it swings again is `Item::damage` and `Item::cooldown`, from the tool's kind and tier:
+
+    | Held | Damage | Swings every |
+    |---|---|---|
+    | Hand, or anything not a tool | 1 | 0.4 s |
+    | Sword | tier + 3 (wooden 4 to bright steel 8) | 0.6 s |
+    | Axe | tier + 2 | 0.9 s |
+    | Pickaxe | tier + 1 | 0.7 s |
+    | Shovel, hoe, shears | tier, at least 1 | 0.7 s |
+
+    So a sword hits hardest and most often, an axe as hard as the sword a tier below but
+    slower, and the rest are tools first.
+  - **Armour:** a helmet, chestplate, leggings and boots each of leather (M3.2's), iron and
+    bright steel, made at a table from 4, 6, 5 and 3 of the material, worn in four armour
+    slots left of the inventory screen's grid (`Inventory::armour`, slots 36 to 39 as clicks
+    and saves number them; a slot takes only its own piece, and shift-clicking a piece puts it
+    on if that piece isn't worn). Each row's `Armour` gives its piece, points and durability;
+    a point takes 4% of a blow (`ARMOUR_POINT`):
+
+    | Material | Helmet, chestplate, leggings, boots | Full set | Takes | Lasts, blows |
+    |---|---|---|---|---|
+    | Leather | 1, 3, 2, 1 | 7 | 28% | 80 |
+    | Iron | 2, 5, 4, 2 | 13 | 52% | 200 |
+    | Bright steel | 3, 7, 5, 3 | 18 | 72% | 320 |
+
+    A blow through armour is rounded and hurts at least half a heart, and every piece worn
+    wears a use with each blow that lands. Players are drawn wearing theirs, boxes a little
+    bigger than what they cover in the material's colour (`Worn`, replicated beside
+    `HeldItem`), and the HUD shows the points as a row of ten chestplates over the hearts while
+    any's worn. Sprites by `items.py`, icons by `hud.py`. Armour drops with the rest at death.
 
 ### 5.4 Underground: caves and ores
 
@@ -1376,7 +1410,26 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
     `assets/textures/hud.png`, drawn by the block-textures skill's `hud.py`.
   - `PROTOCOL_VERSION` is 7.
-  - **Later:** a two-block bed lain in, with a Leave Bed button; damage from mobs and lava; leaves dropping apples as they decay, once they do.
+  - **Later:** a two-block bed lain in, with a Leave Bed button; damage from lava; leaves dropping apples as they decay, once they do.
+- **Built (M3.3): combat** (`src/server/survival.rs`, `src/server/creatures/`, `src/hud.rs`).
+  - **Hitting (INV-4):** the client sends `HitCreature` no sooner than what's held swings again;
+    the server checks reach as before and the swing's cooldown (`Combat::ready_at`), and lands
+    it for `Item::damage`, half as much again, rounded up, while the player's coming down from a
+    jump or a fall (`Footing::is_falling`: off the ground and below the highest they've been),
+    which is a critical hit. A creature can't be hurt again for 0.5 s, and is knocked back.
+  - **Blows** at players are `Blow` messages (from creatures' attacks and missiles, §5.8): how
+    hard, from where, how hard it knocks them back and what struck. `live` lands at most one
+    every 0.5 s (`GRACE`, frames of invulnerability, so a crowd's blows at once count as one),
+    through the armour worn, wearing it, in survival only. A blow knocks the player away from
+    where it came from and up 4 blocks a second if they're standing, as the `Bruise` on them,
+    which the host's game reads from its own player and a joiner's from `Struck`, sent to it
+    alone. Movement being the client's (§4.4), the knock is applied there (`Player::knock`),
+    dying away as a creature's does.
+  - **Feeling it:** the red flash and tilt as before, the tilt away from the side the blow came
+    from and with a small shake, both off with the hurt tilt setting; and a red mark round the
+    crosshair pointing to where it came from, fading over 1.2 s.
+  - **Death** by a creature says what it was, as "Ann was slain by a sheep" would.
+  - `PROTOCOL_VERSION` is 19.
 - Day and night already exist; night brings hostile mobs (§5.8).
 - **Block light (built, M1.7).** Blocks that `emit` light (the torch, 14) light the blocks round
   them alongside sky light, so caves and nights can be lit. It loses a level a block, and the

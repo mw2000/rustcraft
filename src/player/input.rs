@@ -1,10 +1,12 @@
 use bevy::{
     camera::Camera,
     ecs::{
+        change_detection::DetectChanges,
         hierarchy::ChildOf,
         message::MessageReader,
         query::With,
         system::{Query, Res},
+        world::Ref,
     },
     input::mouse::MouseMotion,
     log::info,
@@ -17,6 +19,7 @@ use super::physics::{step, MoveInput};
 use super::{Movement, Player, PlayerLook};
 use crate::controls::{Action, Controls};
 use crate::preferences::Preferences;
+use crate::survival::Bruise;
 use crate::{
     chunks::chunk::ChunkCoordinate, client::player::LocalPlayer, game_mode::GameMode, world::World,
 };
@@ -26,17 +29,28 @@ use crate::{
 // the higher the frame rate.
 const LOOK_SENSITIVITY: f32 = 0.1_f32.to_radians();
 
+type Moving<'a> = (
+    &'a mut Transform,
+    &'a mut Player,
+    &'a PlayerLook,
+    &'a GameMode,
+    Ref<'a, Bruise>,
+);
+
 /// Moves the player by the keys held: WASD across, Space and Ctrl up and down or jumping,
 /// Shift sprinting, and F between flying and walking where the game mode allows, or whatever
-/// they're bound to.
+/// they're bound to, knocked back by the blows the server says they take.
 pub fn player_move(
     time: Res<Time>,
     world: Res<World>,
-    mut players: Query<(&mut Transform, &mut Player, &PlayerLook, &GameMode), With<LocalPlayer>>,
+    mut players: Query<Moving, With<LocalPlayer>>,
     controls: Controls,
 ) {
-    let (mut transform, mut player, look, mode) =
+    let (mut transform, mut player, look, mode, bruise) =
         players.single_mut().expect("player does not exist");
+    if bruise.is_changed() && !bruise.is_added() {
+        player.knock(bruise.push);
+    }
     if controls.just_pressed(Action::Fly) && mode.can_fly() {
         player.movement = match player.movement {
             Movement::Walk => Movement::Fly,

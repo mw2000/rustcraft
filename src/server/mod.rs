@@ -26,7 +26,8 @@ pub use clock::run_clock;
 pub use commands::Operators;
 pub use console::{Console, ConsolePlugin};
 pub use host::{host, serve};
-pub use players::HeldItem;
+pub use players::{HeldItem, Worn};
+pub use survival::Blow;
 
 use std::path::PathBuf;
 
@@ -60,6 +61,7 @@ impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
         order_leaving(app);
         app.add_message::<WorldUnopened>()
+            .add_message::<Blow>()
             .init_resource::<edits::EditAllowances>()
             .init_resource::<TimeOfDay>()
             .init_resource::<clock::ClockRate>()
@@ -179,6 +181,7 @@ impl Plugin for ServerPlugin {
                     beds::get_up,
                     beds::skip_night,
                     survival::send_vitals,
+                    survival::send_bruises,
                 )
                     .chain()
                     .after(ClientSystems::Send)

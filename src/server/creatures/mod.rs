@@ -26,6 +26,7 @@ use rand::RngExt;
 
 use super::drops::{Chance, DroppedItem};
 use super::edits::REACH_SLACK;
+use super::survival::{Combat, Footing};
 use super::HeldItem;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
@@ -33,8 +34,8 @@ use crate::collision::Aabb;
 use crate::creatures::path::{find_path, Blocks, Limits, Path, Walker};
 use crate::creatures::{Behaviour, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature};
 use crate::inventory::{Hotbar, Inventory};
-use crate::items::ItemStack;
-use crate::player::physics::{walk, Momentum, GRAVITY, MAX_STEP};
+use crate::items::{Item, ItemStack, HAND_COOLDOWN};
+use crate::player::physics::{walk, Momentum, GRAVITY, KNOCKBACK_LEFT, MAX_STEP};
 use crate::player::{Player, PlayerOwner, EYE_HEIGHT, REACH};
 use crate::protocol::HitCreature;
 use crate::save::region::Region;
@@ -77,11 +78,12 @@ const FOLLOW_NEAR: i64 = 2;
 // Seconds a creature can't be hurt again after it's hurt, which also keeps a flurry of clicks
 // from killing it at once.
 const HURT_COOLDOWN: f32 = 0.5;
+// How much harder a hit lands coming down from a jump or a fall.
+const CRITICAL: f32 = 1.5;
 // How hard a hit knocks it back, and up, in blocks a second, and how quickly that dies away,
 // as the fraction left after a second.
 const KNOCKBACK: f32 = 6.0;
 const KNOCKBACK_LIFT: f32 = 5.0;
-const KNOCKBACK_LEFT: f32 = 0.002;
 // How big a cell of the world a creature's seen by clients in, in blocks, and how many cells
 // off it can be, across, from a client's player and still be seen: within 96 to 128 blocks.
 const VIEW_CELL: f32 = 32.0;
@@ -692,21 +694,32 @@ type Hit<'a> = (
     &'a Life,
 );
 
-/// Hurts the creatures players hit, if they're alive and it's in their reach: as hard as
-/// what they hold hits, knocking it back away from them, and frightening it if it flees.
+type Hitting<'a> = (
+    &'a PlayerOwner,
+    &'a Transform,
+    &'a Vitals,
+    &'a Hotbar,
+    &'a mut Inventory,
+    &'a mut Combat,
+    &'a Footing,
+);
+
+/// Hurts the creatures players hit, if they're alive, it's in their reach and they've swung
+/// again no sooner than what they hold lets them: as hard as it hits, half as hard again
+/// coming down from a jump, knocking it back away from them, and frightening it if it flees.
 /// What's held wears as it does breaking a block. One killed drops what its kind drops.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_hits(
     mut hits: MessageReader<FromClient<HitCreature>>,
     time: Res<Time>,
-    mut players: Query<(&PlayerOwner, &Transform, &Vitals, &Hotbar, &mut Inventory)>,
+    mut players: Query<Hitting>,
     mut creatures: Query<Hit>,
     mut chance: ResMut<Chance>,
     mut commands: Commands,
 ) {
     let now = time.elapsed_secs();
     for FromClient { client_id, message } in hits.read() {
-        let Some((_, player, vitals, hotbar, mut inventory)) =
+        let Some((_, player, vitals, hotbar, mut inventory, mut combat, footing)) =
             players.iter_mut().find(|(owner, ..)| owner.0 == *client_id)
         else {
             continue;
@@ -720,11 +733,17 @@ pub(super) fn receive_hits(
         if vitals.is_dead()
             || !in_reach(player, body.translation, reach)
             || now < health.immune_until
+            || now < combat.ready_at
         {
             continue;
         }
         let held = hotbar.held(&inventory);
-        let damage = held.map_or(1, |stack| stack.item.damage());
+        let item = held.map(|stack| stack.item);
+        combat.ready_at = now + item.map_or(HAND_COOLDOWN, Item::cooldown);
+        let mut damage = item.map_or(1, Item::damage);
+        if footing.is_falling() {
+            damage = (f32::from(damage) * CRITICAL).ceil() as u8;
+        }
         if let Some(stack) = held.filter(|stack| stack.item.tool().is_some()) {
             inventory.slots[hotbar.selected] = stack.worn();
         }

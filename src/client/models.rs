@@ -1,21 +1,23 @@
 //! Drawing other players: a blocky body of boxes, breathing, its head turning smoothly the way
 //! they look and the body after it once it's turned far enough or they walk, its legs and arms
-//! swinging as they go and an arm as they break or place, holding what they hold, and their name
-//! over their head (M-A2, `client::animation`). Every player shares the meshes and materials, so
+//! swinging as they go and an arm as they break or place, holding what they hold, wearing the
+//! armour they wear (M3.3), and their name over their head (M-A2, `client::animation`). Every player shares the meshes and materials, so
 //! Bevy draws them batched.
 
 use std::f32::consts::TAU;
 use std::hash::{Hash, Hasher};
 
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use super::animation::{self, arm_swing, breath, ease, ease_angle, stride_swing, wrap};
 use super::drops::DropLooks;
 use super::others::{move_seen, ArmSwing, SeenPlayer};
+use crate::items::{Item, Piece};
 use crate::player::name::PlayerName;
 use crate::player::PlayerLook;
-use crate::server::HeldItem;
+use crate::server::{HeldItem, Worn};
 
 // The body's parts, in blocks, two blocks tall in all as the player is: legs and arms a
 // quarter of a block square, the head half a block across.
@@ -44,6 +46,8 @@ const SKIN: Color = Color::srgb(0.86, 0.66, 0.52);
 const HAIR: Color = Color::srgb(0.27, 0.18, 0.11);
 const EYES: Color = Color::srgb(0.1, 0.1, 0.16);
 const TROUSERS: Color = Color::srgb(0.22, 0.24, 0.45);
+// How much bigger than what it covers armour's drawn, in blocks each way.
+const ARMOUR_OVER: f32 = 0.04;
 // One for each player by their name, to tell them apart.
 const SHIRTS: [Color; 6] = [
     Color::srgb(0.16, 0.55, 0.58),
@@ -61,7 +65,7 @@ impl Plugin for DrawPlayersPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, make_looks)
             .add_observer(draw_player)
-            .add_systems(Update, (walk.after(move_seen), hold))
+            .add_systems(Update, (walk.after(move_seen), hold, wear))
             // where the camera's moved to this frame
             .add_systems(PostUpdate, place_labels.after(TransformSystems::Propagate));
     }
@@ -80,6 +84,13 @@ struct PlayerLooks {
     eyes: Handle<StandardMaterial>,
     trousers: Handle<StandardMaterial>,
     shirts: Vec<Handle<StandardMaterial>>,
+    // each piece of armour's boxes, about what they cover, and each piece's colour
+    helmet: Handle<Mesh>,
+    chestplate: Handle<Mesh>,
+    sleeve: Handle<Mesh>,
+    legging: Handle<Mesh>,
+    boot: Handle<Mesh>,
+    armour: HashMap<Item, Handle<StandardMaterial>>,
 }
 
 // A player's parts that move, where they are in their stride, which way their body's shown
@@ -92,6 +103,8 @@ struct Model {
     arms: [Entity; 2],
     legs: [Entity; 2],
     held: Entity,
+    // the boxes of each piece of armour, in the order of the armour slots
+    armour: [Vec<Entity>; 4],
     stride: f32,
     swing: f32,
     last: Vec3,
@@ -117,6 +130,24 @@ fn make_looks(
     let head = cuboid(Vec3::splat(HEAD), Vec3::Y * HEAD / 2.0);
     let hair = cuboid(Vec3::new(HEAD, 0.12, HEAD) * 1.04, Vec3::Y * (HEAD - 0.05));
     let eye = cuboid(Vec3::new(0.08, 0.06, 0.02), Vec3::ZERO);
+    let over = Vec3::splat(ARMOUR_OVER * 2.0);
+    let helmet = cuboid(
+        Vec3::new(HEAD, HEAD * 0.6, HEAD) + over,
+        Vec3::Y * HEAD * 0.72,
+    );
+    let chestplate = cuboid(TORSO + over, Vec3::Y * TORSO.y / 2.0);
+    let sleeve = cuboid(
+        Vec3::new(LIMB.x, LIMB.y * 0.4, LIMB.z) + over,
+        Vec3::Y * -LIMB.y * 0.2,
+    );
+    let legging = cuboid(
+        Vec3::new(LIMB.x, LIMB.y * 0.6, LIMB.z) + over,
+        Vec3::Y * -LIMB.y * 0.3,
+    );
+    let boot = cuboid(
+        Vec3::new(LIMB.x, LIMB.y * 0.3, LIMB.z) + over * 1.5,
+        Vec3::Y * -LIMB.y * 0.85,
+    );
     let mut plain = |colour: Color| {
         materials.add(StandardMaterial {
             base_color: colour,
@@ -135,6 +166,17 @@ fn make_looks(
         eyes: plain(EYES),
         trousers: plain(TROUSERS),
         shirts: SHIRTS.map(&mut plain).into(),
+        helmet,
+        chestplate,
+        sleeve,
+        legging,
+        boot,
+        armour: Item::all()
+            .filter_map(|item| {
+                let [r, g, b] = item.armour()?.colour;
+                Some((item, plain(Color::srgb(r, g, b))))
+            })
+            .collect(),
     };
     commands.insert_resource(looks);
 }
@@ -186,6 +228,27 @@ fn draw_player(
         let at = Vec3::new(side * 0.11, 0.3, -HEAD / 2.0);
         on_head(&looks.eye, &looks.eyes, at);
     }
+    // armour over what it covers, hidden until it's worn
+    let mut armour = |mesh: &Handle<Mesh>, on: Entity| {
+        commands
+            .spawn((
+                Mesh3d(mesh.clone()),
+                Transform::default(),
+                Visibility::Hidden,
+                ChildOf(on),
+            ))
+            .id()
+    };
+    let armour = [
+        vec![armour(&looks.helmet, head)],
+        [torso, arms[0], arms[1]]
+            .into_iter()
+            .zip([&looks.chestplate, &looks.sleeve, &looks.sleeve])
+            .map(|(on, mesh)| armour(mesh, on))
+            .collect(),
+        legs.map(|leg| armour(&looks.legging, leg)).into(),
+        legs.map(|leg| armour(&looks.boot, leg)).into(),
+    ];
     // in the right hand, a little forward of it
     let held = commands
         .spawn((
@@ -200,6 +263,7 @@ fn draw_player(
         arms,
         legs,
         held,
+        armour,
         stride: 0.0,
         swing: 0.0,
         last: Vec3::ZERO,
@@ -304,6 +368,35 @@ fn hold(
             }
             None => {
                 hand.insert(Visibility::Hidden);
+            }
+        }
+    }
+}
+
+// Shows the armour each player wears as it changes, in its material's colour.
+fn wear(
+    models: Query<(&SeenPlayer, Ref<Model>)>,
+    worn: Query<Ref<Worn>>,
+    looks: Res<PlayerLooks>,
+    mut commands: Commands,
+) {
+    for (seen, model) in &models {
+        let Ok(worn) = worn.get(seen.0) else {
+            continue;
+        };
+        if !model.is_added() && !worn.is_changed() {
+            continue;
+        }
+        for (piece, boxes) in Piece::ALL.into_iter().zip(&model.armour) {
+            let material = worn.0[piece.slot()].and_then(|item| looks.armour.get(&item));
+            for &part in boxes {
+                let mut part = commands.entity(part);
+                match material {
+                    Some(material) => {
+                        part.insert((MeshMaterial3d(material.clone()), Visibility::Inherited))
+                    }
+                    None => part.insert(Visibility::Hidden),
+                };
             }
         }
     }

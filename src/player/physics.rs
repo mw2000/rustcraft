@@ -27,6 +27,8 @@ pub const MAX_STEP: f32 = 0.1;
 const STEP_HEIGHT: f32 = 0.6;
 // Blocks a second up and down a ladder or vines.
 const CLIMB_SPEED: f32 = 3.0;
+/// How quickly a knock back dies away, as the fraction of it left after a second.
+pub const KNOCKBACK_LEFT: f32 = 0.002;
 
 /// What a player asks of a step of movement, from their keys.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -97,11 +99,13 @@ fn walk_player(
     }
     // where the body faces, not the eyes, so looking down doesn't slow it
     let wanted = Quat::from_rotation_y(look.yaw) * input.across.normalize_or_zero() * speed;
+    let pushed = player.knockback;
+    player.knockback *= KNOCKBACK_LEFT.powf(dt);
     walk(
         position,
         &mut player.momentum,
         BODY,
-        wanted,
+        wanted + pushed,
         input.jump,
         dt,
         block,

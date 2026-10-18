@@ -11,7 +11,7 @@ use super::furnace::{
 };
 use super::icons::{load_icons, stack_view, ItemIcons, StackView};
 use super::recipes::{describe, show_recipes, spawn_recipes, CraftingStation, RecipeCard};
-use super::{Click, Inventory, HOTBAR_SLOTS, SLOTS};
+use super::{Click, Inventory, ARMOUR_SLOTS, HOTBAR_SLOTS, SLOTS};
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
 use crate::menu::{font, free_cursor, GameState, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
@@ -29,10 +29,12 @@ const RECIPES_GAP: f32 = 24.0;
 const CARRIED_OFFSET: f32 = 16.0;
 
 const HINT: &str = "Right click takes half a stack or puts down one, and shift-click moves a \
-                    stack across or crafts all you can";
+                    stack across, puts armour on or crafts all you can";
+// What each armour slot's for, shown as it's hovered empty.
+const ARMOUR_NAMES: [&str; 4] = ["Helmet", "Chestplate", "Leggings", "Boots"];
 
 /// In survival, the inventory (E) is the inventory screen: the main inventory's 27 slots over
-/// the hotbar's 9, as in Minecraft, beside the recipes that can be made by hand, or at the
+/// the hotbar's 9, as in Minecraft, the four armour slots to their left, beside the recipes that can be made by hand, or at the
 /// crafting table it was opened at, or beside the furnace's slots if it was opened at one, or
 /// under a chest's if it was opened at one of those.
 /// Clicks on the slots ask the server to move stacks about, and the stack picked up follows the
@@ -120,6 +122,18 @@ fn spawn_screen(
                 .with_children(|row| {
                     row.spawn(Node {
                         flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(SLOT_GAP),
+                        align_self: AlignSelf::End,
+                        margin: UiRect::right(Val::Px(HOTBAR_GAP - RECIPES_GAP)),
+                        ..default()
+                    })
+                    .with_children(|armour| {
+                        for slot in ARMOUR_SLOTS {
+                            spawn_slot(armour, &icons, slot);
+                        }
+                    });
+                    row.spawn(Node {
+                        flex_direction: FlexDirection::Column,
                         ..default()
                     })
                     .with_children(|slots| {
@@ -163,11 +177,16 @@ fn spawn_slots(
 ) {
     screen.spawn(slot_grid(gap)).with_children(|grid| {
         for slot in slots {
-            grid.spawn((Slot(slot), slot_button()))
-                .with_child(stack_view(icons, StackView::Slot(slot)))
-                .observe(click_slot);
+            spawn_slot(grid, icons, slot);
         }
     });
+}
+
+fn spawn_slot(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, slot: usize) {
+    parent
+        .spawn((Slot(slot), slot_button()))
+        .with_child(stack_view(icons, StackView::Slot(slot)))
+        .observe(click_slot);
 }
 
 /// A grid of slots nine to a row, as wide as the hotbar, `gap` pixels below what's above it.
@@ -276,13 +295,15 @@ fn name_hovered_item(
     let slot = slots.iter().find(|(_, hovered)| hovered.get());
     let in_container = container_slots.iter().find(|(_, hovered)| hovered.get());
     let stack = slot
-        .and_then(|(slot, _)| inventory.slots[slot.0])
+        .and_then(|(slot, _)| inventory.get(slot.0))
         .or_else(|| in_container.and_then(|(slot, _)| container_stack(&view, slot.0)));
     let recipe = recipes.iter().find(|(_, hovered)| hovered.get());
-    let text = match (stack, recipe) {
-        (Some(stack), _) => stack.item.display_name(),
-        (None, Some((card, _))) => describe(card.0),
-        (None, None) => HINT.into(),
+    let armour = slot.and_then(|(slot, _)| slot.0.checked_sub(SLOTS));
+    let text = match (stack, recipe, armour) {
+        (Some(stack), ..) => stack.item.display_name(),
+        (None, Some((card, _)), _) => describe(card.0),
+        (None, None, Some(piece)) => ARMOUR_NAMES[piece].into(),
+        (None, None, None) => HINT.into(),
     };
     if let Ok(mut name) = name.single_mut() {
         name.0 = text;

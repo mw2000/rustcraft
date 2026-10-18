@@ -1,7 +1,11 @@
 //! What survival shows of the local player (§5.5): hearts and the food bar over the hotbar, with
-//! bubbles over the food while they're short of breath, a red flash and a tilt of the view when
-//! they're hurt, the screen fading as they sleep, and the death screen. And eating, by holding
+//! bubbles over the food while they're short of breath and the armour they wear over the
+//! hearts, a red flash and a tilt of the view when they're hurt, shaking as a blow lands and a
+//! mark round the crosshair pointing where it came from (M3.3), the screen fading as they
+//! sleep, and the death screen. And eating, by holding
 //! right click with food selected, which the server times. And in any mode, the crosshair.
+
+use std::f32::consts::{PI, TAU};
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
@@ -17,18 +21,21 @@ use crate::inventory::Inventory;
 use crate::menu::widgets::{column, first, text_button, WIDE};
 use crate::menu::{font, free_cursor, GameState, InWorld, TEXT_SHADOW};
 use crate::player::input::follow_look;
+use crate::player::PlayerLook;
 use crate::preferences::{Crosshair, Preferences};
 use crate::protocol::{Eat, Respawn};
 use crate::session;
-use crate::survival::{Asleep, Vitals, MAX_AIR};
+use crate::survival::{Asleep, Bruise, Vitals, MAX_AIR};
 use crate::world::World;
 
 // `hud.png`'s 9-pixel icons, drawn twice the size, in its order: a heart, half of one and an
-// empty one, the same for food, then a bubble.
+// empty one, the same for food, then a bubble, then armour, whole, half and none.
 const ICON: f32 = 18.0;
 const HEART: usize = 0;
 const FOOD: usize = 3;
 const BUBBLE: usize = 6;
+const ARMOUR: usize = 7;
+const ICON_COUNT: u32 = 10;
 // Ten icons to a bar, each two points.
 const ICONS: usize = 10;
 // As wide as the hotbar, whose edges the bars line up with, and how far over it they sit.
@@ -40,6 +47,14 @@ const BARS_GAP: f32 = 4.0;
 const HURT_SECONDS: f32 = 0.4;
 const HURT_RED: f32 = 0.25;
 const HURT_TILT: f32 = 0.06;
+// A blow shakes the view this far, in radians, this many times a second, as it tilts.
+const BLOW_SHAKE: f32 = 0.015;
+const SHAKE_RATE: f32 = 45.0;
+// The mark pointing where a blow came from: how long it shows, fading, and its size and how
+// far it is from the middle of the screen, in pixels.
+const BLOW_MARK_SECONDS: f32 = 1.2;
+const BLOW_MARK: Vec2 = Vec2::new(36.0, 8.0);
+const BLOW_MARK_RADIUS: f32 = 70.0;
 // How long the screen takes to fade to black falling asleep, and back waking, in seconds.
 const FALL_ASLEEP_SECONDS: f32 = 1.5;
 const WAKE_SECONDS: f32 = 0.3;
@@ -88,10 +103,15 @@ enum Bar {
     Health,
     Food,
     Air,
+    Armour,
 }
 
 #[derive(Component)]
 struct HurtFlash;
+
+/// What turns to point the mark round the crosshair where a blow came from.
+#[derive(Component)]
+struct BlowMark;
 
 #[derive(Component)]
 struct SleepFade;
@@ -111,7 +131,7 @@ fn spawn_hud(
     let image = assets.load("textures/hud.png");
     let layout = layouts.add(TextureAtlasLayout::from_grid(
         UVec2::splat(9),
-        7,
+        ICON_COUNT,
         1,
         None,
         None,
@@ -180,7 +200,14 @@ fn spawn_hud(
                 ..default()
             })
             .with_children(|bars| {
-                bars.spawn(row(Bar::Health, false));
+                bars.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                })
+                .with_children(|left| {
+                    left.spawn(row(Bar::Armour, false));
+                    left.spawn(row(Bar::Health, false));
+                });
                 bars.spawn(Node {
                     flex_direction: FlexDirection::Column,
                     ..default()
@@ -197,6 +224,29 @@ fn spawn_hud(
         full_screen(),
         BackgroundColor(Color::NONE),
         Pickable::IGNORE,
+    ));
+    // a point at the middle of the screen, turned to the blow, with the mark above it
+    commands.spawn((
+        InWorld,
+        full_screen(),
+        Pickable::IGNORE,
+        children![(
+            BlowMark,
+            Node::default(),
+            UiTransform::default(),
+            Visibility::Hidden,
+            children![(
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(-BLOW_MARK.x / 2.0),
+                    top: Val::Px(-BLOW_MARK_RADIUS - BLOW_MARK.y / 2.0),
+                    width: Val::Px(BLOW_MARK.x),
+                    height: Val::Px(BLOW_MARK.y),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            )],
+        )],
     ));
     commands
         .spawn((
@@ -294,20 +344,23 @@ fn show_crosshair(
     }
 }
 
-// Each icon as the local player's vitals have it, and the bars only in survival and while
-// the inventory screen, which hides the hotbar, is closed.
+// Each icon as the local player's vitals and armour have it, and the bars only in survival
+// and while the inventory screen, which hides the hotbar, is closed.
+#[allow(clippy::type_complexity)]
 fn draw_bars(
-    player: Query<(Ref<Vitals>, Ref<GameMode>), With<LocalPlayer>>,
+    player: Query<(Ref<Vitals>, Ref<GameMode>, Ref<Inventory>), With<LocalPlayer>>,
     state: Res<State<GameState>>,
     mut bars: Query<&mut Visibility, With<Bars>>,
     mut icons: Query<(&Icon, &mut ImageNode, &mut Visibility), Without<Bars>>,
 ) {
-    let Ok((vitals, mode)) = player.single() else {
+    let Ok((vitals, mode, inventory)) = player.single() else {
         return;
     };
-    if !vitals.is_changed() && !mode.is_changed() && !state.is_changed() {
+    let changed = vitals.is_changed() || mode.is_changed() || inventory.is_changed();
+    if !changed && !state.is_changed() {
         return;
     }
+    let armour = inventory.armour_points();
     let shown = *mode == GameMode::Survival && *state.get() != GameState::Inventory;
     for mut visibility in &mut bars {
         *visibility = if shown {
@@ -325,6 +378,8 @@ fn draw_bars(
                 BUBBLE,
                 vitals.air < MAX_AIR && icon.nth < usize::from(vitals.air),
             ),
+            // only while some's worn
+            Bar::Armour => (ARMOUR + halves(armour, icon.nth), armour > 0),
         };
         if let Some(atlas) = &mut image.texture_atlas {
             atlas.index = index;
@@ -346,33 +401,86 @@ fn halves(points: u8, nth: usize) -> usize {
     }
 }
 
-// Flashes the screen red and tilts the view for a moment when the local player's hurt, unless
-// the tilt's turned off.
+/// How the local player's last hurt is being shown: how much longer the flash and tilt last,
+/// which way the view tilts, and how much longer the mark of a blow shows and which way it
+/// points, as an angle from straight ahead, clockwise.
+#[derive(Default)]
+struct Hurting {
+    left: f32,
+    tilt: f32,
+    shaking: bool,
+    mark_left: f32,
+    mark: f32,
+}
+
+// Flashes the screen red and tilts the view for a moment when the local player's hurt, shaking
+// it if it was a blow and tilting away from it, unless the tilt's turned off, and points the
+// mark round the crosshair where a blow came from.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn flash_hurt(
     time: Res<Time>,
     preferences: Res<Preferences>,
-    player: Query<&Vitals, With<LocalPlayer>>,
+    player: Query<(&Vitals, Ref<Bruise>, &Transform, &PlayerLook), With<LocalPlayer>>,
     mut flash: Query<&mut BackgroundColor, With<HurtFlash>>,
-    mut cameras: Query<&mut Transform, With<Camera3d>>,
+    mut cameras: Query<&mut Transform, (With<Camera3d>, Without<LocalPlayer>)>,
+    mut marks: Query<(&mut UiTransform, &mut Visibility, &Children), With<BlowMark>>,
+    mut colours: Query<&mut BackgroundColor, Without<HurtFlash>>,
     mut last_health: Local<Option<u8>>,
-    mut left: Local<f32>,
+    mut hurting: Local<Hurting>,
 ) {
-    let Ok(vitals) = player.single() else {
+    let Ok((vitals, bruise, body, look)) = player.single() else {
         return;
     };
+    let dt = time.delta_secs();
     if last_health.is_some_and(|was| vitals.health < was) {
-        *left = HURT_SECONDS;
+        *hurting = Hurting {
+            left: HURT_SECONDS,
+            tilt: 1.0,
+            shaking: false,
+            ..*hurting
+        };
     }
     *last_health = Some(vitals.health);
-    *left = (*left - time.delta_secs()).max(0.0);
-    let hurt = *left / HURT_SECONDS;
+    if bruise.is_changed() && !bruise.is_added() {
+        let towards = bruise.from - body.translation;
+        let yaw = (-towards.x).atan2(-towards.z);
+        let aside = (yaw - look.yaw + PI).rem_euclid(TAU) - PI;
+        hurting.mark = -aside;
+        hurting.mark_left = BLOW_MARK_SECONDS;
+        // away from the side it came from, and shaken
+        hurting.tilt = if aside > 0.0 { -1.0 } else { 1.0 };
+        hurting.shaking = true;
+    }
+    hurting.left = (hurting.left - dt).max(0.0);
+    hurting.mark_left = (hurting.mark_left - dt).max(0.0);
+    let hurt = hurting.left / HURT_SECONDS;
     for mut background in &mut flash {
         background.0 = Color::srgba(0.8, 0.0, 0.0, HURT_RED * hurt);
     }
     if hurt > 0.0 && preferences.accessibility.hurt_tilt {
+        let shake = if hurting.shaking {
+            BLOW_SHAKE * hurt * (time.elapsed_secs() * SHAKE_RATE).sin()
+        } else {
+            0.0
+        };
         // after the camera's turned the way the player looks, which it is each frame afresh
         for mut camera in &mut cameras {
-            camera.rotation *= Quat::from_rotation_z(HURT_TILT * hurt);
+            camera.rotation *= Quat::from_rotation_z(HURT_TILT * hurt * hurting.tilt)
+                * Quat::from_rotation_x(shake);
+        }
+    }
+    let shown = hurting.mark_left / BLOW_MARK_SECONDS;
+    for (mut turned, mut visibility, children) in &mut marks {
+        visibility.set_if_neq(if shown > 0.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+        turned.rotation = Rot2::radians(hurting.mark);
+        for &child in children {
+            if let Ok(mut colour) = colours.get_mut(child) {
+                colour.0 = Color::srgba(0.85, 0.08, 0.05, 0.85 * shown);
+            }
         }
     }
 }

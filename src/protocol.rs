@@ -14,7 +14,8 @@
 //! Creatures are replicated to the clients whose players are near them (M3.1): their kind,
 //! their pose, which the server sets 20 times a second as they move, how many times they've
 //! been hurt, and whether they're young, shorn or in love. Clients hit them with `HitCreature`
-//! and feed or shear them with `UseCreature` (M3.2).
+//! and feed or shear them with `UseCreature` (M3.2). A client's told of the blows its player
+//! takes as `Struck`, and players' armour is replicated with what they hold (M3.3).
 
 use std::time::Duration;
 
@@ -42,15 +43,15 @@ use crate::save::region::{local_block, local_index};
 use crate::save::PlayerState;
 use crate::server::creatures::Whereabouts;
 use crate::server::drops::DroppedItem;
-use crate::server::HeldItem;
-use crate::survival::Vitals;
+use crate::server::{HeldItem, Worn};
+use crate::survival::{Bruise, Vitals};
 
 /// The port a world is hosted on unless another's asked for.
 pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -128,7 +129,10 @@ impl Plugin for ProtocolPlugin {
             .add_mapped_client_message::<UseCreature>(Channel::Ordered)
             // unreliable, as a swing missed is soon followed by another
             .add_client_message::<Swing>(Channel::Unreliable)
-            .add_mapped_server_message::<PlayerSwung>(Channel::Unreliable);
+            .add_mapped_server_message::<PlayerSwung>(Channel::Unreliable)
+            // in order, as a blow's knock is felt after the one before
+            .add_server_message::<Struck>(Channel::Ordered)
+            .replicate::<Worn>();
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -533,8 +537,13 @@ pub struct VitalsChanged {
     pub asleep: bool,
 }
 
+/// A blow a client's player has taken, for it to feel: knocked back, and shown where it came
+/// from. The host's needs no telling, as its player is the server's own.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Struck(pub Bruise);
+
 /// A player hitting the creature `creature` with what they hold, which the server checks is in
-/// their reach.
+/// their reach, and that they've swung again no sooner than it lets them.
 #[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HitCreature {
     #[entities]

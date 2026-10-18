@@ -20,20 +20,25 @@ use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::block::BlockType;
 use crate::game_mode::GameMode;
-use crate::items::{take, Item, ItemStack};
+use crate::items::{take, Item, ItemStack, ARMOUR_POINT};
 
 /// How many slots an inventory has: the hotbar's, then the main inventory's.
 pub const SLOTS: usize = 36;
+/// The armour slots, after the rest as clicks and saves number them: helmet, chestplate,
+/// leggings and boots.
+pub const ARMOUR_SLOTS: Range<usize> = SLOTS..SLOTS + 4;
 /// How many of them are the hotbar, along the bottom of the screen.
 pub const HOTBAR_SLOTS: usize = 9;
 const HOTBAR: Range<usize> = 0..HOTBAR_SLOTS;
 const MAIN: Range<usize> = HOTBAR_SLOTS..SLOTS;
 
-/// The items a player carries, in slots 0 to 8 for the hotbar and 9 to 35 for the rest, and
-/// the stack they've picked up in the inventory screen, which follows the mouse.
+/// The items a player carries, in slots 0 to 8 for the hotbar and 9 to 35 for the rest, the
+/// armour they wear, and the stack they've picked up in the inventory screen, which follows the
+/// mouse.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Inventory {
     pub slots: [Option<ItemStack>; SLOTS],
+    pub armour: [Option<ItemStack>; 4],
     pub cursor: Option<ItemStack>,
 }
 
@@ -41,6 +46,7 @@ impl Default for Inventory {
     fn default() -> Self {
         Self {
             slots: [None; SLOTS],
+            armour: [None; 4],
             cursor: None,
         }
     }
@@ -143,8 +149,27 @@ impl Inventory {
         take(held, if all { u8::MAX } else { 1 })
     }
 
+    /// The stack in `slot`, an armour slot's past the rest, if there's one.
+    pub fn get(&self, slot: usize) -> Option<ItemStack> {
+        match slot.checked_sub(SLOTS) {
+            None => self.slots[slot],
+            Some(piece) => self.armour.get(piece).copied().flatten(),
+        }
+    }
+
     /// Does what clicking `slot` in the inventory screen does. A slot there isn't is ignored.
+    /// An armour slot takes only its own piece, and shift-clicking armour puts it on if that
+    /// piece isn't worn.
     pub fn click(&mut self, slot: usize, click: Click) {
+        if ARMOUR_SLOTS.contains(&slot) {
+            let worn = &mut self.armour[slot - SLOTS];
+            if click == Click::Shift {
+                *worn = worn.and_then(|stack| add_to(&mut self.slots, stack));
+            } else if self.cursor.is_none_or(|stack| fits(stack, slot - SLOTS)) {
+                std::mem::swap(worn, &mut self.cursor);
+            }
+            return;
+        }
         if slot >= SLOTS {
             return;
         }
@@ -155,8 +180,51 @@ impl Inventory {
         let Some(stack) = self.slots[slot].take() else {
             return;
         };
+        if let Some(piece) = stack.item.armour().map(|armour| armour.piece.slot()) {
+            if self.armour[piece].is_none() {
+                self.armour[piece] = Some(stack);
+                return;
+            }
+        }
         let to = if HOTBAR.contains(&slot) { MAIN } else { HOTBAR };
         self.slots[slot] = add_to(&mut self.slots[to], stack);
+    }
+
+    /// How much of a blow the armour worn takes, from 0 for none.
+    pub fn protection(&self) -> f32 {
+        f32::from(self.armour_points()) * ARMOUR_POINT
+    }
+
+    /// How much a blow of `damage` hurts through the armour worn, rounded, and at least half a
+    /// heart.
+    pub fn blunt(&self, damage: u8) -> u8 {
+        let through = f32::from(damage) * (1.0 - self.protection());
+        (through.round() as u8).clamp(1, damage.max(1))
+    }
+
+    /// The points of armour worn, out of the 20 the HUD's bar shows.
+    pub fn armour_points(&self) -> u8 {
+        let worn = self.armour.iter().flatten();
+        worn.filter_map(|stack| stack.item.armour())
+            .map(|armour| armour.points)
+            .sum()
+    }
+
+    /// Wears each piece of armour worn by a blow taken, which breaks any that was its last.
+    pub fn wear_armour(&mut self) {
+        for worn in &mut self.armour {
+            *worn = worn.and_then(ItemStack::worn);
+        }
+    }
+
+    /// Everything it holds, taking it all away: its slots, its armour and the cursor's.
+    pub fn empty(&mut self) -> impl Iterator<Item = ItemStack> {
+        let Self {
+            slots,
+            armour,
+            cursor,
+        } = std::mem::take(self);
+        slots.into_iter().chain(armour).chain([cursor]).flatten()
     }
 
     /// Puts the stack on the cursor back in the inventory, as closing the screen does, and
@@ -165,6 +233,14 @@ impl Inventory {
         let stack = self.cursor.take()?;
         self.add(stack)
     }
+}
+
+// Whether `stack` is the piece of armour worn in armour slot `piece`.
+fn fits(stack: ItemStack, piece: usize) -> bool {
+    stack
+        .item
+        .armour()
+        .is_some_and(|armour| armour.piece.slot() == piece)
 }
 
 /// Puts `stack` in `slots`, topping up the stacks of it there are first and then filling the
@@ -215,7 +291,7 @@ impl Serialize for Inventory {
         if serializer.is_human_readable() {
             SavedInventory::from(self.clone()).serialize(serializer)
         } else {
-            (&self.slots[..], self.cursor).serialize(serializer)
+            (&self.slots[..], self.armour, self.cursor).serialize(serializer)
         }
     }
 }
@@ -226,15 +302,20 @@ impl<'de> Deserialize<'de> for Inventory {
             let saved = SavedInventory::deserialize(deserializer)?;
             return saved.try_into().map_err(D::Error::custom);
         }
-        let (slots, cursor) = <(Vec<Option<ItemStack>>, _)>::deserialize(deserializer)?;
+        let (slots, armour, cursor) = <(Vec<Option<ItemStack>>, _, _)>::deserialize(deserializer)?;
         let slots = slots
             .try_into()
             .map_err(|_| D::Error::custom("an inventory has the wrong number of slots"))?;
-        Ok(Self { slots, cursor })
+        Ok(Self {
+            slots,
+            armour,
+            cursor,
+        })
     }
 }
 
-// How an inventory is saved: the stacks in it, each with its slot, by item name (§4.1).
+// How an inventory is saved: the stacks in it, each with its slot, armour's past the rest, by
+// item name (§4.1).
 #[derive(Serialize, Deserialize)]
 struct SavedInventory {
     slots: Vec<SavedSlot>,
@@ -251,7 +332,7 @@ struct SavedSlot {
 
 impl From<Inventory> for SavedInventory {
     fn from(inventory: Inventory) -> Self {
-        let slots = inventory.slots.iter().enumerate();
+        let slots = inventory.slots.iter().chain(&inventory.armour).enumerate();
         Self {
             slots: slots
                 .filter_map(|(slot, stack)| stack.map(|stack| SavedSlot { slot, stack }))
@@ -270,10 +351,17 @@ impl TryFrom<SavedInventory> for Inventory {
             ..default()
         };
         for SavedSlot { slot, stack } in saved.slots {
-            let held = inventory
-                .slots
-                .get_mut(slot)
-                .ok_or_else(|| format!("the inventory has no slot {slot}"))?;
+            let held = match slot.checked_sub(SLOTS) {
+                None => inventory.slots.get_mut(slot),
+                Some(piece) => inventory.armour.get_mut(piece),
+            }
+            .ok_or_else(|| format!("the inventory has no slot {slot}"))?;
+            if ARMOUR_SLOTS.contains(&slot) && !fits(stack, slot - SLOTS) {
+                return Err(format!(
+                    "{} can't be worn in slot {slot}",
+                    stack.item.name()
+                ));
+            }
             if held.replace(stack).is_some() {
                 return Err(format!("slot {slot} is saved twice"));
             }
@@ -336,7 +424,7 @@ impl TryFrom<SavedHotbar> for Hotbar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Click, Inventory, HOTBAR_SLOTS, SLOTS};
+    use super::{Click, Inventory, ARMOUR_SLOTS, HOTBAR_SLOTS, SLOTS};
     use crate::block::BlockType;
     use crate::game_mode::GameMode;
     use crate::items::{Item, ItemStack};
@@ -377,7 +465,7 @@ mod tests {
     fn test_a_full_inventory_hands_back_what_doesnt_fit() {
         let mut inventory = Inventory {
             slots: [stack(SAND, 64); SLOTS],
-            cursor: None,
+            ..Inventory::default()
         };
         inventory.slots[30] = stack(DIRT, 62);
         assert!(inventory.has_room_for(DIRT));
@@ -551,5 +639,64 @@ mod tests {
         // and as they're sent to clients
         let bytes = postcard::to_stdvec(&inventory).unwrap();
         assert_eq!(inventory, postcard::from_bytes(&bytes).unwrap());
+    }
+
+    #[test]
+    fn test_armour_goes_on_only_in_its_own_slot_and_comes_off_into_the_inventory() {
+        let helmet = stack(Item::IronHelmet, 1);
+        let boots = stack(Item::LeatherBoots, 1);
+        let mut inventory = Inventory::default();
+        inventory.slots[3] = helmet;
+        inventory.slots[12] = boots;
+        // boots on the cursor go nowhere but the boots' slot
+        inventory.click(12, Click::Left);
+        inventory.click(ARMOUR_SLOTS.start, Click::Left);
+        assert_eq!((None, boots), (inventory.armour[0], inventory.cursor));
+        inventory.click(ARMOUR_SLOTS.end - 1, Click::Left);
+        assert_eq!((boots, None), (inventory.armour[3], inventory.cursor));
+        // nor does dirt go on at all
+        inventory.cursor = stack(DIRT, 4);
+        inventory.click(ARMOUR_SLOTS.start, Click::Left);
+        assert_eq!(None, inventory.armour[0]);
+        inventory.cursor = None;
+        // shift-clicking puts armour on, and takes it off again into the inventory
+        inventory.click(3, Click::Shift);
+        assert_eq!((None, helmet), (inventory.slots[3], inventory.armour[0]));
+        assert_eq!(2 + 1, inventory.armour_points());
+        assert!((inventory.protection() - 0.12).abs() < 1e-6);
+        // which takes an eighth off a blow, rounded
+        assert_eq!(
+            (7, 4, 1),
+            (inventory.blunt(8), inventory.blunt(4), inventory.blunt(1))
+        );
+        inventory.click(ARMOUR_SLOTS.start, Click::Shift);
+        assert_eq!((helmet, None), (inventory.slots[0], inventory.armour[0]));
+        assert_eq!(helmet, inventory.get(0));
+        assert_eq!(boots, inventory.get(ARMOUR_SLOTS.end - 1));
+        // a second helmet shift-clicked with one on goes across as anything does
+        inventory.click(ARMOUR_SLOTS.end - 1, Click::Shift);
+        inventory.armour[0] = helmet;
+        inventory.click(0, Click::Shift);
+        assert_eq!(helmet, inventory.slots[HOTBAR_SLOTS]);
+    }
+
+    #[test]
+    fn test_armour_wears_with_blows_and_round_trips_in_its_slots() {
+        let mut inventory = Inventory::default();
+        inventory.armour[1] = stack(Item::LeatherChestplate, 1);
+        inventory.wear_armour();
+        assert_eq!(1, inventory.armour[1].unwrap().wear);
+        let text = toml::to_string(&inventory).unwrap();
+        assert!(text.contains("slot = 37"), "{text}");
+        assert_eq!(inventory, toml::from_str(&text).unwrap());
+        let bytes = postcard::to_stdvec(&inventory).unwrap();
+        assert_eq!(inventory, postcard::from_bytes(&bytes).unwrap());
+        // and nothing else is worn there
+        let wrong = text.replace("slot = 37", "slot = 36");
+        assert!(toml::from_str::<Inventory>(&wrong).is_err());
+        // emptied, as dying does, it all comes out
+        inventory.slots[0] = stack(DIRT, 3);
+        assert_eq!(2, inventory.empty().count());
+        assert_eq!(Inventory::default(), inventory);
     }
 }

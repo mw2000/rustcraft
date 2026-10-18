@@ -104,9 +104,11 @@ pub(super) fn receive_inventory_requests(
 }
 
 // Shift-clicking a stack in the inventory with a container open moves it into the container,
-// if it goes there, and otherwise between the hotbar and the main inventory as ever.
+// if it goes there, and otherwise between the hotbar and the main inventory as ever. Armour
+// worn comes off into the inventory, as it does with nothing open.
 fn shift_into(container: Option<&mut Container>, inventory: &mut Inventory, slot: usize) {
     let Some(stack) = inventory.slots.get_mut(slot).and_then(Option::take) else {
+        inventory.click(slot, Click::Shift);
         return;
     };
     let left = container.map_or(Some(stack), |container| container.add(stack));

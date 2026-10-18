@@ -89,8 +89,10 @@ const PLANKS: Item = Item::Block(BlockType::Planks);
 const COBBLESTONE: Item = Item::Block(BlockType::Cobblestone);
 const SAND: Item = Item::Block(BlockType::Sand);
 
-// A tool takes three of its head's material and two sticks, or one and two for a shovel and two
-// and two for a hoe. A furnace smelts one item into one, so its rows take a single ingredient.
+// A tool takes three of its head's material and two sticks, or one and two for a shovel, two
+// and two for a hoe and two and one for a sword. Armour is a helmet of four of its material, a
+// chestplate of six, leggings of five and boots of three. A furnace smelts one item into one,
+// so its rows take a single ingredient.
 recipes! {
     Planks {
         name: "planks", station: Hand,
@@ -457,6 +459,74 @@ recipes! {
         name: "cooked_chicken", station: Furnace,
         ingredients: [(Item::Chicken, 1)], output: (Item::CookedChicken, 1),
     },
+    WoodenSword {
+        name: "wooden_sword", station: CraftingTable,
+        ingredients: [(PLANKS, 2), (Item::Stick, 1)], output: (Item::WoodenSword, 1),
+    },
+    StoneSword {
+        name: "stone_sword", station: CraftingTable,
+        ingredients: [(COBBLESTONE, 2), (Item::Stick, 1)], output: (Item::StoneSword, 1),
+    },
+    CopperSword {
+        name: "copper_sword", station: CraftingTable,
+        ingredients: [(Item::CopperIngot, 2), (Item::Stick, 1)], output: (Item::CopperSword, 1),
+    },
+    IronSword {
+        name: "iron_sword", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 2), (Item::Stick, 1)], output: (Item::IronSword, 1),
+    },
+    BrightSteelSword {
+        name: "bright_steel_sword", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 2), (Item::Stick, 1)], output: (Item::BrightSteelSword, 1),
+    },
+    LeatherHelmet {
+        name: "leather_helmet", station: CraftingTable,
+        ingredients: [(Item::Leather, 4)], output: (Item::LeatherHelmet, 1),
+    },
+    LeatherChestplate {
+        name: "leather_chestplate", station: CraftingTable,
+        ingredients: [(Item::Leather, 6)], output: (Item::LeatherChestplate, 1),
+    },
+    LeatherLeggings {
+        name: "leather_leggings", station: CraftingTable,
+        ingredients: [(Item::Leather, 5)], output: (Item::LeatherLeggings, 1),
+    },
+    LeatherBoots {
+        name: "leather_boots", station: CraftingTable,
+        ingredients: [(Item::Leather, 3)], output: (Item::LeatherBoots, 1),
+    },
+    IronHelmet {
+        name: "iron_helmet", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 4)], output: (Item::IronHelmet, 1),
+    },
+    IronChestplate {
+        name: "iron_chestplate", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 6)], output: (Item::IronChestplate, 1),
+    },
+    IronLeggings {
+        name: "iron_leggings", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 5)], output: (Item::IronLeggings, 1),
+    },
+    IronBoots {
+        name: "iron_boots", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 3)], output: (Item::IronBoots, 1),
+    },
+    BrightSteelHelmet {
+        name: "bright_steel_helmet", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 4)], output: (Item::BrightSteelHelmet, 1),
+    },
+    BrightSteelChestplate {
+        name: "bright_steel_chestplate", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 6)], output: (Item::BrightSteelChestplate, 1),
+    },
+    BrightSteelLeggings {
+        name: "bright_steel_leggings", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 5)], output: (Item::BrightSteelLeggings, 1),
+    },
+    BrightSteelBoots {
+        name: "bright_steel_boots", station: CraftingTable,
+        ingredients: [(Item::BrightSteelIngot, 3)], output: (Item::BrightSteelBoots, 1),
+    },
 }
 
 /// Seconds a furnace takes to smelt one item.
@@ -583,8 +653,8 @@ mod tests {
                 assert_eq!(Some(item), Item::from_name(item.name()));
             }
         }
-        // and every tool has a recipe
-        for item in Item::all().filter(|item| item.tool().is_some()) {
+        // and every tool and piece of armour has a recipe
+        for item in Item::all().filter(|item| item.durability().is_some()) {
             assert!(
                 Recipe::ALL.iter().any(|r| r.output().item == item),
                 "{item:?}"
@@ -825,5 +895,21 @@ mod tests {
         inventory.slots[5] = Some(ItemStack::new(Item::Stick, 5));
         assert_eq!(2, Recipe::WoodenAxe.times_makeable(&inventory));
         assert_eq!(32, Recipe::Sticks.times_makeable(&inventory));
+    }
+
+    #[test]
+    fn test_swords_and_armour_are_made_at_a_table_from_their_material() {
+        assert_eq!(
+            &[(PLANKS, 2), (Item::Stick, 1)],
+            Recipe::WoodenSword.ingredients()
+        );
+        assert_eq!(
+            &[(Item::Leather, 6)],
+            Recipe::LeatherChestplate.ingredients()
+        );
+        assert_eq!(&[(Item::IronIngot, 3)], Recipe::IronBoots.ingredients());
+        for recipe in [Recipe::BrightSteelSword, Recipe::BrightSteelHelmet] {
+            assert_eq!(Station::CraftingTable, recipe.station());
+        }
     }
 }

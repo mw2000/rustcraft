@@ -22,11 +22,11 @@ use crate::player::name::PlayerName;
 use crate::player::{arriving, Player, PlayerLook};
 use crate::protocol::{
     name_to_user_data, CommandOutput, EditReach, GameModeChanged, InventoryChanged, PlayerPose,
-    SelectionChanged, Teleport, VitalsChanged, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID,
+    SelectionChanged, Struck, Teleport, VitalsChanged, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID,
     POSE_INTERVAL, PROTOCOL_VERSION,
 };
 use crate::settings::Settings;
-use crate::survival::{Asleep, Vitals};
+use crate::survival::{Asleep, Bruise, Vitals};
 use crate::world::World;
 
 /// The server at `address`, `host:port` or just `host` for the default port.
@@ -314,6 +314,16 @@ pub(super) fn refused(
 pub(super) fn leave_server(mut commands: Commands) {
     commands.remove_resource::<NetcodeClientTransport>();
     commands.remove_resource::<RenetClient>();
+}
+
+/// Puts the blows the server says this client's player has taken on them, to feel.
+pub(super) fn follow_blows(
+    mut struck: MessageReader<Struck>,
+    mut player: Query<&mut Bruise, With<LocalPlayer>>,
+) {
+    if let (Some(&Struck(bruise)), Ok(mut felt)) = (struck.read().last(), player.single_mut()) {
+        *felt = bruise;
+    }
 }
 
 /// Puts the vitals the server says this client's player has on them, and lies them down or

@@ -20,17 +20,19 @@ use crate::{
     game_mode::GameMode,
     inventory::{Hotbar, Inventory},
     save::PlayerState,
-    survival::{SpawnBed, Vitals},
+    survival::{Bruise, SpawnBed, Vitals},
 };
 
 /// The player's body, at its feet, and how it's moving.
 #[derive(Component, Default)]
 #[require(
-    GameMode, Hotbar, Inventory, PlayerLook, Selection, SpawnBed, Transform, Vitals
+    Bruise, GameMode, Hotbar, Inventory, PlayerLook, Selection, SpawnBed, Transform, Vitals
 )]
 pub struct Player {
     pub movement: Movement,
     momentum: physics::Momentum,
+    // the push of the last blow, across, dying away
+    knockback: Vec3,
 }
 
 /// A player as `state` has them, to spawn: on the server, and on a client for its own player.
@@ -55,6 +57,16 @@ impl Player {
     /// Stops it where it is, as being put somewhere else does.
     pub fn stop(&mut self) {
         self.momentum.velocity = Vec3::ZERO;
+        self.knockback = Vec3::ZERO;
+    }
+
+    /// Knocks it back by a blow's `push`, in blocks a second: across, dying away as it walks,
+    /// and up if it's standing.
+    pub fn knock(&mut self, push: Vec3) {
+        self.knockback = push.with_y(0.0);
+        if self.momentum.grounded {
+            self.momentum.velocity.y = push.y;
+        }
     }
 }
 

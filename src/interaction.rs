@@ -20,7 +20,7 @@ use crate::inventory::furnace::ContainerView;
 use crate::inventory::recipes::CraftingStation;
 use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
-use crate::items::{Item, ToolKind};
+use crate::items::{Item, ToolKind, HAND_COOLDOWN};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
@@ -240,8 +240,9 @@ fn outline_target(world: Res<World>, target: Res<Target>, mut gizmos: Gizmos<Out
 
 // Left click breaks the block looked at in creative. In survival the mouse is held on it, the
 // server told when it starts, and it breaks once it's been held as long as it takes with the
-// tool in the selected slot, which the server checks. On a creature, it hits it, and right
-// click uses what's held on it, shearing or feeding it.
+// tool in the selected slot, which the server checks. On a creature, it hits it, no sooner after
+// the last hit than what's held swings again, as the server would refuse it, and right click
+// uses what's held on it, shearing or feeding it.
 #[allow(clippy::too_many_arguments)]
 fn break_target(
     world: Res<World>,
@@ -254,11 +255,15 @@ fn break_target(
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
     mut breaking: ResMut<Breaking>,
     mut requests: EditRequests,
+    mut ready_at: Local<f32>,
 ) {
     let (mode, hotbar, inventory) = player.single().expect("player does not exist");
     let slot = hotbar.selected as u8;
     if let Some(creature) = creature.0 {
-        if controls.just_pressed(Action::Break) {
+        let now = time.elapsed_secs();
+        if controls.just_pressed(Action::Break) && now >= *ready_at {
+            let held = hotbar.held(inventory).map(|stack| stack.item);
+            *ready_at = now + held.map_or(HAND_COOLDOWN, Item::cooldown);
             hits.write(HitCreature { creature });
         }
         if controls.just_pressed(Action::Place) {

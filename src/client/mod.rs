@@ -71,6 +71,7 @@ impl Plugin for ClientPlugin {
                         join::follow_selection,
                         join::follow_teleports,
                         join::follow_vitals,
+                        join::follow_blows,
                     ),
                 )
                     .chain()

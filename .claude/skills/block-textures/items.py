@@ -279,6 +279,64 @@ def drumstick(colours):
     return make
 
 
+def sword(colours):
+    """A sword on the diagonal: a straight blade to a point at the top right, a crossguard, and a short grip with a
+    pommel at the bottom left."""
+    def make():
+        out = np.zeros((16, 16, 4))
+        blade = (U > 6.4) & (U < 20.2) & (np.abs(V) < np.clip((20.2 - U) * 0.5, 0, 1.3))
+        guard = (np.abs(U - 6.0) < 0.8) & (np.abs(V) < 3.2)
+        grip = (np.abs(V) < 0.6) & (U > 2.6) & (U < 5.6)
+        pommel = (U - 2.4) ** 2 + V ** 2 < 1.4
+        lit(grip | pommel, HANDLE, out)
+        lit(guard, colours * 0.85, out)
+        lit(blade, colours, out)
+        out[blade & (np.abs(V + 0.35) < 0.3) & (U > 7.5) & (U < 18.0)] = (*colours[2], 255)  # its fuller catching the light
+        outline(out)
+        return out
+    return make
+
+
+def helmet():
+    # a dome over a brow, open at the face
+    dome = ((x - 7.5) / 6.2) ** 2 + ((y - 9.0) / 6.4) ** 2 < 1.0
+    return dome & (y <= 11) & ~((y >= 8) & (np.abs(x - 7.5) < 3.6))
+
+
+def chestplate():
+    # a breastplate with shoulders, a notch for the neck and the arms cut away below the shoulders
+    body = (np.abs(x - 7.5) < 6.6) & (y >= 2) & (y <= 14)
+    neck = (np.abs(x - 7.5) < 2.2) & (y <= 4)
+    arms = (np.abs(x - 7.5) > 4.0) & (y >= 7)
+    return body & ~neck & ~arms
+
+
+def leggings():
+    # a waistband and two legs apart
+    waist = (np.abs(x - 7.5) < 5.6) & (y >= 2) & (y <= 5)
+    legs = (np.abs(np.abs(x - 7.5) - 3.0) < 2.4) & (y >= 5) & (y <= 14)
+    return waist | legs
+
+
+def boots():
+    # two boots side by side, toes forward to the left
+    return np.any([(x >= x0 + 2) & (x <= x0 + 4) & (y >= 5) & (y <= 13) | (x >= x0) & (x <= x0 + 4) & (y >= 11) & (y <= 13)
+                   for x0 in [1, 9]], 0)
+
+
+PIECES = dict(helmet=helmet, chestplate=chestplate, leggings=leggings, boots=boots)
+LEATHER = np.array([(102, 60, 34), (146, 90, 52), (180, 122, 76)], float)
+
+
+def piece(shape, colours):
+    """A piece of armour: its shape in its material, a darker band along its edges where it's trimmed."""
+    def make():
+        out = single(shape(), colours)
+        out[(out[..., 3] > 0) & (y == 2 + (shape is boots) * 9) & (out[..., 0] > 0)] *= (0.8, 0.8, 0.8, 1)
+        return out
+    return make
+
+
 def shift(a, dy, dx):
     """`a` moved by (dy, dx), filling in with zeros: sprites don't wrap round, as tiles do."""
     out = np.zeros_like(a)
@@ -364,6 +422,11 @@ SPRITES.update(wool=wool, shears=shears, leather=leather, feather=feather,
                cooked_pork=chop(np.array([(120, 70, 36), (168, 108, 58), (206, 150, 92)], float)),
                chicken=drumstick(np.array([(196, 138, 120), (232, 184, 164), (248, 220, 204)], float)),
                cooked_chicken=drumstick(np.array([(138, 84, 30), (186, 124, 52), (222, 168, 86)], float)))
+for material in ["wooden", "stone", "copper", "iron", "bright_steel"]:
+    SPRITES[f"{material}_sword"] = sword(MATERIALS[material])
+for material, colours in [("leather", LEATHER), ("iron", MATERIALS["iron"]), ("bright_steel", MATERIALS["bright_steel"])]:
+    for kind, shape in PIECES.items():
+        SPRITES[f"{material}_{kind}"] = piece(shape, colours)
 
 
 def table_order():

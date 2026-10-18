@@ -43,6 +43,10 @@ const SPEED_SLACK: f32 = 1.1;
 #[derive(Component, Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeldItem(pub Option<Item>);
 
+/// The armour a player wears, helmet first, for others to see.
+#[derive(Component, Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Worn(pub [Option<Item>; 4]);
+
 /// A player as the server spawns them, to everyone but their owner a replicated entity.
 pub(super) fn spawning(state: &PlayerState, owner: ClientId, name: PlayerName) -> impl Bundle {
     (
@@ -50,6 +54,7 @@ pub(super) fn spawning(state: &PlayerState, owner: ClientId, name: PlayerName) -
         PlayerOwner(owner),
         name,
         HeldItem::default(),
+        Worn::default(),
         Replicated,
     )
 }
@@ -371,17 +376,18 @@ pub(super) fn send_host_pose(
     }
 }
 
-/// Keeps what each player holds up to date for others to see, as their inventory or the slot
-/// they've selected changes.
+/// Keeps what each player holds and wears up to date for others to see, as their inventory or
+/// the slot they've selected changes.
 #[allow(clippy::type_complexity)]
 pub(super) fn hold_items(
     mut players: Query<
-        (&Inventory, &Hotbar, &mut HeldItem),
+        (&Inventory, &Hotbar, &mut HeldItem, &mut Worn),
         Or<(Changed<Inventory>, Changed<Hotbar>)>,
     >,
 ) {
-    for (inventory, hotbar, mut held) in &mut players {
+    for (inventory, hotbar, mut held, mut worn) in &mut players {
         held.set_if_neq(HeldItem(hotbar.held(inventory).map(|stack| stack.item)));
+        worn.set_if_neq(Worn(inventory.armour.map(|stack| stack.map(|s| s.item))));
     }
 }
 
