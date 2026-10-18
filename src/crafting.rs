@@ -194,10 +194,10 @@ recipes! {
         name: "sandstone", station: CraftingTable,
         ingredients: [(SAND, 4)], output: (Item::Block(BlockType::Sandstone), 1),
     },
-    // a frame of planks and a mattress of grass, as there's no wool without sheep
+    // a frame of planks and a mattress of wool
     Bed {
         name: "bed", station: CraftingTable,
-        ingredients: [(PLANKS, 3), (Item::Block(BlockType::TallGrass), 3)],
+        ingredients: [(PLANKS, 3), (Item::Wool, 3)],
         output: (Item::Block(BlockType::Bed), 1),
     },
     // Building blocks (M2.4a): shapes cut from their blocks, stairs six into four and slabs
@@ -336,6 +336,14 @@ recipes! {
         name: "barrel", station: CraftingTable,
         ingredients: [(PLANKS, 6), (Item::Block(BlockType::PlanksSlab), 2)], output: (Item::Block(BlockType::Barrel), 1),
     },
+    WoolBlock {
+        name: "wool_block", station: Hand,
+        ingredients: [(Item::Wool, 4)], output: (Item::Block(BlockType::WoolBlock), 1),
+    },
+    Shears {
+        name: "shears", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 2)], output: (Item::Shears, 1),
+    },
     Bread {
         name: "bread", station: CraftingTable,
         ingredients: [(Item::Wheat, 3)], output: (Item::Bread, 1),
@@ -436,6 +444,18 @@ recipes! {
     Terracotta {
         name: "terracotta", station: Furnace,
         ingredients: [(Item::Block(BlockType::Dirt), 1)], output: (Item::Block(BlockType::Terracotta), 1),
+    },
+    CookedBeef {
+        name: "cooked_beef", station: Furnace,
+        ingredients: [(Item::Beef, 1)], output: (Item::CookedBeef, 1),
+    },
+    CookedPork {
+        name: "cooked_pork", station: Furnace,
+        ingredients: [(Item::Pork, 1)], output: (Item::CookedPork, 1),
+    },
+    CookedChicken {
+        name: "cooked_chicken", station: Furnace,
+        ingredients: [(Item::Chicken, 1)], output: (Item::CookedChicken, 1),
     },
 }
 
@@ -757,6 +777,43 @@ mod tests {
         assert_eq!(Some(ItemStack::new(PLANKS, 9)), inventory.slots[0]);
         // and it isn't a station, but a container
         assert_eq!(None, Station::of_block(BlockType::Chest));
+    }
+
+    #[test]
+    fn test_furnaces_cook_every_meat_into_something_more_filling() {
+        for (raw, cooked) in [
+            (Item::Mutton, Item::CookedMutton),
+            (Item::Beef, Item::CookedBeef),
+            (Item::Pork, Item::CookedPork),
+            (Item::Chicken, Item::CookedChicken),
+        ] {
+            let recipe = Recipe::smelting(raw).unwrap();
+            assert_eq!(ItemStack::new(cooked, 1), recipe.output());
+            assert!(
+                cooked.fills() > raw.fills() && raw.fills().is_some(),
+                "{raw:?}"
+            );
+        }
+        // and leather and feathers are only materials, for now
+        for material in [Item::Leather, Item::Feather, Item::Wool] {
+            assert_eq!((None, None), (Recipe::smelting(material), material.fills()));
+        }
+    }
+
+    #[test]
+    fn test_wool_makes_beds_and_blocks_and_iron_makes_shears() {
+        assert_eq!(&[(PLANKS, 3), (Item::Wool, 3)], Recipe::Bed.ingredients());
+        assert_eq!(Station::CraftingTable, Recipe::Bed.station());
+        assert_eq!(Station::Hand, Recipe::WoolBlock.station());
+        let mut inventory = Inventory::default();
+        inventory.slots[0] = Some(ItemStack::new(Item::Wool, 9));
+        assert_eq!(2, Recipe::WoolBlock.times_makeable(&inventory));
+        assert_eq!(
+            Some(ItemStack::new(Item::Block(BlockType::WoolBlock), 1)),
+            Recipe::WoolBlock.make(&mut inventory)
+        );
+        assert_eq!(&[(Item::IronIngot, 2)], Recipe::Shears.ingredients());
+        assert_eq!(Station::CraftingTable, Recipe::Shears.station());
     }
 
     #[test]

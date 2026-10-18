@@ -12,7 +12,7 @@ const FLY_SPRINT_MULTIPLIER: f32 = 4.0;
 const WALK_SPEED: f32 = 4.3;
 const WALK_SPRINT_MULTIPLIER: f32 = 1.3;
 // Blocks a second squared, and the speed falling tops out at.
-const GRAVITY: f32 = 32.0;
+pub const GRAVITY: f32 = 32.0;
 const TERMINAL_SPEED: f32 = 60.0;
 // Enough to clear one block, not two.
 const JUMP_SPEED: f32 = 9.0;
@@ -22,7 +22,7 @@ const WATER_GRAVITY: f32 = 8.0;
 const SINK_SPEED: f32 = 2.0;
 const SWIM_UP_SPEED: f32 = 4.0;
 // The longest frame moved in one step, so a hitch doesn't fling the player.
-const MAX_STEP: f32 = 0.1;
+pub const MAX_STEP: f32 = 0.1;
 // How high a body walks up onto without jumping: a slab or a stair, not a block.
 const STEP_HEIGHT: f32 = 0.6;
 // Blocks a second up and down a ladder or vines.

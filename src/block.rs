@@ -7,7 +7,7 @@ pub use state::{Block, BlockState, Direction, Property};
 
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::farming::WHEAT;
-use crate::items::ToolKind::{self, Axe, Pickaxe, Shovel};
+use crate::items::ToolKind::{self, Axe, Pickaxe, Shears, Shovel};
 use crate::items::{Item, ItemStack};
 
 /// A block's row in the table: how it behaves and looks.
@@ -578,7 +578,7 @@ blocks! {
     },
     // Plants, standing on the block below and gone with it. They're broken at a touch, let light
     // and the player through and are built over, so their faces hide nothing. Flowers and ferns
-    // drop nothing, and tall grass itself, for beds' mattresses, and a seed one time in eight.
+    // drop nothing, and tall grass itself, to set down elsewhere, and a seed one time in eight.
     TallGrass {
         name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true,
@@ -758,6 +758,13 @@ blocks! {
         hardness: 3.75, tool: Some(Axe), tier: 0,
         top: Tile::BarrelTop, side: Tile::BarrelSide, bottom: Tile::BarrelBottom,
         lod: Tile::BarrelSide,
+    },
+    // Four of sheep's wool, felted into a block: soft, and cut quickest with shears.
+    WoolBlock {
+        name: "wool_block", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 1.2, tool: Some(Shears), tier: 0,
+        top: Tile::Wool, side: Tile::Wool, bottom: Tile::Wool, lod: Tile::Wool,
     },
 }
 
@@ -1070,9 +1077,10 @@ pub enum Tile {
     BarrelTop,
     BarrelSide,
     BarrelBottom,
+    Wool,
 }
 
-pub const TILE_COUNT: usize = 78;
+pub const TILE_COUNT: usize = 79;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -1121,7 +1129,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::BarrelBottom as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Wool as usize + 1);
     }
 
     #[test]

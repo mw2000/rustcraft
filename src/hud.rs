@@ -11,7 +11,7 @@ use crate::client::player::LocalPlayer;
 use crate::controls::{Action, Bindings, Controls};
 use crate::game_mode::GameMode;
 use crate::hotbar::HOTBAR_TOP;
-use crate::interaction::{is_used, Target};
+use crate::interaction::{is_used, Target, TargetCreature};
 use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::menu::widgets::{column, first, text_button, WIDE};
@@ -437,13 +437,14 @@ fn hide_death_screen(mut screen: Query<&mut Node, With<DeathScreen>>) {
 }
 
 // Holding right click with food selected eats it, as the server's told as it starts and stops,
-// unless it's on a block that's used instead, such as a bed.
+// unless it's on a block that's used instead, such as a bed, or on a creature.
 #[allow(clippy::too_many_arguments)]
 fn eat(
     world: Res<World>,
     state: Res<State<GameState>>,
     controls: Controls,
     target: Res<Target>,
+    creature: Res<TargetCreature>,
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
     mut eating: Local<Option<u8>>,
     mut eats: MessageWriter<Eat>,
@@ -454,7 +455,8 @@ fn eat(
     let food = hotbar
         .held(inventory)
         .is_some_and(|s| s.item.fills().is_some());
-    let using = target.0.is_some_and(|hit| is_used(&world, hit, mode));
+    // and feeds a creature looked at instead
+    let using = target.0.is_some_and(|hit| is_used(&world, hit, mode)) || creature.0.is_some();
     let wants =
         *state.get() == GameState::Playing && controls.pressed(Action::Place) && food && !using;
     let slot = wants.then_some(hotbar.selected as u8);

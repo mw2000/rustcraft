@@ -180,6 +180,105 @@ def mutton(colours):
     return make
 
 
+def wool():
+    """A soft ball of wool, a few round tufts run together, curled all over."""
+    out = np.zeros((16, 16, 4))
+    tufts = [(8.0, 8.5, 4.8), (4.8, 9.5, 3.0), (11.2, 9.5, 3.0), (6.2, 5.2, 2.9), (10.0, 5.2, 2.9), (8.0, 12.5, 2.8)]
+    ball = np.any([(x - cx) ** 2 + (y - cy) ** 2 < r * r for cx, cy, r in tufts], 0)
+    lit(ball, np.array([(178, 172, 158), (222, 218, 206), (248, 246, 238)], float), out)
+    for cx, cy in [(5, 8), (8, 6), (11, 8), (6, 12), (9, 10), (12, 11), (8, 13)]:  # the curls of its fleece
+        out[cy, cx, :3] = (196, 190, 176)
+        out[cy - 1, cx - 1, :3] = (250, 249, 244)
+    outline(out)
+    return out
+
+
+def shears():
+    """Shears lying on the diagonal, closed: two iron blades side by side out to the top right from a rivet, and
+    two loops of handle at the bottom left."""
+    out = np.zeros((16, 16, 4))
+    taper = np.clip((19.5 - U) / 10.0, 0, 1)
+    blades = (U > 8.5) & (U < 19.5) & (np.abs(V) < 1.5 * taper + 0.4)
+    loops = np.zeros_like(blades)
+    for v in [-2.6, 2.6]:
+        d = (U - 4.4) ** 2 + (V - v) ** 2
+        loops |= (d < 6.0) & (d > 1.8)
+    arms = (U > 5.5) & (U < 9.0) & (np.abs(np.abs(V) - (9.0 - U) * 0.6) < 0.6)
+    lit(loops | arms, np.array([(112, 40, 34), (164, 62, 48), (204, 98, 76)], float), out)
+    lit(blades, MATERIALS["iron"], out)
+    out[blades & (np.abs(V) < 0.4) & (U > 10.5) & (U < 18.0)] = (*MATERIALS["iron"][0] * 0.8, 255)  # where they meet
+    out[(np.abs(U - 8.9) < 0.8) & (np.abs(V) < 0.8)] = (90, 90, 98, 255)  # the rivet
+    outline(out)
+    return out
+
+
+def leather():
+    """A hide, a rounded square with its legs' corners drawn out and its edges a little ragged."""
+    out = np.zeros((16, 16, 4))
+    body = ((np.abs(x - 7.5) / 5.6) ** 2.5 + (np.abs(y - 7.5) / 5.0) ** 2.5 < 1.0)
+    corners = np.any([(x - cx) ** 2 + (y - cy) ** 2 < 3.2 for cx, cy in [(2, 2), (13, 2), (2, 13), (13, 13)]], 0)
+    hide = (body | corners) & ~(((x + y * 3) % 7 == 0) & ~shift(body, 1, 1))
+    lit(hide, np.array([(102, 60, 34), (146, 90, 52), (180, 122, 76)], float), out)
+    for cy, cx in [(6, 5), (9, 10), (5, 10), (10, 6)]:  # its grain
+        out[cy, cx, :3] = (124, 76, 44)
+    outline(out)
+    return out
+
+
+def feather():
+    """A feather on the diagonal: a pale quill bottom left, and the vane widening round it and tapering to a tip."""
+    out = np.zeros((16, 16, 4))
+    width = np.clip(np.minimum(U - 5.0, 19.5 - U) * 0.42, 0, 2.6)
+    vane = (np.abs(V + 0.15 * (U - 12) ** 2 / 12) < width) & (U > 5.0)
+    lit(vane & ~((np.round(U * 1.3) % 3 == 0) & (np.abs(V) > 1.2)), np.array([(176, 180, 186), (222, 224, 228), (248, 248, 250)], float), out)
+    out[(np.abs(V + 0.15 * (U - 12) ** 2 / 12) < 0.5) & (U > 2.5) & (U < 18.0)] = (196, 184, 160, 255)  # the quill
+    outline(out)
+    return out
+
+
+def steak(colours):
+    """A steak, a rounded slab a little wider than tall with a rim of fat down one side and a streak through it."""
+    def make():
+        out = np.zeros((16, 16, 4))
+        slab = ((x - 7.5) / 6.4) ** 2 + ((y - 8.0) / 5.2) ** 2 + 0.02 * (x - 7.5) * (y - 8.0) < 1.0
+        lit(slab, colours, out)
+        fat = slab & ~shift(slab, 0, -2) & (x > 9)
+        out[fat] = (*colours[2] * 0.4 + 150, 255)
+        out[slab & (np.abs(y - 8 - (x - 7.5) * 0.4) < 0.5) & (x > 3) & (x < 11)] = (*colours[2] * 0.5 + 110, 255)
+        outline(out)
+        return out
+    return make
+
+
+def chop(colours):
+    """A chop: a cut of meat, rounder at one end, with its rind along the top and a stub of bone out of the other."""
+    def make():
+        out = np.zeros((16, 16, 4))
+        cut = ((x - 8.5) / 5.8) ** 2 + ((y - 8.5) / (4.4 - (x - 8.5) * 0.12)) ** 2 < 1.0
+        bone = (x >= 1) & (x <= 4) & (np.abs(y - 9.5) < 1.2)
+        lit(bone & ~cut, np.array([(178, 170, 150), (224, 218, 200), (246, 242, 230)], float), out)
+        lit(cut, colours, out)
+        rind = cut & ~shift(cut, 2, 0)
+        out[rind] = (*colours[2] * 0.45 + 130, 255)
+        outline(out)
+        return out
+    return make
+
+
+def drumstick(colours):
+    """A drumstick: a plump round of meat on the diagonal and its thin bone, knobbed at the end."""
+    def make():
+        out = np.zeros((16, 16, 4))
+        meat = ((U - 13.0) / 5.0) ** 2 + (V / 3.6) ** 2 < 1.0
+        bone = (np.abs(V) < 0.7) & (U > 3.5) & (U < 9.0)
+        knob = ((U - 3.5) ** 2 + (V - 0.9) ** 2 < 1.6) | ((U - 3.5) ** 2 + (V + 0.9) ** 2 < 1.6)
+        lit((bone | knob) & ~meat, np.array([(178, 170, 150), (224, 218, 200), (246, 242, 230)], float), out)
+        lit(meat, colours, out)
+        outline(out)
+        return out
+    return make
+
+
 def shift(a, dy, dx):
     """`a` moved by (dy, dx), filling in with zeros: sprites don't wrap round, as tiles do."""
     out = np.zeros_like(a)
@@ -258,6 +357,13 @@ SPRITES.update(gold_ingot=lambda: bar(GOLD), frost_crystal=lambda: single(crysta
                bright_steel_blend=blend, bright_steel_ingot=lambda: bar(MATERIALS["bright_steel"]), ember=ember)
 for kind, head in [*HEADS.items(), ("hoe", hoe)]:
     SPRITES[f"bright_steel_{kind}"] = lambda head=head: tool(head, MATERIALS["bright_steel"])
+SPRITES.update(wool=wool, shears=shears, leather=leather, feather=feather,
+               beef=steak(np.array([(140, 30, 36), (190, 52, 56), (226, 100, 96)], float)),
+               cooked_beef=steak(np.array([(80, 42, 24), (122, 70, 38), (164, 106, 60)], float)),
+               pork=chop(np.array([(186, 92, 98), (226, 136, 138), (246, 180, 176)], float)),
+               cooked_pork=chop(np.array([(120, 70, 36), (168, 108, 58), (206, 150, 92)], float)),
+               chicken=drumstick(np.array([(196, 138, 120), (232, 184, 164), (248, 220, 204)], float)),
+               cooked_chicken=drumstick(np.array([(138, 84, 30), (186, 124, 52), (222, 168, 86)], float)))
 
 
 def table_order():

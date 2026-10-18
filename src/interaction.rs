@@ -13,7 +13,7 @@ use crate::collision::{boxes_at, looked_at, Hit};
 use crate::containers::Container;
 use crate::controls::{Action, Bindings, Controls};
 use crate::crafting::Station;
-use crate::creatures::Creature;
+use crate::creatures::{Condition, Creature};
 use crate::farming::tilled;
 use crate::game_mode::GameMode;
 use crate::inventory::furnace::ContainerView;
@@ -24,7 +24,7 @@ use crate::items::{Item, ToolKind};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
-use crate::protocol::{HitCreature, PickBlock, RequestEdit, StartBreaking, UseBlock};
+use crate::protocol::{HitCreature, PickBlock, RequestEdit, StartBreaking, UseBlock, UseCreature};
 use crate::world::World;
 
 // Just over a block wide, so the outline isn't hidden in the block's own faces.
@@ -197,7 +197,7 @@ fn target_block(
     mut creature: ResMut<TargetCreature>,
     player: Query<(&Transform, &PlayerLook), With<LocalPlayer>>,
     seen: Query<(&SeenCreature, &Transform)>,
-    creatures: Query<&Creature>,
+    creatures: Query<(&Creature, &Condition)>,
 ) {
     let (feet, look) = player.single().expect("player does not exist");
     let block = looked_at(&world, feet.translation, *look);
@@ -207,7 +207,7 @@ fn target_block(
         creatures
             .get(seen.0)
             .ok()
-            .map(|creature| (seen, body, creature.0))
+            .map(|(creature, condition)| (seen, body, creature.0.body(condition.young)))
     });
     creature.0 = creature_hit(eye, look.forward(), block_distance, seen).map(|(hit, _)| hit);
     target.0 = block.filter(|_| creature.0.is_none());
@@ -230,13 +230,15 @@ fn outline_target(world: Res<World>, target: Res<Target>, mut gizmos: Gizmos<Out
 
 // Left click breaks the block looked at in creative. In survival the mouse is held on it, the
 // server told when it starts, and it breaks once it's been held as long as it takes with the
-// tool in the selected slot, which the server checks. On a creature, it hits it.
+// tool in the selected slot, which the server checks. On a creature, it hits it, and right
+// click uses what's held on it, shearing or feeding it.
 #[allow(clippy::too_many_arguments)]
 fn break_target(
     world: Res<World>,
     target: Res<Target>,
     creature: Res<TargetCreature>,
     mut hits: MessageWriter<HitCreature>,
+    mut uses: MessageWriter<UseCreature>,
     controls: Controls,
     time: Res<Time>,
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
@@ -245,8 +247,13 @@ fn break_target(
 ) {
     let (mode, hotbar, inventory) = player.single().expect("player does not exist");
     let slot = hotbar.selected as u8;
-    if let Some(creature) = creature.0.filter(|_| controls.just_pressed(Action::Break)) {
-        hits.write(HitCreature { creature });
+    if let Some(creature) = creature.0 {
+        if controls.just_pressed(Action::Break) {
+            hits.write(HitCreature { creature });
+        }
+        if controls.just_pressed(Action::Place) {
+            uses.write(UseCreature { creature });
+        }
     }
     if mode.breaks_at_once() {
         if let Some(hit) = target.0.filter(|_| controls.just_pressed(Action::Break)) {
@@ -565,7 +572,7 @@ mod tests {
         use crate::player::{Player, PlayerOwner};
         use crate::protocol::{
             EditRejected, HitCreature, PickBlock, ProtocolPlugin, RequestEdit, StartBreaking,
-            UseBlock,
+            UseBlock, UseCreature,
         };
         use crate::server::ServerPlugin;
 
@@ -582,6 +589,7 @@ mod tests {
                 .add_message::<UseBlock>()
                 .add_message::<StartBreaking>()
                 .add_message::<HitCreature>()
+                .add_message::<UseCreature>()
                 .init_resource::<TargetCreature>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .init_resource::<ButtonInput<KeyCode>>()

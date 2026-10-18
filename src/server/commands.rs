@@ -8,6 +8,7 @@ use super::players::PoseCheck;
 use super::structures::{list, Authoring};
 use crate::chunks::generate::WATER_LEVEL;
 use crate::commands::{help, parse, Command, Destination};
+use crate::creatures::SavedCreature;
 use crate::game_mode::GameMode;
 use crate::player::name::PlayerName;
 use crate::player::PlayerOwner;
@@ -150,8 +151,8 @@ impl Running<'_, '_> {
             }
             Command::Seed => Ok(format!("Seed: {}", self.world.seed())),
             Command::Summon { kind, at } => {
-                let health = kind.properties().health;
-                self.commands.spawn(creature(kind, at, health, 0.0));
+                self.commands
+                    .spawn(creature(SavedCreature::grown(kind, at), 0.0));
                 Ok(format!("Summoned a {} at {at}", kind.name()))
             }
             Command::GameMode { mode, who } => {

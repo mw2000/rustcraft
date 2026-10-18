@@ -1,15 +1,18 @@
 //! Creatures on the server (§5.8, INV-4): their bodies walking under gravity as players' do,
 //! their brains choosing what to do from their kind's behaviours, the ways they find
-//! (`creatures::path`), on the compute pool, and follow, being hit and dying, and sleeping,
-//! saved, while nobody's near them. Clients draw them from the poses the server sends
-//! (`client::creatures`), only those near their player.
+//! (`creatures::path`), on the compute pool, and follow, being hit and dying, being tended
+//! (`tending`), and sleeping, saved, while nobody's near them. Clients draw them from the poses
+//! the server sends (`client::creatures`), only those near their player.
 
 mod spawning;
+mod tending;
 #[cfg(test)]
 mod tests;
 
 pub(super) use spawning::spawn;
 pub use spawning::SpawnRate;
+pub use tending::Life;
+pub(super) use tending::{breed, grow, receive_uses};
 
 use std::collections::VecDeque;
 use std::f32::consts::TAU;
@@ -26,11 +29,12 @@ use super::edits::REACH_SLACK;
 use super::HeldItem;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
+use crate::collision::Aabb;
 use crate::creatures::path::{find_path, Blocks, Limits, Path, Walker};
 use crate::creatures::{Behaviour, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature};
 use crate::inventory::{Hotbar, Inventory};
 use crate::items::ItemStack;
-use crate::player::physics::{walk, Momentum};
+use crate::player::physics::{walk, Momentum, GRAVITY, MAX_STEP};
 use crate::player::{Player, PlayerOwner, EYE_HEIGHT, REACH};
 use crate::protocol::HitCreature;
 use crate::save::region::Region;
@@ -82,6 +86,8 @@ const KNOCKBACK_LEFT: f32 = 0.002;
 // off it can be, across, from a client's player and still be seen: within 96 to 128 blocks.
 const VIEW_CELL: f32 = 32.0;
 const VIEW_CELLS: i64 = 3;
+// How fast a creature that flutters falls at most, in blocks a second.
+const FLUTTER: f32 = 1.5;
 
 /// A creature's health, and until when, by the server's clock in seconds, it can't be hurt.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -119,6 +125,8 @@ pub enum Doing {
     Flee { from: Vec3 },
     /// Going after a player: one with something it wants, or, for a monster (M3.3), its prey.
     Follow(Entity),
+    /// Going to another of its kind in love, to breed.
+    Mate(Entity),
 }
 
 /// The way a creature's walking: the cells still to go through, where it's going, the way
@@ -144,6 +152,29 @@ impl Route {
         self.cells.clear();
         self.goal = None;
         self.planning = None;
+    }
+
+    // Goes after something at `goal`, to within `near`: stopping once it's there, and finding
+    // its way again, if it's `ready` to, as it moves away from where it was going.
+    #[allow(clippy::too_many_arguments)]
+    fn chase(
+        &mut self,
+        world: &World,
+        from: I64Vec3,
+        goal: I64Vec3,
+        near: i64,
+        walker: Walker,
+        now: f32,
+        ready: bool,
+    ) {
+        let moved = self
+            .goal
+            .is_none_or(|was| (was - goal).abs().max_element() > near);
+        if (goal - from).xz().abs().max_element() <= near {
+            self.stop();
+        } else if ready && (moved || self.cells.is_empty()) {
+            self.plan(world, from, goal, near, walker, now);
+        }
     }
 
     // Starts finding a way from `from` to within `near` of `goal` for `walker`, on the compute
@@ -189,8 +220,15 @@ impl VisibilityFilter for Whereabouts {
     }
 }
 
-/// A creature as the server spawns it: of `kind`, at `at` with `health`, replicated.
-pub fn creature(kind: CreatureKind, at: Vec3, health: u8, yaw: f32) -> impl Bundle {
+/// A creature as the server spawns it, as `saved` says it is, facing `yaw`, replicated.
+pub fn creature(saved: SavedCreature, yaw: f32) -> impl Bundle {
+    let SavedCreature {
+        kind,
+        position: at,
+        health,
+        ..
+    } = saved;
+    let life = Life::of(&saved);
     (
         Creature(kind),
         Transform::from_translation(at),
@@ -198,6 +236,8 @@ pub fn creature(kind: CreatureKind, at: Vec3, health: u8, yaw: f32) -> impl Bund
             points: health,
             immune_until: 0.0,
         },
+        life,
+        life.condition(),
         Body {
             yaw,
             ..Body::default()
@@ -290,12 +330,7 @@ pub(super) fn wake(
                         && world.is_chunk_generated(chunk_of(creature.position));
                     if wakes {
                         let yaw = chance.0.random_range(0.0..TAU);
-                        commands.spawn(self::creature(
-                            creature.kind,
-                            creature.position,
-                            creature.health,
-                            yaw,
-                        ));
+                        commands.spawn(self::creature(*creature, yaw));
                     }
                     !wakes
                 });
@@ -313,10 +348,10 @@ pub(super) fn sleep(
     world: Res<World>,
     mut dormant: ResMut<Dormant>,
     players: Query<&Transform, With<Player>>,
-    creatures: Query<(Entity, &Creature, &Transform, &Health)>,
+    creatures: Query<(Entity, &Creature, &Transform, &Health, &Life)>,
     mut commands: Commands,
 ) {
-    for (entity, creature, body, health) in &creatures {
+    for (entity, creature, body, health, life) in &creatures {
         let at = body.translation;
         let near = players
             .iter()
@@ -324,12 +359,19 @@ pub(super) fn sleep(
         if near && world.is_chunk_generated(chunk_of(at)) {
             continue;
         }
-        dormant.keep(SavedCreature {
-            kind: creature.0,
-            position: at,
-            health: health.points,
-        });
+        dormant.keep(saved(creature, body, health, life));
         commands.entity(entity).despawn();
+    }
+}
+
+/// A creature as it's saved.
+pub fn saved(creature: &Creature, body: &Transform, health: &Health, life: &Life) -> SavedCreature {
+    SavedCreature {
+        kind: creature.0,
+        position: body.translation,
+        health: health.points,
+        grows_up_in: life.grows_up_in,
+        regrows_in: life.regrows_in,
     }
 }
 
@@ -352,22 +394,39 @@ pub(super) fn think(
     world: Res<World>,
     players: Players,
     mut chance: ResMut<Chance>,
-    mut creatures: Query<(&Creature, &Transform, &mut Mind, &mut Route)>,
+    mut creatures: Query<(Entity, &Creature, &Transform, &Life, &mut Mind, &mut Route)>,
 ) {
     let now = time.elapsed_secs();
-    for (creature, body, mut mind, mut route) in &mut creatures {
+    // those looking for a mate, which there are seldom any of
+    let lovers: Vec<_> = creatures
+        .iter()
+        .filter(|(.., life, _, _)| life.love > 0.0 && life.is_grown())
+        .map(|(entity, creature, body, ..)| (entity, creature.0, body.translation))
+        .collect();
+    for (entity, creature, body, life, mut mind, mut route) in &mut creatures {
         let at = body.translation;
+        let properties = creature.0.properties();
         let mut doing = Doing::Idle;
-        for behaviour in creature.0.properties().behaviours {
+        for behaviour in properties.behaviours {
             let chosen = match *behaviour {
                 Behaviour::Flee => match mind.doing {
                     Doing::Flee { from } if now < mind.until => Some(Doing::Flee { from }),
                     _ => None,
                 },
-                Behaviour::FollowLure(lure) => players
+                Behaviour::Breed if life.love > 0.0 && life.is_grown() => lovers
+                    .iter()
+                    .filter(|&&(other, kind, there)| {
+                        other != entity
+                            && kind == creature.0
+                            && there.distance(at) <= tending::MATE_RANGE
+                    })
+                    .min_by(|a, b| a.2.distance(at).total_cmp(&b.2.distance(at)))
+                    .map(|&(mate, ..)| Doing::Mate(mate)),
+                Behaviour::Breed => None,
+                Behaviour::FollowLure => players
                     .iter()
                     .filter(|(_, player, held, vitals)| {
-                        held.0 == Some(lure)
+                        held.0.is_some_and(|item| properties.food.contains(&item))
                             && !vitals.is_dead()
                             && player.translation.distance(at) <= LURE_RANGE
                     })
@@ -420,19 +479,15 @@ pub(super) fn think(
             }
             Doing::Flee { .. } => {}
             Doing::Follow(player) => {
-                let Ok((_, target, ..)) = players.get(player) else {
-                    continue;
-                };
-                let goal = cell_of(target.translation);
-                // again as they move away from where it was going
-                let moved = route
-                    .goal
-                    .is_none_or(|was| (was - goal).abs().max_element() > FOLLOW_NEAR);
-                let close = (goal - from).xz().abs().max_element() <= FOLLOW_NEAR;
-                if close {
-                    route.stop();
-                } else if ready && (moved || route.cells.is_empty()) {
-                    route.plan(&world, from, goal, FOLLOW_NEAR, walker, now);
+                if let Ok((_, target, ..)) = players.get(player) {
+                    let goal = cell_of(target.translation);
+                    route.chase(&world, from, goal, FOLLOW_NEAR, walker, now, ready);
+                }
+            }
+            // to beside it
+            Doing::Mate(mate) => {
+                if let Some(&(.., there)) = lovers.iter().find(|lover| lover.0 == mate) {
+                    route.chase(&world, from, cell_of(there), 1, walker, now, ready);
                 }
             }
         }
@@ -463,12 +518,14 @@ type Moving<'a> = (
     &'a mut Route,
     &'a Mind,
     &'a mut Health,
+    &'a Life,
 );
 
 /// Walks each creature along its way under gravity, as players walk: towards the middle of
 /// its next cell, jumping up a block where the way climbs or it's walked into one, and kept
-/// afloat in water, then hurts it for any fall it's landed from. Creatures whose ground isn't
-/// loaded wait where they are, as they're soon put to sleep.
+/// afloat in water, or fluttering down if it flutters, then hurts it for any fall it's landed
+/// from, unless it flutters. Creatures whose ground isn't loaded wait where they are, as
+/// they're soon put to sleep.
 pub(super) fn move_creatures(
     time: Res<Time>,
     world: Res<World>,
@@ -484,7 +541,9 @@ pub(super) fn move_creatures(
             .is_chunk_generated(ChunkCoordinate::containing(at))
             .then(|| world.get(at))
     };
-    for (entity, creature, mut transform, mut body, mut route, mind, mut health) in &mut creatures {
+    for (entity, creature, mut transform, mut body, mut route, mind, mut health, life) in
+        &mut creatures
+    {
         let mut at = transform.translation;
         if block(at.floor().as_i64vec3() - I64Vec3::Y).is_none() {
             continue;
@@ -531,10 +590,16 @@ pub(super) fn move_creatures(
         let jump = in_water || ((climb || body.momentum.against_wall) && wanted != Vec3::ZERO);
         let push = body.knockback;
         body.knockback *= KNOCKBACK_LEFT.powf(dt);
+        if properties.flutters {
+            // as slow as `FLUTTER` once the step's gravity has pulled it down, over the step
+            // `walk` takes however long the frame
+            let slowest = GRAVITY * dt.min(MAX_STEP) - FLUTTER;
+            body.momentum.velocity.y = body.momentum.velocity.y.max(slowest);
+        }
         at = walk(
             at,
             &mut body.momentum,
-            creature.0.body(),
+            creature.0.body(!life.is_grown()),
             wanted + push,
             jump,
             dt,
@@ -560,12 +625,16 @@ pub(super) fn move_creatures(
 
         // falls, as players' hurt (§5.5)
         if body.momentum.grounded || in_water {
-            if let Some(peak) = body.peak.take().filter(|_| !in_water) {
+            let fell = body
+                .peak
+                .take()
+                .filter(|_| !in_water && !properties.flutters);
+            if let Some(peak) = fell {
                 let damage = fall_damage(peak - at.y);
                 if damage > 0 {
                     health.points = health.points.saturating_sub(damage);
                     if health.points == 0 {
-                        die(entity, creature.0, at, &mut chance, &mut commands);
+                        die(entity, creature.0, at, life, &mut chance, &mut commands);
                     }
                 }
             }
@@ -575,16 +644,53 @@ pub(super) fn move_creatures(
     }
 }
 
-// A creature dying where its feet are at `at`, dropping what its kind drops.
-fn die(entity: Entity, kind: CreatureKind, at: Vec3, chance: &mut Chance, commands: &mut Commands) {
-    for (item, counts) in kind.properties().drops {
-        let count = chance.0.random_range(counts.clone());
-        let stack = ItemStack::new(*item, count);
-        let (dropped, transform) = DroppedItem::scattered(stack, at, &mut chance.0);
-        commands.spawn((dropped, transform, Replicated));
-    }
+// A creature dying where its feet are at `at`, dropping what its kind drops if it's grown, and
+// some of its fleece if that's grown too.
+fn die(
+    entity: Entity,
+    kind: CreatureKind,
+    at: Vec3,
+    life: &Life,
+    chance: &mut Chance,
+    commands: &mut Commands,
+) {
     commands.entity(entity).despawn();
+    if !life.is_grown() {
+        return;
+    }
+    let properties = kind.properties();
+    let fleece = properties
+        .fleece
+        .clone()
+        .filter(|_| life.regrows_in == 0.0)
+        .map(|(item, _)| (item, 1..=1));
+    for (item, counts) in properties.drops.iter().cloned().chain(fleece) {
+        let count = chance.0.random_range(counts);
+        if count > 0 {
+            let stack = ItemStack::new(item, count);
+            let (dropped, transform) = DroppedItem::scattered(stack, at, &mut chance.0);
+            commands.spawn((dropped, transform, Replicated));
+        }
+    }
 }
+
+// Whether a creature with its feet at `at` and a body `body` is in reach of a player.
+fn in_reach(player: &Transform, at: Vec3, body: Aabb) -> bool {
+    let eye = player.translation + Vec3::Y * EYE_HEIGHT;
+    let nearest = eye.clamp(at + body.min, at + body.max);
+    eye.distance(nearest) <= REACH + REACH_SLACK
+}
+
+type Hit<'a> = (
+    &'a Creature,
+    &'a Transform,
+    &'a mut Health,
+    &'a mut Body,
+    &'a mut Mind,
+    &'a mut Flinches,
+    &'a mut Route,
+    &'a Life,
+);
 
 /// Hurts the creatures players hit, if they're alive and it's in their reach: as hard as
 /// what they hold hits, knocking it back away from them, and frightening it if it flees.
@@ -594,15 +700,7 @@ pub(super) fn receive_hits(
     mut hits: MessageReader<FromClient<HitCreature>>,
     time: Res<Time>,
     mut players: Query<(&PlayerOwner, &Transform, &Vitals, &Hotbar, &mut Inventory)>,
-    mut creatures: Query<(
-        &Creature,
-        &Transform,
-        &mut Health,
-        &mut Body,
-        &mut Mind,
-        &mut Flinches,
-        &mut Route,
-    )>,
+    mut creatures: Query<Hit>,
     mut chance: ResMut<Chance>,
     mut commands: Commands,
 ) {
@@ -613,16 +711,14 @@ pub(super) fn receive_hits(
         else {
             continue;
         };
-        let Ok((creature, body, mut health, mut motion, mut mind, mut flinches, mut route)) =
+        let Ok((creature, body, mut health, mut motion, mut mind, mut flinches, mut route, life)) =
             creatures.get_mut(message.creature)
         else {
             continue;
         };
-        let eye = player.translation + Vec3::Y * EYE_HEIGHT;
-        let reach = creature.0.body();
-        let nearest = eye.clamp(body.translation + reach.min, body.translation + reach.max);
+        let reach = creature.0.body(!life.is_grown());
         if vitals.is_dead()
-            || eye.distance(nearest) > REACH + REACH_SLACK
+            || !in_reach(player, body.translation, reach)
             || now < health.immune_until
         {
             continue;
@@ -662,6 +758,7 @@ pub(super) fn receive_hits(
                 message.creature,
                 creature.0,
                 body.translation,
+                life,
                 &mut chance,
                 &mut commands,
             );

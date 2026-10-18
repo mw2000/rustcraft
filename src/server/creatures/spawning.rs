@@ -1,5 +1,5 @@
 //! Creatures appearing by themselves near players, where and when their kind's row says, in
-//! the ground the server holds round them: out of a player's sight where it's cheap to tell,
+//! its biomes and the ground the server holds round them: out of a player's sight where it's cheap to tell,
 //! never too near, and only while there are fewer of the kind round them than its cap.
 
 use std::f32::consts::TAU;
@@ -13,7 +13,7 @@ use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::clock::{is_night, TimeOfDay};
 use crate::creatures::path::Walker;
-use crate::creatures::{Creature, CreatureKind, Daytime, Spawns};
+use crate::creatures::{Creature, CreatureKind, Daytime, SavedCreature, Spawns};
 use crate::player::{Player, PlayerLook};
 use crate::server::drops::Chance;
 use crate::world::World;
@@ -94,6 +94,9 @@ pub(in crate::server) fn spawn(
             }
             let distance = rng.random_range(NEAREST..FURTHEST);
             let column = feet.xz() + Vec2::from_angle(angle) * distance;
+            if !spawns.biomes.contains(&biome_at(&world, column)) {
+                continue;
+            }
             let walker = walker(kind);
             let Some(first) = ground(&world, spawns, walker, column, feet.y) else {
                 continue;
@@ -116,10 +119,17 @@ pub(in crate::server) fn spawn(
             }
             for at in placed {
                 let yaw = rng.random_range(0.0..TAU);
-                commands.spawn(creature(kind, at, kind.properties().health, yaw));
+                commands.spawn(creature(SavedCreature::grown(kind, at), yaw));
             }
         }
     }
+}
+
+/// The name of the biome owning the column at `column`, `base` for the base terrain's.
+pub(in crate::server) fn biome_at(world: &World, column: Vec2) -> &'static str {
+    let noise = world.region_store.noise();
+    let sample = noise.sample(column.x.into(), column.y.into());
+    noise.biomes().name(sample.biome).unwrap_or("base")
 }
 
 /// Where a creature of `walker`'s size can appear in the column at `column`, the highest place

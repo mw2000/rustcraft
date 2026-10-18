@@ -32,7 +32,9 @@ use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clock::TimeOfDay;
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
-use rustcraft::creatures::{Creature, CreatureKind, CreaturePose, Flinches};
+use rustcraft::creatures::{
+    Condition, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature,
+};
 use rustcraft::farming::Crops;
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
@@ -42,7 +44,7 @@ use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
     BlockChanged, Chat, ChatLine, ChunkEdits, CommandOutput, ContainerChanged, EditRejected,
     EditSummary, HitCreature, PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn,
-    RunCommand, StartBreaking, Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
+    RunCommand, StartBreaking, Teleport, UseBlock, UseCreature, WindClock, MAX_CHAT_LENGTH,
 };
 use rustcraft::save::{SavePlugin, WorldFile, WorldSave};
 use rustcraft::server::creatures::{creature, Health, SpawnRate};
@@ -1732,10 +1734,11 @@ fn test_a_joiner_sees_the_creatures_near_it_moving_smoothly_and_hits_them() {
         let at = server.world().get::<Transform>(guest).unwrap().translation;
         at.distance(feet) < 1e-3
     });
-    let sheep = |at| creature(CreatureKind::Sheep, at, 8, 0.0);
+    let sheep = |at| creature(SavedCreature::grown(CreatureKind::Sheep, at), 0.0);
     server.world_mut().spawn(sheep(far + Vec3::X * 2.0));
     let below = ground(&mut server, feet + Vec3::X * 2.0);
-    let near = server.world_mut().spawn(sheep(below + Vec3::Y * 3.0)).id();
+    // on the ground first, so the client's been shown it before it falls
+    let near = server.world_mut().spawn(sheep(below)).id();
     update_until(&mut server, &mut client, |_, client| {
         !creatures_shown(client).is_empty()
     });
@@ -1743,20 +1746,53 @@ fn test_a_joiner_sees_the_creatures_near_it_moving_smoothly_and_hits_them() {
     let mut seen = client
         .world_mut()
         .query::<(&SeenCreature, &Transform, &Visibility)>();
-    // shown falling between the poses it's sent, not jumping from one to the next
+    // then lifted 3 blocks, and watched as it falls back: the server run a frame at a time, each
+    // once the client has the pose it was last sent, so every pose reaches it however busy the
+    // machine running the tests is, and shown falling between them, not jumping from one to the
+    // next, until it's shown where it landed
+    server
+        .world_mut()
+        .get_mut::<Transform>(near)
+        .unwrap()
+        .translation = below + Vec3::Y * 3.0;
     let (mut sent, mut shown) = (Vec::new(), Vec::new());
-    update_until(&mut server, &mut client, |_, client| {
-        let pose = creatures_shown(client)[0].1;
+    let start = Instant::now();
+    // until it's stood still on the server for a while, and the client shows it there
+    let (mut still, mut last) = (0, f32::NAN);
+    while still < 10 || shown.last().is_some_and(|&y| y > last + 1e-3) {
+        server.update();
+        let pose = *server.world().get::<CreaturePose>(near).unwrap();
+        let y = server.world().get::<Transform>(near).unwrap().translation.y;
+        still = if y == last && y < below.y + 2.0 {
+            still + 1
+        } else {
+            0
+        };
+        last = y;
+        loop {
+            assert!(start.elapsed() < Duration::from_secs(30), "it never landed");
+            std::thread::sleep(Duration::from_millis(1));
+            client.update();
+            let (_, body, visibility) = seen.single(client.world()).unwrap();
+            if *visibility != Visibility::Hidden {
+                shown.push(body.translation.y);
+            }
+            if creatures_shown(&mut client)[0].1 == pose {
+                break;
+            }
+        }
         if sent.last() != Some(&pose.position.y) {
             sent.push(pose.position.y);
         }
-        let (_, body, visibility) = seen.single(client.world()).unwrap();
-        if *visibility != Visibility::Hidden {
-            shown.push(body.translation.y);
-        }
-        // a 3-block fall takes under half a second, and it's shown a tenth of one behind
-        shown.len() * FRAME.as_millis() as usize > 1000
-    });
+    }
+    // from the top of where it was lifted to
+    let top = |ys: &[f32]| {
+        (0..ys.len())
+            .max_by(|&a, &b| ys[a].total_cmp(&ys[b]))
+            .unwrap()
+    };
+    let sent = &sent[top(&sent)..];
+    let shown = &shown[top(&shown)..];
     // only the fall, as once it's landed it may wander off and hop up a block
     let falling = sent.windows(2).take_while(|pair| pair[1] < pair[0]).count();
     let (sent, landed) = (&sent[..=falling], sent[falling]);
@@ -1770,7 +1806,35 @@ fn test_a_joiner_sees_the_creatures_near_it_moving_smoothly_and_hits_them() {
     // and only the one near it, not the host's far off
     assert_eq!(1, creatures_shown(&mut client).len());
 
-    // a hit in its reach hurts it, and the client's told it flinched
+    // shears in its reach shear it, which the client's shown, with it put back beside the guest
+    // in case it's wandered off
+    server
+        .world_mut()
+        .get_mut::<Transform>(near)
+        .unwrap()
+        .translation = below;
+    let shears = Some(ItemStack::new(Item::Shears, 1));
+    server
+        .world_mut()
+        .get_mut::<Inventory>(guest)
+        .unwrap()
+        .slots[0] = shears;
+    client.world_mut().write_message(UseCreature {
+        creature: shown_sheep,
+    });
+    update_until(&mut server, &mut client, |_, client| {
+        client
+            .world()
+            .get::<Condition>(shown_sheep)
+            .is_some_and(|condition| condition.shorn)
+    });
+
+    // and a hit hurts it, and the client's told it flinched
+    server
+        .world_mut()
+        .get_mut::<Transform>(near)
+        .unwrap()
+        .translation = below;
     client.world_mut().write_message(HitCreature {
         creature: shown_sheep,
     });

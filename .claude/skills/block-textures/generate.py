@@ -93,6 +93,7 @@ TILES = [
     dict(name="BarrelTop", drawn=True),
     dict(name="BarrelSide", drawn=True),
     dict(name="BarrelBottom", drawn=True),
+    dict(name="Wool", drawn=True),
 ]
 
 

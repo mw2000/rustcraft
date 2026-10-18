@@ -93,8 +93,10 @@ impl Plugin for ServerPlugin {
                         creatures::wake,
                         creatures::spawn,
                         creatures::take_paths,
+                        creatures::grow,
                         creatures::think,
                         creatures::move_creatures,
+                        creatures::breed,
                         creatures::sleep,
                     )
                         .chain(),
@@ -134,7 +136,7 @@ impl Plugin for ServerPlugin {
                     commands::run_commands,
                     chat::receive_chat,
                     (clock::wind_clock, clock::sync_clock).chain(),
-                    creatures::receive_hits,
+                    (creatures::receive_hits, creatures::receive_uses),
                 )
                     .after(ClientSystems::Send)
                     .before(ServerSystems::Send)

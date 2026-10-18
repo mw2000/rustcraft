@@ -1357,7 +1357,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     joiner a `Teleport`.
   - **Beds:** `bed`, a cube for now, from 3 planks and 3 tall grass at a crafting table: a
     frame and a grass mattress, as there's no wool without sheep, and tall grass is the one soft
-    thing a player can gather (it now drops itself). Right-clicking one in reach (`UseBlock`)
+    thing a player can gather (it now drops itself). Since M3.2 it takes 3 wool instead (§5.8). Right-clicking one in reach (`UseBlock`)
     sets the respawn point, and at night (the sun down, 0.74 to 0.24) lies the player down
     (`Asleep`), fading their screen; moving half a block gets them up. Once every player has
     been asleep for 2 seconds the clock skips to the next morning (0.26) and everyone wakes.
@@ -1366,9 +1366,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
     `assets/textures/hud.png`, drawn by the block-textures skill's `hud.py`.
   - `PROTOCOL_VERSION` is 7.
-  - **Later:** a two-block bed lain in, with a Leave Bed button; meat from more animals (M3.2;
-    sheep's mutton came with M3.1);
-    damage from mobs and lava; leaves dropping apples as they decay, once they do.
+  - **Later:** a two-block bed lain in, with a Leave Bed button; damage from mobs and lava; leaves dropping apples as they decay, once they do.
 - Day and night already exist; night brings hostile mobs (§5.8).
 - **Block light (built, M1.7).** Blocks that `emit` light (the torch, 14) light the blocks round
   them alongside sky light, so caves and nights can be lit. It loses a level a block, and the
@@ -1406,7 +1404,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   seeds. Growth is server-side and deterministic in what it needs: a chunk's crops advance from the
   time they were planted, so unloaded fields catch up when they load rather than ticking forever.
 - **Food:** bread from wheat at a crafting table; apples from leaves sometimes; meat from animals
-  once they exist (§5.8). Food items say how much hunger they fill.
+  (§5.8). Food items say how much hunger they fill. Built: raw mutton and chicken fill 2, beef
+  and pork 3, and cooked in a furnace mutton and chicken 6 and beef and pork 8 (M3.2).
 - **Built (M1.9a):** the `Cross` render style and four plants, `tall_grass` (greyscale, tinted to
   the climate's grass), `poppy`, `dandelion` and `cornflower`, their tiles drawn by the
   block-textures skill's `draw.py`. The chunk mesher draws each as two quads through its cell,
@@ -1805,9 +1804,69 @@ from high places.
     reach, a kill that drops mutton and wears the axe, sleeping and waking, spawning on grass out
     of sight up to the cap, and none at night or on sand); saving and restoring them; the
     multiplayer test (§4.4); `/summon`'s parsing; and `ray_distance`.
-  - **Later:** wool and shearing, more animals and breeding (M3.2), hostile mobs, despawning and
-    weapons (M3.3), villagers (M3.4); a creature's head turning to look, grazing, and a death
-    that tips over rather than vanishing; creatures pushing each other and players apart.
+  - **Later:** hostile mobs, despawning and weapons (M3.3), villagers (M3.4); a creature's head
+    turning to look, grazing, and a death that tips over rather than vanishing; creatures pushing
+    each other and players apart.
+- **Built (M3.2): passive animals,** shearing and breeding (`src/server/creatures/tending.rs`).
+  - **Four kinds** in `creatures!`: sheep (0.9 × 1.3, 8 health), cows (0.9 × 1.4, 10, walking
+    1.2 and running 3.0), pigs (0.8 × 0.9, 10) and chickens (0.45 × 0.75, 4). Each has its own
+    box model in the sheep's style: a cow brown with pale patches, horns, a pink muzzle and an
+    udder; a pig pink and low with a snout and ears; a chicken white on thin orange legs with
+    wings, a tail, a beak, a comb and a wattle. Drops: sheep 1–2 mutton, cows 1–3 beef and 0–2
+    leather (a range from 0 can drop none), pigs 1–3 pork, chickens a chicken and 0–2 feathers.
+    Leather and feathers are only materials until armour, books and arrows want them.
+  - **New columns:** `food`, the items a kind follows and is fed to breed (`FollowLure` reads
+    it): wheat for sheep and cows, apples or wheat for pigs (there are no carrots), seeds for
+    chickens; `fleece`, what shearing gives (sheep: 1–3 `wool`), parts marked `fleece` in the
+    model being hidden once shorn; and `flutters`, a chicken's: it never falls faster than 1.5
+    blocks a second (its speed held so the step's gravity takes it no further) and no fall hurts
+    it.
+  - **Spawning:** `Spawns` gains `biomes`, by name as structures name them (`base` for the base
+    terrain), checked against the biome owning the column tried (`spawning::biome_at`, a noise
+    sample). Every kind on grass, under the sky, by day: sheep in base grassland, foothills,
+    savanna and taiga, in twos to fours with a cap of 8; cows in base, foothills, savanna and
+    forest, twos to fours; pigs in forest, jungle and taiga, ones to threes; chickens everywhere
+    but deserts and glaciers, twos to fours; each of these capped at 6, every kind counted on its
+    own. None in deserts or on glaciers (which have no grass anyway).
+  - **Sounds:** each kind calls and cries out through M-A3's `CreatureSound`: a cow's moo, a
+    pig's grunts and a hen's clucks, synthesised by the sounds skill's `synth.py` (`moo`, `oink`,
+    `cluck`, four takes each) beside the sheep's bleat.
+  - **Life:** `Life` on each creature counts down, in seconds, how long it has to grow up, for its
+    fleece to grow back, to be in love, and to rest after breeding, and `grow` keeps
+    `Condition { young, shorn, in_love }`, replicated, in step. Saved creatures keep the first two
+    (`SavedCreature::grows_up_in`, `regrows_in`), so the creatures format is 2, and format 1 files
+    read as grown and unshorn. Love and rest aren't saved, being soon over.
+  - **Using them:** right click on a creature sends `UseCreature`, which the server checks for
+    reach as hits are (and the client doesn't eat while it's looking at one). Shears (a tool of
+    kind `Shears` and no tier, so it hits as a hand does, 2 iron ingots at a table, quick at the
+    wool block) on a grown, unshorn sheep drop 1–3 wool and wear them a use; the fleece grows back
+    in 4–6 minutes. A grown animal's food, while it isn't in love or resting, puts it in love for
+    30 s, taking one in survival.
+  - **Breeding:** `Breed`, after `Flee` in an animal's behaviours, sends one in love to the
+    nearest of its kind in love within 8 blocks (`Doing::Mate`), a cell from it; once two that
+    want each other are within 1.6 blocks across, `breed` makes a young one between them and rests
+    both for 5 minutes. A young one is half the size, body and model (`YOUNG_SCALE`), takes no
+    food, can't be shorn, drops nothing, and grows up in 4 minutes. **Caps:** a kind with 24 of
+    it within 16 blocks takes no food and breeds no more, which lets a farm grow and keeps one
+    from growing without end; bred animals count towards spawning's caps, so a farm keeps wild
+    ones from appearing round it.
+  - **Wool:** an unshorn sheep killed drops a wool too. 4 make a `wool_block` by hand (soft, 1.2 s
+    by hand, quickest with shears), and beds now take 3 wool and 3 planks. Grass beds are gone
+    rather than kept beside them: one recipe per thing keeps the list short, wool beds give sheep
+    a use from the first day, and a first night's bed is still three sheep away, needing no iron.
+  - **Drawing:** the client hides fleece once shorn, draws the young at half size, and puts a
+    small red heart over one in love. Targeting takes each creature's body as its condition has
+    it. Sprites for the new items are drawn by `items.py`, the wool block's tile by `draw.py`.
+  - `PROTOCOL_VERSION` is 16.
+  - **Tests** (`server::creatures`): each kind appearing up to its own cap in base grassland and
+    in forest, or not at all if it doesn't live there, and none at night, on sand or in deserts; cows' beef and sometimes-none leather, a sheep's wool unless shorn and a young one's
+    nothing; shearing once, regrowing and shearing again, and not lambs or cows; two cows fed
+    finding each other and making a calf, resting and refusing food, the calf refusing food and
+    growing up, and breeding again once rested; a crowd taking no food; a chicken fluttering down
+    10 blocks over 6 s unhurt. Also cooking each meat, the wool and shears recipes, saving a lamb
+    and a shorn sheep and reading format 1, and shearing seen by a joining client.
+  - **Later:** eggs, dyed wool, babies following their mothers, grazing that eats grass (which
+    would want grass to spread back first).
 
 ### 5.9 Distribution
 
@@ -1992,8 +2051,8 @@ start.**
 Done when: **the world feels inhabited, and night is dangerous.**
 
 - ☑ **M3.1 Entity system and pathfinding.** (§5.8)
-- ☐ **M3.2 Passive animals.** Sheep, with mutton, came with M3.1 as its proof; wool, more
-  animals and breeding are left.
+- ☑ **M3.2 Passive animals.** Sheep, cows, pigs and chickens, shearing, wool and breeding
+  (§5.8).
 - ☐ **M3.3 Hostile mobs and combat.**
 - ☐ **M3.4 Villages and villagers.**
 - ☐ **M3.5 Weather.**

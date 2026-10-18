@@ -156,6 +156,13 @@ impl SoundKind {
             Self::Call(CreatureKind::Sheep) => takes("bleat".into(), 0.6, (0.85, 1.15)),
             // higher and sharper
             Self::Yelp(CreatureKind::Sheep) => takes("bleat".into(), 0.8, (1.25, 1.45)),
+            Self::Call(CreatureKind::Cow) => takes("moo".into(), 0.7, (0.9, 1.1)),
+            Self::Yelp(CreatureKind::Cow) => takes("moo".into(), 0.9, (1.3, 1.5)),
+            Self::Call(CreatureKind::Pig) => takes("oink".into(), 0.6, (0.9, 1.15)),
+            Self::Yelp(CreatureKind::Pig) => takes("oink".into(), 0.8, (1.35, 1.6)),
+            Self::Call(CreatureKind::Chicken) => takes("cluck".into(), 0.5, (0.9, 1.15)),
+            // a startled squawk
+            Self::Yelp(CreatureKind::Chicken) => takes("cluck".into(), 0.8, (1.4, 1.7)),
         }
     }
 

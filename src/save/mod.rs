@@ -33,7 +33,7 @@ use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
-use crate::server::creatures::{Dormant, Health};
+use crate::server::creatures::{saved, Dormant, Health, Life};
 use crate::server::Operators;
 use crate::survival::{SpawnBed, Vitals};
 use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
@@ -483,7 +483,16 @@ struct Savable<'w, 's> {
     clock: Res<'w, TimeOfDay>,
     operators: Res<'w, Operators>,
     dormant: Option<Res<'w, Dormant>>,
-    creatures: Query<'w, 's, (&'static Creature, &'static Transform, &'static Health)>,
+    creatures: Query<
+        'w,
+        's,
+        (
+            &'static Creature,
+            &'static Transform,
+            &'static Health,
+            &'static Life,
+        ),
+    >,
     players: Query<
         'w,
         's,
@@ -522,11 +531,7 @@ impl Savable<'_, '_> {
         let awake = self
             .creatures
             .iter()
-            .map(|(creature, body, health)| SavedCreature {
-                kind: creature.0,
-                position: body.translation,
-                health: health.points,
-            });
+            .map(|(creature, body, health, life)| saved(creature, body, health, life));
         let asleep = self
             .dormant
             .iter()
@@ -950,13 +955,18 @@ mod tests {
         let mut app = play(&dir);
         app.insert_resource(SpawnRate(None));
         let near = Vec3::new(3.5, 470.0, -2.5);
-        let far = SavedCreature {
-            kind: CreatureKind::Sheep,
-            position: Vec3::new(5000.5, 466.0, 20.25),
-            health: 3,
+        // a lamb, and a shorn sheep asleep
+        let lamb = SavedCreature {
+            health: 6,
+            grows_up_in: 100.0,
+            ..SavedCreature::grown(CreatureKind::Sheep, near)
         };
-        app.world_mut()
-            .spawn(creature(CreatureKind::Sheep, near, 6, 0.0));
+        let far = SavedCreature {
+            health: 3,
+            regrows_in: 50.0,
+            ..SavedCreature::grown(CreatureKind::Sheep, Vec3::new(5000.5, 466.0, 20.25))
+        };
+        app.world_mut().spawn(creature(lamb, 0.0));
         app.world_mut().resource_mut::<Dormant>().0.insert(
             Region::containing(ChunkCoordinate::containing(far.position.as_i64vec3())),
             vec![far],
@@ -979,10 +989,17 @@ mod tests {
             .0
             .values()
             .flatten()
-            .map(|creature| (creature.position.x, creature.health))
+            .copied()
             .collect();
-        saved.sort_by(|a, b| a.0.total_cmp(&b.0));
-        assert_eq!(vec![(near.x, 6), (far.position.x, 3)], saved);
+        saved.sort_by(|a, b| a.position.x.total_cmp(&b.position.x));
+        // the lamb a frame older, as it grew while the world closed
+        assert_eq!(2, saved.len());
+        assert_eq!(
+            (near.x, 6, 0.0),
+            (saved[0].position.x, saved[0].health, saved[0].regrows_in)
+        );
+        assert!((95.0..=100.0).contains(&saved[0].grows_up_in), "{saved:?}");
+        assert_eq!(far, saved[1]);
         // and gone from the save once they're gone from the world
         app.world_mut().resource_mut::<Dormant>().0.clear();
         app.world_mut().write_message(AppExit::Success);

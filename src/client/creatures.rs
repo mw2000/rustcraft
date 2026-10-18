@@ -1,7 +1,8 @@
 //! Creatures as this client sees them (§5.8): each where its poses put it, drawn a little behind
 //! time as other players are (`client::others`), as boxes of its kind's model whose legs swing
-//! as it walks, flashing red as it's hurt. Every creature of a kind shares its meshes and
-//! materials, so Bevy draws them batched.
+//! as it walks, flashing red as it's hurt, smaller while it's young, without its fleece once
+//! it's shorn, and with a heart over it while it's in love. Every creature of a kind shares its
+//! meshes and materials, so Bevy draws them batched.
 
 use std::f32::consts::TAU;
 
@@ -9,8 +10,8 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use super::others::{Pose, Poses};
-use crate::collision::ray_distance;
-use crate::creatures::{Creature, CreatureKind, CreaturePose, Flinches};
+use crate::collision::{ray_distance, Aabb};
+use crate::creatures::{Condition, Creature, CreatureKind, CreaturePose, Flinches, YOUNG_SCALE};
 use crate::player::PlayerLook;
 
 // How long a creature flashes red when it's hurt, in seconds.
@@ -23,6 +24,9 @@ const SWING: f32 = 0.7;
 const FULL_SWING_SPEED: f32 = 1.4;
 // Radians of stride a block walked, for a leg a block long: a player's 0.75 swings 2.2.
 const STRIDE: f32 = 1.65;
+// How far over a creature's model the heart it shows in love is, in blocks.
+const HEART_OVER: f32 = 0.35;
+const HEART: Color = Color::srgb(0.9, 0.18, 0.26);
 
 /// A creature as this client sees it, drawn where its poses put it, on an entity of its own,
 /// which goes with it. Its look's pitch is always level.
@@ -81,16 +85,17 @@ pub(super) fn follow_creatures(
 }
 
 /// The nearest creature seen that the ray from `origin` along `direction` passes through within
-/// `reach`, as the creature itself, and how far along the ray it is.
+/// `reach`, as the creature itself, and how far along the ray it is. Each is seen with the body
+/// it has.
 pub fn creature_hit<'a>(
     origin: Vec3,
     direction: Vec3,
     reach: f32,
-    seen: impl IntoIterator<Item = (&'a SeenCreature, &'a Transform, CreatureKind)>,
+    seen: impl IntoIterator<Item = (&'a SeenCreature, &'a Transform, Aabb)>,
 ) -> Option<(Entity, f32)> {
     seen.into_iter()
-        .filter_map(|(seen, body, kind)| {
-            let distance = ray_distance(origin, direction, body.translation, kind.body())?;
+        .filter_map(|(seen, body, aabb)| {
+            let distance = ray_distance(origin, direction, body.translation, aabb)?;
             (distance <= reach).then_some((seen.0, distance))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -103,34 +108,42 @@ impl Plugin for DrawCreaturesPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, make_looks)
             .add_observer(draw_creature)
-            .add_systems(Update, (walk, flash));
+            .add_systems(Update, (walk, flash, show_condition));
     }
 }
 
 /// What each kind of creature's drawn with: a mesh for each box of its model, where it turns
-/// from, and its material, as it is and flashing.
+/// from, and its material, as it is and flashing, and the heart shown over those in love.
 #[derive(Resource)]
-struct CreatureLooks(HashMap<CreatureKind, Vec<PartLook>>);
+struct CreatureLooks {
+    kinds: HashMap<CreatureKind, Vec<PartLook>>,
+    heart: Handle<Mesh>,
+    heart_colour: Handle<StandardMaterial>,
+}
 
 struct PartLook {
     mesh: Handle<Mesh>,
     joint: Vec3,
     swing: f32,
+    fleece: bool,
     material: Handle<StandardMaterial>,
     hurt: Handle<StandardMaterial>,
 }
 
 // A creature's boxes, with which of them are legs, which way each swings, and where it is in
-// its stride.
+// its stride, which are its fleece, its heart, and the condition they were last shown for.
 #[derive(Component)]
 struct Model {
     parts: Vec<Entity>,
     legs: Vec<(Entity, f32)>,
+    fleece: Vec<Entity>,
+    heart: Entity,
     stride_per_block: f32,
     stride: f32,
     swing: f32,
     last: Vec3,
     flashing: bool,
+    shown: Option<Condition>,
 }
 
 fn make_looks(
@@ -166,13 +179,30 @@ fn make_looks(
                 mesh: meshes.add(mesh),
                 joint,
                 swing: part.swing,
+                fleece: part.fleece,
                 material,
                 hurt,
             }
         });
         looks.insert(kind, parts.collect());
     }
-    commands.insert_resource(CreatureLooks(looks));
+    // two lobes over a square stood on its corner, a fifth of a block across
+    let lobe = |x: f32| Mesh::from(Cuboid::from_length(0.1)).translated_by(Vec3::new(x, 0.04, 0.0));
+    let mut heart = Mesh::from(Cuboid::from_length(0.1))
+        .rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
+        .translated_by(Vec3::Y * -0.02);
+    for x in [-0.045, 0.045] {
+        heart.merge(&lobe(x)).expect("boxes merge");
+    }
+    commands.insert_resource(CreatureLooks {
+        kinds: looks,
+        heart: meshes.add(heart),
+        heart_colour: materials.add(StandardMaterial {
+            base_color: HEART,
+            unlit: true,
+            ..default()
+        }),
+    });
 }
 
 fn draw_creature(
@@ -185,8 +215,8 @@ fn draw_creature(
     let Ok(Creature(kind)) = seen.get(add.entity).and_then(|seen| creatures.get(seen.0)) else {
         return;
     };
-    let (mut parts, mut legs) = (vec![], vec![]);
-    for look in &looks.0[kind] {
+    let (mut parts, mut legs, mut fleece) = (vec![], vec![], vec![]);
+    for look in &looks.kinds[kind] {
         let part = commands
             .spawn((
                 Mesh3d(look.mesh.clone()),
@@ -199,21 +229,36 @@ fn draw_creature(
         if look.swing != 0.0 {
             legs.push((part, look.swing));
         }
+        if look.fleece {
+            fleece.push(part);
+        }
     }
-    let leg = kind
-        .properties()
-        .model
+    let model = kind.properties().model;
+    let top = model.iter().map(|part| part.centre.y + part.size.y / 2.0);
+    let heart = commands
+        .spawn((
+            Mesh3d(looks.heart.clone()),
+            MeshMaterial3d(looks.heart_colour.clone()),
+            Transform::from_xyz(0.0, top.fold(0.0, f32::max) + HEART_OVER, 0.0),
+            Visibility::Hidden,
+            ChildOf(add.entity),
+        ))
+        .id();
+    let leg = model
         .iter()
         .find(|part| part.swing != 0.0)
         .map_or(1.0, |part| part.size.y);
     commands.entity(add.entity).insert(Model {
         parts,
         legs,
+        fleece,
+        heart,
         stride_per_block: STRIDE / leg,
         stride: 0.0,
         swing: 0.0,
         last: Vec3::ZERO,
         flashing: false,
+        shown: None,
     });
 }
 
@@ -267,10 +312,44 @@ fn flash(
         let Ok(Creature(kind)) = creatures.get(seen.0) else {
             continue;
         };
-        for (&part, look) in model.parts.iter().zip(&looks.0[kind]) {
+        for (&part, look) in model.parts.iter().zip(&looks.kinds[kind]) {
             if let Ok(mut material) = materials.get_mut(part) {
                 material.0 = if red { &look.hurt } else { &look.material }.clone();
             }
+        }
+    }
+}
+
+// Shows each creature as its condition has it: smaller while it's young, without its fleece
+// once it's shorn, and with a heart over it in love.
+fn show_condition(
+    mut models: Query<(&SeenCreature, &mut Model, &mut Transform)>,
+    creatures: Query<&Condition>,
+    mut visibilities: Query<&mut Visibility>,
+) {
+    for (seen, mut model, mut body) in &mut models {
+        let Ok(&condition) = creatures.get(seen.0) else {
+            continue;
+        };
+        if model.shown == Some(condition) {
+            continue;
+        }
+        model.shown = Some(condition);
+        body.scale = Vec3::splat(if condition.young { YOUNG_SCALE } else { 1.0 });
+        let shown = |on: bool| {
+            if on {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            }
+        };
+        for &part in &model.fleece {
+            if let Ok(mut visibility) = visibilities.get_mut(part) {
+                *visibility = shown(!condition.shorn);
+            }
+        }
+        if let Ok(mut visibility) = visibilities.get_mut(model.heart) {
+            *visibility = shown(condition.in_love);
         }
     }
 }

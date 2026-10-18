@@ -348,6 +348,20 @@ def bed_side(rng):
     return out
 
 
+WOOL = np.array([(186, 180, 166), (210, 206, 194), (228, 225, 215), (244, 242, 234)], float)
+
+
+def wool(rng):
+    """Felted wool: soft, fine noise in cream, with tight curls scattered over it, each a lit arc over a shaded one,
+    wrapping round the edges so it tiles."""
+    out = WOOL[1 + levels(noise(rng, (1, 1)), 2)]
+    for _ in range(16):
+        y, x = rng.integers(0, 16, 2)
+        for dy, dx, shade in [(0, 0, 3), (0, 1, 3), (1, -1, 2), (1, 2, 0), (2, 0, 0), (2, 1, 0)]:
+            out[(y + dy) % 16, (x + dx) % 16] = WOOL[shade]
+    return out
+
+
 def clear():
     """A tile with nothing in it yet, as RGBA, for plants drawn on transparency."""
     return np.zeros((16, 16, 4))
@@ -799,7 +813,8 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             CrackedStoneBricks=cracked_stone_bricks, MossyStoneBricks=mossy_stone_bricks, PolishedStone=polished_stone,
             Terracotta=terracotta((152, 94, 67)), RedTerracotta=terracotta((143, 61, 47)), YellowTerracotta=terracotta((186, 133, 35)),
             BlueTerracotta=terracotta((70, 62, 94)), GreenTerracotta=terracotta((76, 83, 42)), DarkPlanks=dark_planks,
-            LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end)
+            LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end,
+            Wool=wool)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

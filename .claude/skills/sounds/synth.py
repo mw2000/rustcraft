@@ -462,6 +462,57 @@ def bleat(rng):
     return level(trim(x), -19)
 
 
+def voiced(f0, harmonics=30):
+    """A buzz following the pitch `f0`, a sample at a time, its harmonics falling off as 1/k."""
+    phase = np.cumsum(f0) / SR
+    return sum(np.sin(2 * np.pi * k * phase) / k for k in range(1, harmonics) if k * f0.max() < SR / 2.2)
+
+
+def moo(rng):
+    """A cow's call (M3.2): a long low hum through closed lips opening out to an "oo-aa", its pitch
+    rising a little and falling away."""
+    seconds = rng.uniform(1.0, 1.4)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(100, 125) * (1 + 0.18 * np.sin(np.pi * t) - 0.1 * t) * (1 + 0.01 * np.sin(2 * np.pi * 5 * times(n)))
+    buzz = voiced(f0, 40)
+    closed = lowpass(buzz, 350)
+    opened = sum(resonator(buzz, f, q) * a for f, q, a in ((450, 5, 1.0), (900, 6, 0.6), (2400, 8, 0.15)))
+    mouth = np.clip(t * 2.5 - 0.3, 0, 1)
+    x = (closed * (1 - mouth) + opened * mouth) * envelope(n, 0.12, seconds / 3, hold=seconds * 0.4)
+    return level(trim(x), -19)
+
+
+def oink(rng):
+    """A pig's grunts (M3.2): two or three short, rough, nasal snorts, the last a little longer."""
+    out = []
+    count = rng.integers(2, 4)
+    for i in range(count):
+        d = rng.uniform(0.09, 0.14) * (1.5 if i == count - 1 else 1.0)
+        n = samples(d)
+        f0 = rng.uniform(140, 190) * (1 - 0.15 * times(n) / d)
+        rough = 1 + 0.6 * np.sin(2 * np.pi * rng.uniform(35, 50) * times(n))
+        buzz = voiced(f0) * rough + bandpass(rng.standard_normal(n), 400, 2500) * 0.3
+        nose = sum(resonator(buzz, f, q) * a for f, q, a in ((350, 4, 1.0), (1100, 5, 0.7), (2600, 6, 0.3)))
+        out.append(nose * envelope(n, 0.008, d / 2.5, hold=d * 0.3))
+        out.append(np.zeros(samples(rng.uniform(0.05, 0.1))))
+    return level(trim(np.concatenate(out)), -20)
+
+
+def cluck(rng):
+    """A hen's clucks (M3.2): a few quick, bright knocks of voice, rising at the last."""
+    out = []
+    count = rng.integers(3, 6)
+    for i in range(count):
+        d = rng.uniform(0.05, 0.08)
+        n = samples(d)
+        f0 = rng.uniform(380, 480) * (1.3 if i == count - 1 else 1.0) * (1 + 0.2 * times(n) / d)
+        voice = sum(resonator(voiced(f0), f, q) * a for f, q, a in ((950, 5, 1.0), (2300, 7, 0.6), (3400, 8, 0.25)))
+        out.append(voice * envelope(n, 0.003, d / 3))
+        out.append(np.zeros(samples(rng.uniform(0.06, 0.14))))
+    return level(trim(np.concatenate(out)), -21)
+
+
 # --- ambience loops ------------------------------------------------------------------------------
 
 LOOP_DB = -27
@@ -700,7 +751,8 @@ def catalogue():
         for v in range(VARIATIONS):
             out[f"step/{surface}_{v + 1}"] = (lambda rng, s=surface: step(s, rng), 100 * s + v)
             out[f"break/{surface}_{v + 1}"] = (lambda rng, s=surface: break_(s, rng), 1000 + 100 * s + v)
-    for name, make in (("swim", swim), ("splash", splash), ("pickup", pickup), ("eat", eat), ("hurt", hurt), ("bleat", bleat)):
+    for name, make in (("swim", swim), ("splash", splash), ("pickup", pickup), ("eat", eat), ("hurt", hurt), ("bleat", bleat),
+                       ("moo", moo), ("oink", oink), ("cluck", cluck)):
         for v in range(VARIATIONS):
             out[f"{name}_{v + 1}"] = (make, 5000 + v)
     for name, make in (("death", death), ("chest_open", chest_open), ("chest_close", chest_close), ("click", click)):

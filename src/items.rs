@@ -38,6 +38,8 @@ pub enum ToolKind {
     Shovel,
     /// Breaks nothing quicker, but tills dirt and grass into farmland (`farming`).
     Hoe,
+    /// Shears sheep (§5.8), and cuts wool quicker.
+    Shears,
 }
 
 /// A tool's columns in the table.
@@ -72,6 +74,19 @@ const fn tool(kind: ToolKind, tier: u8) -> Properties {
         ..PLAIN
     }
 }
+
+// Shears are of no tier, so hit as a hand does, and wear a use for each sheep shorn or block
+// cut.
+const SHEARS: Properties = Properties {
+    max_stack: 1,
+    tool: Some(Tool {
+        kind: ToolKind::Shears,
+        tier: 0,
+        durability: 200,
+        speed: 5.0,
+    }),
+    ..PLAIN
+};
 
 // A row's properties as food that fills `fills` of the food bar.
 const fn food(fills: u8) -> Properties {
@@ -133,9 +148,11 @@ use ToolKind::{Axe, Hoe, Pickaxe, Shovel};
 // Coal comes from coal ore, ingots from smelting ore in a furnace, and the tools are made from
 // planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
 // Apples come from leaves, now and then, seeds from tall grass, and wheat from the seeds sown
-// (`farming`), which bread is baked from. Mutton comes from sheep (§5.8) and cooks in a furnace.
-// Gold, frost crystal and jade come from ores under far climates, and any of them blended with
-// iron smelts into bright steel, the best tools; embers come from the deepest ore.
+// (`farming`), which bread is baked from. Meat comes from animals (§5.8) and cooks in a furnace;
+// wool from sheep, shorn with shears or killed, and leather and feathers from cows and chickens,
+// which wait for armour, books and arrows to be of use. Gold, frost crystal and jade come from
+// ores under far climates, and any of them blended with iron smelts into bright steel, the best
+// tools; embers come from the deepest ore.
 items! {
     Stick { name: "stick" },
     Coal { name: "coal" },
@@ -173,6 +190,16 @@ items! {
     BrightSteelAxe { name: "bright_steel_axe", tool(Axe, 5) },
     BrightSteelShovel { name: "bright_steel_shovel", tool(Shovel, 5) },
     BrightSteelHoe { name: "bright_steel_hoe", tool(Hoe, 5) },
+    Wool { name: "wool" },
+    Shears { name: "shears", SHEARS },
+    Leather { name: "leather" },
+    Feather { name: "feather" },
+    Beef { name: "beef", food(3) },
+    CookedBeef { name: "cooked_beef", food(8) },
+    Pork { name: "pork", food(3) },
+    CookedPork { name: "cooked_pork", food(8) },
+    Chicken { name: "chicken", food(2) },
+    CookedChicken { name: "cooked_chicken", food(6) },
 }
 
 impl Item {
@@ -578,7 +605,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::BrightSteelHoe.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::CookedChicken.sprite());
     }
 
     #[test]

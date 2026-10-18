@@ -11,8 +11,9 @@
 //! game mode and what they hold, with where they are and look relayed as `PlayerMoved`.
 //!
 //! Creatures are replicated to the clients whose players are near them (M3.1): their kind,
-//! their pose, which the server sets 20 times a second as they move, and how many times
-//! they've been hurt. Clients hit them with `HitCreature`.
+//! their pose, which the server sets 20 times a second as they move, how many times they've
+//! been hurt, and whether they're young, shorn or in love. Clients hit them with `HitCreature`
+//! and feed or shear them with `UseCreature` (M3.2).
 
 use std::time::Duration;
 
@@ -30,7 +31,7 @@ use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::chunks::lod::CellEdits;
 use crate::containers::Container;
 use crate::crafting::Recipe;
-use crate::creatures::{Creature, CreaturePose, Flinches};
+use crate::creatures::{Condition, Creature, CreaturePose, Flinches};
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
 use crate::items::Item;
@@ -48,7 +49,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -120,8 +121,10 @@ impl Plugin for ProtocolPlugin {
             .replicate::<Creature>()
             .replicate::<CreaturePose>()
             .replicate::<Flinches>()
+            .replicate::<Condition>()
             .add_visibility_filter::<Whereabouts>()
-            .add_mapped_client_message::<HitCreature>(Channel::Ordered);
+            .add_mapped_client_message::<HitCreature>(Channel::Ordered)
+            .add_mapped_client_message::<UseCreature>(Channel::Ordered);
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -519,6 +522,14 @@ pub struct VitalsChanged {
 /// their reach.
 #[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HitCreature {
+    #[entities]
+    pub creature: Entity,
+}
+
+/// A player using what they hold on the creature `creature`, as right click does: shearing it
+/// or feeding it. The server checks it's in their reach.
+#[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UseCreature {
     #[entities]
     pub creature: Entity,
 }
