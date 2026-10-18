@@ -13,13 +13,13 @@ use crate::protocol::{CommandOutput, TimeSync, WindClock};
 // frames add up to a little more or less than the server's, so this keeps them from drifting.
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 // How fast `[` and `]` wind the clock, in days a second.
-const WIND_SPEED: f32 = 0.1;
+const WIND_SPEED: f64 = 0.1;
 // How fast the clock runs unwound, in days a second.
-const DAY_RATE: f32 = 1.0 / DAY_SECONDS;
+const DAY_RATE: f64 = 1.0 / DAY_SECONDS as f64;
 
 /// How fast the clock runs, in days a second.
 #[derive(Resource, PartialEq)]
-pub struct ClockRate(f32);
+pub struct ClockRate(f64);
 
 impl Default for ClockRate {
     fn default() -> Self {
@@ -27,23 +27,10 @@ impl Default for ClockRate {
     }
 }
 
-/// Moves the clock on with the game's time. It's counted in an `f64`, kept with what it last
-/// set the clock to, as an `f32` of a thousand days can't count a frame's worth: a server left
-/// running for a week would otherwise stop its clock, and crops grow by the days it counts.
-pub fn run_clock(
-    time: Res<Time>,
-    rate: Res<ClockRate>,
-    mut clock: ResMut<TimeOfDay>,
-    mut counted: Local<(f64, f32)>,
-) {
-    let (days, set) = &mut *counted;
-    // or as it's been set since, by sleeping through the night or opening a world
-    if clock.0 != *set {
-        *days = f64::from(clock.0);
-    }
-    *days += time.delta_secs_f64() * f64::from(rate.0);
-    clock.0 = *days as f32;
-    *set = clock.0;
+/// Moves the clock on with the game's time. The clock is an `f64`, which can count a frame's
+/// worth however long the world has lived: crops grow by the days it counts.
+pub fn run_clock(time: Res<Time>, rate: Res<ClockRate>, mut clock: ResMut<TimeOfDay>) {
+    clock.0 += time.delta_secs_f64() * rate.0;
 }
 
 /// Winds the clock back or forward as operators ask, for looking at the sky at any hour, or
@@ -77,7 +64,7 @@ pub(super) fn wind_clock(
             }
             continue;
         }
-        let wound = wind.clamp(-1, 1) as f32;
+        let wound = wind.clamp(-1, 1) as f64;
         rate.set_if_neq(ClockRate(DAY_RATE + wound * WIND_SPEED));
     }
 }
@@ -141,7 +128,7 @@ mod tests {
         app
     }
 
-    fn time(app: &App) -> f32 {
+    fn time(app: &App) -> f64 {
         app.world().resource::<TimeOfDay>().0
     }
 
@@ -172,17 +159,40 @@ mod tests {
 
     #[test]
     fn test_the_clock_runs_on_however_many_days_have_passed() {
-        let mut app = server();
         // a 30th of a second, a dedicated server's frame, is less than half of what an `f32`
         // of 2,000 days can count
-        let frame = Duration::from_secs_f32(1.0 / 30.0);
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(frame));
-        app.world_mut().resource_mut::<TimeOfDay>().0 = 2000.0;
-        for _ in 0..300 {
+        let frame = Duration::from_secs_f64(1.0 / 30.0);
+        for days in [1_000.0, 2_000.0, 10_000.0, 1_000_000.0] {
+            let mut app = server();
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(frame));
+            app.world_mut().resource_mut::<TimeOfDay>().0 = days;
             app.update();
+            let mut last = time(&app);
+            for _ in 0..300 {
+                app.update();
+                // every frame moves it on by as much as the rate says
+                let step = time(&app) - last;
+                assert!(
+                    (step - frame.as_secs_f64() * DAY_RATE).abs() < 1e-9,
+                    "{days}: {step}"
+                );
+                last = time(&app);
+            }
+            let ran = 301.0 * frame.as_secs_f64() * DAY_RATE;
+            assert!((last - days - ran).abs() < 1e-6, "{days}: {last}");
         }
-        let ran = 300.0 * frame.as_secs_f32() * DAY_RATE;
-        assert!((time(&app) - (2000.0 + ran)).abs() < 2e-4, "{}", time(&app));
+    }
+
+    #[test]
+    fn test_sleeping_through_the_night_and_syncing_at_large_days_keep_the_whole_clock() {
+        let mut app = server();
+        app.world_mut().resource_mut::<TimeOfDay>().0 = 1_000_000.9;
+        app.update();
+        assert!(crate::clock::is_night(time(&app)));
+        app.world_mut().write_message(WindClock(1));
+        app.update();
+        let sync = syncs(&mut app).pop().unwrap();
+        assert!((sync.time - 1_000_000.9).abs() < 0.01, "{}", sync.time);
     }
 
     #[test]
@@ -209,7 +219,7 @@ mod tests {
         assert_eq!(1, wound.len());
         assert_eq!(DAY_RATE + WIND_SPEED, wound[0].rate);
         app.update();
-        let step = wound[0].rate * FRAME.as_secs_f32();
+        let step = wound[0].rate * FRAME.as_secs_f64();
         assert!((time(&app) - wound[0].time - step).abs() < 1e-5);
         // a request out of range winds no faster, so changes nothing
         app.world_mut().write_message(WindClock(5));

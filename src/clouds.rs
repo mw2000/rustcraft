@@ -534,13 +534,11 @@ fn layer_data(drift: Vec2) -> [f32; 4] {
 
 /// How far the wind has carried the clouds at `time`, wrapped to the pattern. It follows the
 /// shared time of day, not each process's own clock, so everyone sees the same clouds. The
-/// whole days wrap by the wind's period apart from the day's fraction, so it stays precise
-/// however many days have passed.
+/// seconds are wrapped by the wind's period in an `f64` before they narrow to an `f32`, so
+/// it stays precise however many days have passed.
 fn wind_drift(time: &TimeOfDay) -> Vec2 {
-    let days = time.0.floor();
-    let seconds =
-        (days % (WIND_PERIOD / DAY_SECONDS)) * DAY_SECONDS + (time.0 - days) * DAY_SECONDS;
-    (WIND * seconds).rem_euclid(Vec2::splat(SPAN))
+    let seconds = (time.0 * f64::from(DAY_SECONDS)).rem_euclid(f64::from(WIND_PERIOD));
+    (WIND * seconds as f32).rem_euclid(Vec2::splat(SPAN))
 }
 
 /// Where the pattern copy `offset` copies from the one over `camera` starts, with the clouds
@@ -789,8 +787,8 @@ mod tests {
     #[test]
     fn test_wind_carries_on_seamlessly_past_the_period() {
         let camera = Vec2::new(500.0, 900.0);
-        let period = WIND_PERIOD / DAY_SECONDS;
-        for days in [0.3, 2.0, 41.6] {
+        let period = f64::from(WIND_PERIOD / DAY_SECONDS);
+        for days in [0.3_f64, 2.0, 41.6] {
             assert!(
                 tile_origin(camera, wind_drift(&TimeOfDay(days + period)), IVec2::ZERO)
                     .abs_diff_eq(
@@ -816,10 +814,10 @@ mod tests {
             let d = (b - a).rem_euclid(Vec2::splat(SPAN));
             d.min(Vec2::splat(SPAN) - d)
         };
-        for start in [0.9, 5.9, 5.99, 400.9, 1000.99] {
+        for start in [0.9, 5.9, 5.99, 400.9, 1000.99, 10_000.99, 1_000_000.99] {
             let mut last = wind_drift(&TimeOfDay(start));
             for i in 1..=40 {
-                let now = wind_drift(&TimeOfDay(start + step * i as f32));
+                let now = wind_drift(&TimeOfDay(start + f64::from(step) * i as f64));
                 // a step moves it about as far as the wind goes in that time, and no more
                 let moved = wrapped(last, now);
                 assert!(

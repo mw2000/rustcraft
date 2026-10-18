@@ -256,7 +256,7 @@ pub struct WorldToOpen {
     /// The seed it takes if it's new, or else a random one.
     pub seed: Option<u32>,
     /// The time of day to start at instead of the saved one.
-    pub time_of_day: Option<f32>,
+    pub time_of_day: Option<f64>,
     /// How far, in chunks, terrain is built from full-detail regions, see `World::new`.
     pub region_distance: u32,
     /// The host's player's name, or none for a dedicated server, which has no player of its own.

@@ -74,14 +74,14 @@ mod tests {
     // A row of crops along x on farmland, across two chunks, all planted at day 1, with water
     // at the end of the row, within reach of the last four.
     const ROW: i64 = 24;
-    const PLANTED: f32 = 1.0;
+    const PLANTED: f64 = 1.0;
 
     fn crop(i: i64) -> I64Vec3 {
         I64Vec3::new(i, 1, 3)
     }
 
     // A server with no players and seed 7, its chunks loaded if `loaded`. Its clock moves only as it's set.
-    fn server(loaded: bool) -> App {
+    fn server(loaded: bool, planted: f64) -> App {
         let mut world = World::from_save(7, Edits::default(), 16);
         if loaded {
             load(&mut world);
@@ -90,7 +90,7 @@ mod tests {
         for i in 0..ROW {
             world.edit(crop(i) - I64Vec3::Y, BlockType::Farmland);
             world.edit(crop(i), BlockType::Wheat0);
-            crops.plant(crop(i), PLANTED);
+            crops.plant(crop(i), planted);
         }
         world.edit(crop(ROW) - I64Vec3::Y, BlockType::Water);
         let mut app = App::new();
@@ -103,7 +103,7 @@ mod tests {
         ))
         .insert_resource(world)
         .insert_resource(crops)
-        .insert_resource(TimeOfDay(PLANTED))
+        .insert_resource(TimeOfDay(planted))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
         app.finish();
         app.update();
@@ -117,7 +117,7 @@ mod tests {
     }
 
     // Sets the clock to `day` and lets the server run a frame.
-    fn at(app: &mut App, day: f32) {
+    fn at(app: &mut App, day: f64) {
         app.world_mut().resource_mut::<TimeOfDay>().0 = day;
         app.update();
     }
@@ -137,17 +137,26 @@ mod tests {
 
     #[test]
     fn test_wheat_grows_stage_by_stage_quicker_by_water_and_is_let_go_of_ripe() {
-        let mut app = server(true);
+        wheat_grows(PLANTED);
+    }
+
+    #[test]
+    fn test_wheat_grows_the_same_planted_after_a_million_days() {
+        wheat_grows(1_000_000.0);
+    }
+
+    fn wheat_grows(planted: f64) {
+        let mut app = server(true, planted);
         let seed = app.world().resource::<World>().seed();
         let mut was = stages(&app);
         assert_eq!(vec![0; ROW as usize], was);
         for tenth in 1..=36 {
-            let day = PLANTED + tenth as f32 / 10.0;
+            let day = planted + tenth as f64 / 10.0;
             at(&mut app, day);
             let now = stages(&app);
             // never going back, and as each crop's own time says
             assert!(was.iter().zip(&now).all(|(was, now)| was <= now));
-            let dry = |i: i64| grown(seed, crop(i), PLANTED, day, false);
+            let dry = |i: i64| grown(seed, crop(i), planted, day, false);
             assert_eq!((0..4).map(dry).collect::<Vec<_>>(), now[..4]);
             was = now;
             // half way, the watered end is well ahead of the dry
@@ -164,19 +173,28 @@ mod tests {
 
     #[test]
     fn test_a_field_left_unloaded_catches_up_to_where_it_would_have_grown() {
-        let day = PLANTED + 1.3;
-        let mut live = server(true);
+        catches_up(PLANTED);
+    }
+
+    #[test]
+    fn test_a_field_catches_up_the_same_after_a_million_days() {
+        catches_up(1_000_000.0);
+    }
+
+    fn catches_up(planted: f64) {
+        let day = planted + 1.3;
+        let mut live = server(true, planted);
         for hundredth in 1..=130 {
-            at(&mut live, PLANTED + hundredth as f32 / 100.0);
+            at(&mut live, planted + hundredth as f64 / 100.0);
         }
         // the clock jumped, as when the world's slept through
-        let mut jumped = server(true);
+        let mut jumped = server(true, planted);
         at(&mut jumped, day);
         assert_eq!(stages(&live), stages(&jumped));
         assert!(stages(&live).iter().any(|&stage| stage > 0 && stage < 7));
 
         // and away from everyone, nothing grows until its chunks are loaded again
-        let mut away = server(false);
+        let mut away = server(false, planted);
         sent(&mut away);
         at(&mut away, day);
         assert_eq!(0, sent(&mut away));

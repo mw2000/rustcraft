@@ -50,7 +50,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -201,8 +201,8 @@ pub struct WindClock(pub i8);
 /// The server's time of day, in days, and how fast it's running, in days a second.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct TimeSync {
-    pub time: f32,
-    pub rate: f32,
+    pub time: f64,
+    pub rate: f64,
 }
 
 /// A click in the inventory screen on slot `slot` of the container at `container`, which the

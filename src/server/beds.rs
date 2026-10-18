@@ -173,7 +173,7 @@ mod tests {
         }
     }
 
-    fn time(app: &App) -> f32 {
+    fn time(app: &App) -> f64 {
         app.world().resource::<TimeOfDay>().0
     }
 

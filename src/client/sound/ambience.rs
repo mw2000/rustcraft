@@ -13,7 +13,7 @@ use super::volume::Volumes;
 use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::client::player::LocalPlayer;
-use crate::clock::TimeOfDay;
+use crate::clock::{day_fraction, TimeOfDay};
 use crate::world::World;
 
 // How often where the player is is looked at again, which costs some noise samples, and how
@@ -152,7 +152,7 @@ fn mix(s: &Surroundings) -> Mix {
 
 impl Surroundings {
     /// What's round eyes at `eyes` in `world` at `time`.
-    fn at(world: &World, eyes: Vec3, time: f32) -> Self {
+    fn at(world: &World, eyes: Vec3, time: f64) -> Self {
         let noise = world.region_store.noise();
         let (x, z) = (eyes.x as f64, eyes.z as f64);
         let here = noise.sample(x, z);
@@ -176,7 +176,7 @@ impl Surroundings {
             trees: here.trees as f32,
             temperature: climate.temperature,
             humidity: climate.humidity,
-            time,
+            time: day_fraction(time),
         }
     }
 }

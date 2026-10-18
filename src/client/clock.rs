@@ -26,13 +26,13 @@ pub fn follow_clock(
     mut syncs: MessageReader<TimeSync>,
     time: Res<Time>,
     mut clock: ResMut<TimeOfDay>,
-    mut rate: Local<f32>,
+    mut rate: Local<f64>,
 ) {
     if let Some(sync) = syncs.read().last() {
         clock.0 = sync.time;
         *rate = sync.rate;
     }
-    clock.0 += time.delta_secs() * *rate;
+    clock.0 += time.delta_secs_f64() * *rate;
 }
 
 #[cfg(test)]
@@ -52,7 +52,7 @@ mod tests {
     use crate::world::World;
 
     // As long as Bevy lets a frame be.
-    const FRAME: f32 = 0.25;
+    const FRAME: f64 = 0.25;
 
     // The clock's systems as the game has them, with or without the server.
     fn app(server: bool) -> App {
@@ -67,7 +67,7 @@ mod tests {
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<Bindings>()
-        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             FRAME,
         )))
         .add_systems(Update, (wind_clock, follow_clock.run_if(not(is_authority))));
@@ -79,7 +79,7 @@ mod tests {
         app
     }
 
-    fn time(app: &App) -> f32 {
+    fn time(app: &App) -> f64 {
         app.world().resource::<TimeOfDay>().0
     }
 
@@ -94,7 +94,7 @@ mod tests {
         // not told the time yet
         assert_eq!(START_TIME, time(&app));
 
-        let rate = 0.01;
+        let rate = 0.01_f64;
         app.world_mut().write_message(TimeSync { time: 2.25, rate });
         app.update();
         let synced = time(&app);
@@ -119,7 +119,10 @@ mod tests {
             steps.push(time(&app) - before);
         }
         for step in &steps[..31] {
-            assert!((step - FRAME / DAY_SECONDS).abs() < 1e-6, "{steps:?}");
+            assert!(
+                (step - FRAME / f64::from(DAY_SECONDS)).abs() < 1e-6,
+                "{steps:?}"
+            );
         }
         // and winding it, from the frame after the key's pressed, as the server hears of it at
         // the end of that one
@@ -127,5 +130,54 @@ mod tests {
             assert!((step - steps[31]).abs() < 1e-5, "{steps:?}");
         }
         assert!(steps[31] > 0.02, "{steps:?}");
+    }
+
+    #[test]
+    fn test_a_client_stays_smooth_following_syncs_at_large_days() {
+        for days in [1_000.0, 10_000.0, 1_000_000.0] {
+            let mut app = app(false);
+            app.world_mut()
+                .resource_mut::<NextState<ClientState>>()
+                .set(ClientState::Connected);
+            app.update();
+            let rate = 1.0 / f64::from(DAY_SECONDS);
+            app.world_mut().write_message(TimeSync { time: days, rate });
+            app.update();
+            let mut last = time(&app);
+            assert!((last - days - rate * FRAME).abs() < 1e-9, "{days}: {last}");
+            for frame in 0..40 {
+                if frame == 20 {
+                    // the next sync, 5 seconds on, lands where the client had got to
+                    let at = days + rate * FRAME * 21.0;
+                    app.world_mut().write_message(TimeSync { time: at, rate });
+                }
+                app.update();
+                let step = time(&app) - last;
+                assert!(
+                    (step - rate * FRAME).abs() < 1e-9,
+                    "{days}: {frame}: {step}"
+                );
+                last = time(&app);
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_sky_moves_smoothly_in_singleplayer_at_large_days() {
+        for days in [1_000.0, 10_000.0, 1_000_000.0] {
+            let mut app = app(true);
+            app.update();
+            app.world_mut().resource_mut::<TimeOfDay>().0 = days;
+            app.update();
+            for _ in 0..40 {
+                let before = time(&app);
+                app.update();
+                let step = time(&app) - before;
+                assert!(
+                    (step - FRAME / f64::from(DAY_SECONDS)).abs() < 1e-9,
+                    "{days}: {step}"
+                );
+            }
+        }
     }
 }

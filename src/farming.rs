@@ -30,9 +30,9 @@ pub const WHEAT: [BlockType; 8] = [
 
 /// How long a stage takes on average on dry farmland, in game days (`TimeOfDay`): wheat's ripe
 /// two and a half days after it's planted, 25 minutes.
-pub const STAGE_DAYS: f32 = 2.5 / (WHEAT.len() - 1) as f32;
+pub const STAGE_DAYS: f64 = 2.5 / (WHEAT.len() - 1) as f64;
 /// How many times quicker crops grow with water within `WATER_REACH` of their farmland.
-pub const WET_SPEED: f32 = 1.5;
+pub const WET_SPEED: f64 = 1.5;
 // How far water wets farmland, in blocks sideways, level with it or a block above.
 const WATER_REACH: i64 = 4;
 
@@ -50,16 +50,12 @@ pub fn stage(block: BlockType) -> Option<usize> {
 /// dry. Each stage takes from 0.6 to 1.4 times `STAGE_DAYS`, as the world's `seed`, the crop's
 /// place and when it was planted decide, so a field comes up unevenly and a crop sown again
 /// grows differently, but always the same given those.
-pub fn reaches(seed: u32, at: I64Vec3, planted: f32, stage: usize, wet: bool) -> f32 {
-    let crop = hash(
-        u64::from(seed) << 32 | u64::from(planted.to_bits()),
-        at.x,
-        at.z,
-    );
+pub fn reaches(seed: u32, at: I64Vec3, planted: f64, stage: usize, wet: bool) -> f64 {
+    let crop = hash(u64::from(seed) << 32 ^ planted.to_bits(), at.x, at.z);
     let crop = hash(crop, at.y, 0);
-    let days: f32 = (1..=stage)
+    let days: f64 = (1..=stage)
         .map(|stage| {
-            let share = (hash(crop, stage as i64, 0) >> 40) as f32 / (1u64 << 24) as f32;
+            let share = (hash(crop, stage as i64, 0) >> 40) as f64 / (1u64 << 24) as f64;
             STAGE_DAYS * (0.6 + 0.8 * share)
         })
         .sum();
@@ -67,7 +63,7 @@ pub fn reaches(seed: u32, at: I64Vec3, planted: f32, stage: usize, wet: bool) ->
 }
 
 /// The stage a crop's grown to by `now`, see `reaches`.
-pub fn grown(seed: u32, at: I64Vec3, planted: f32, now: f32, wet: bool) -> usize {
+pub fn grown(seed: u32, at: I64Vec3, planted: f64, now: f64, wet: bool) -> usize {
     (1..WHEAT.len())
         .take_while(|&stage| reaches(seed, at, planted, stage, wet) <= now)
         .count()
@@ -101,19 +97,19 @@ pub struct Crops {
 #[derive(Default)]
 struct Field {
     crops: HashMap<U16Vec3, Crop>,
-    due: f32,
+    due: f64,
 }
 
 #[derive(Clone, Copy)]
 struct Crop {
-    planted: f32,
+    planted: f64,
     // when it's next to be looked at, as it's due to reach its next stage then
-    due: f32,
+    due: f64,
 }
 
 impl Crops {
     /// Plants a crop at `at` at `now`, in place of any that was there.
-    pub fn plant(&mut self, at: I64Vec3, now: f32) {
+    pub fn plant(&mut self, at: I64Vec3, now: f64) {
         let coord = ChunkCoordinate::containing(at);
         self.put(coord, ChunkCoordinate::local_block(at), now);
         self.changed.insert(coord);
@@ -121,9 +117,9 @@ impl Crops {
 
     /// Puts back a crop loaded from a save, which as it's already saved isn't a change. It's
     /// looked at as soon as its chunk's loaded, to catch up on the time it's been away.
-    pub fn put(&mut self, coord: ChunkCoordinate, local: U16Vec3, planted: f32) {
+    pub fn put(&mut self, coord: ChunkCoordinate, local: U16Vec3, planted: f64) {
         let field = self.chunks.entry(coord).or_default();
-        let due = f32::NEG_INFINITY;
+        let due = f64::NEG_INFINITY;
         field.crops.insert(local, Crop { planted, due });
         field.due = due;
     }
@@ -147,7 +143,7 @@ impl Crops {
     }
 
     /// When the crop at `at` was planted, if there's one.
-    pub fn planted(&self, at: I64Vec3) -> Option<f32> {
+    pub fn planted(&self, at: I64Vec3) -> Option<f64> {
         let field = self.chunks.get(&ChunkCoordinate::containing(at))?;
         let crop = field.crops.get(&ChunkCoordinate::local_block(at))?;
         Some(crop.planted)
@@ -158,17 +154,17 @@ impl Crops {
     /// fields due are looked through, so a frame with none costs a comparison a field.
     pub fn due(
         &mut self,
-        now: f32,
+        now: f64,
         loaded: impl Fn(ChunkCoordinate) -> bool,
         most: usize,
-    ) -> Vec<(I64Vec3, f32)> {
+    ) -> Vec<(I64Vec3, f64)> {
         let mut due = Vec::new();
         for (&coord, field) in &mut self.chunks {
             if field.due > now || !loaded(coord) {
                 continue;
             }
             let origin = coord.0 * CHUNK_SIZE as i64;
-            let mut later = f32::INFINITY;
+            let mut later = f64::INFINITY;
             for (&local, crop) in &field.crops {
                 if crop.due > now {
                     later = later.min(crop.due);
@@ -186,7 +182,7 @@ impl Crops {
 
     /// Says when the crop at `at`, given by `due`, is next due to grow, or that it's done
     /// growing, ripe or gone, and is to be forgotten.
-    pub fn grew(&mut self, at: I64Vec3, next: Option<f32>) {
+    pub fn grew(&mut self, at: I64Vec3, next: Option<f64>) {
         let Some(next) = next else {
             self.remove(at);
             return;
@@ -206,7 +202,7 @@ impl Crops {
     }
 
     /// The crops in the chunk at `coord` and when each was planted, in no particular order.
-    pub fn in_chunk(&self, coord: ChunkCoordinate) -> impl Iterator<Item = (U16Vec3, f32)> + '_ {
+    pub fn in_chunk(&self, coord: ChunkCoordinate) -> impl Iterator<Item = (U16Vec3, f64)> + '_ {
         let crops = self.chunks.get(&coord).into_iter();
         crops.flat_map(|field| {
             field
@@ -264,11 +260,11 @@ mod tests {
             }
             ripe_dry.push(dry);
         }
-        let mean = ripe_dry.iter().sum::<f32>() / ripe_dry.len() as f32;
+        let mean = ripe_dry.iter().sum::<f64>() / ripe_dry.len() as f64;
         assert!((2.3..2.7).contains(&mean), "{mean} days");
         // and crops side by side come up at different times
-        let spread = ripe_dry.iter().copied().fold(f32::NAN, f32::max)
-            - ripe_dry.iter().copied().fold(f32::NAN, f32::min);
+        let spread = ripe_dry.iter().copied().fold(f64::NAN, f64::max)
+            - ripe_dry.iter().copied().fold(f64::NAN, f64::min);
         assert!(spread > 0.3, "{spread} days");
     }
 
@@ -283,7 +279,7 @@ mod tests {
         assert_eq!(0, grown(7, AT, 3.0, 3.0, false));
         assert_eq!(0, grown(7, AT, 3.0, 2.0, false));
         let stages: Vec<_> = (0..40)
-            .map(|tenth| grown(7, AT, 3.0, 3.0 + tenth as f32 / 10.0, false))
+            .map(|tenth| grown(7, AT, 3.0, 3.0 + tenth as f64 / 10.0, false))
             .collect();
         assert!(stages.windows(2).all(|pair| pair[0] <= pair[1]));
         assert_eq!(WHEAT.len() - 1, stages[39]);

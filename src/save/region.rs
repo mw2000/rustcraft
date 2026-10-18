@@ -54,14 +54,15 @@ pub struct ChunkEdits {
     pub coord: ChunkCoordinate,
     pub blocks: Vec<(U16Vec3, Block)>,
     pub containers: Vec<(U16Vec3, Container)>,
-    pub crops: Vec<(U16Vec3, f32)>,
+    pub crops: Vec<(U16Vec3, f64)>,
 }
 
 // The version of the region file format, which since format 3 starts each file after a 0 byte.
 // A format 2 file starts with its palette's length instead, which is never 0, as every file
 // names the blocks of at least one edit. Format 4 has crops, and format 5 blocks' states in
 // its palette, which is laid out as format 4's: a block with no state is written as before.
-const FORMAT: u8 = 5;
+// Format 6 counts the crops' planting times in `f64`s, as `TimeOfDay` does.
+const FORMAT: u8 = 6;
 
 // A region file, in postcard (D-6). Blocks are stored as indices into the file's palette of
 // blocks by name and state, as templates write them (`Block`'s text), never as `BlockType`
@@ -82,7 +83,31 @@ struct SavedChunk {
     // each container as where it is in the chunk, and what it holds
     containers: Vec<(u16, Container)>,
     // each crop as where it is in the chunk, and when it was planted, in game days
-    crops: Vec<(u16, f32)>,
+    crops: Vec<(u16, f64)>,
+}
+
+// Formats 4 and 5's, from before the clock counted in `f64`s (M-R1), which differ only in what
+// their palettes name, and have their crops' planting times as `f32`s. They're read and written
+// again as format 6 the next time their region's saved.
+mod format_5 {
+    use serde::Deserialize;
+
+    use crate::containers::Container;
+
+    #[derive(Deserialize)]
+    pub(super) struct RegionFile<'a> {
+        #[serde(borrow)]
+        pub(super) palette: Vec<&'a str>,
+        pub(super) chunks: Vec<SavedChunk>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct SavedChunk {
+        pub(super) chunk: [i64; 3],
+        pub(super) blocks: Vec<(u16, u16)>,
+        pub(super) containers: Vec<(u16, Container)>,
+        pub(super) crops: Vec<(u16, f32)>,
+    }
 }
 
 // Format 3's, from before crops (M1.9b), which is read and written again as format 4 the next
@@ -107,7 +132,7 @@ mod format_3 {
     }
 }
 
-// Format 2's, from before containers (M1.6), which is read and written again as format 4 the
+// Format 2's, from before containers (M1.6), which is read and written again as format 6 the
 // next time its region's saved.
 mod format_2 {
     use serde::Deserialize;
@@ -183,8 +208,25 @@ pub fn decode(
 ) -> io::Result<()> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
     let file: RegionFile = match bytes {
-        [0, 4 | FORMAT, file @ ..] => {
-            postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?
+        [0, FORMAT, file @ ..] => postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?,
+        [0, 4 | 5, file @ ..] => {
+            let file: format_5::RegionFile =
+                postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?;
+            let chunks = file.chunks.into_iter().map(|chunk| SavedChunk {
+                chunk: chunk.chunk,
+                blocks: chunk.blocks,
+                containers: chunk.containers,
+                // an `f32` widens exactly, so a crop keeps the time it was planted
+                crops: chunk
+                    .crops
+                    .into_iter()
+                    .map(|(local, planted)| (local, f64::from(planted)))
+                    .collect(),
+            });
+            RegionFile {
+                palette: file.palette,
+                chunks: chunks.collect(),
+            }
         }
         [0, 3, file @ ..] => {
             let file: format_3::RegionFile =
@@ -434,7 +476,7 @@ mod tests {
                 (U16Vec3::new(3, 0, 0), BlockType::Bricks.into()),
             ],
         )]);
-        assert_eq!([0, 5], bytes[..2]);
+        assert_eq!([0, 6], bytes[..2]);
         let file: RegionFile = postcard::from_bytes(&bytes[2..]).unwrap();
         assert_eq!(vec!["bricks", "air"], file.palette);
         assert_eq!(vec![(1, 0), (2, 1), (3, 0)], file.chunks[0].blocks);
@@ -464,7 +506,7 @@ mod tests {
         assert_eq!(vec![edits(chunk(2, 30, -1), blocks)], loaded);
         // and it's written as format 5 when it's saved again
         let again = encode(loaded.clone());
-        assert_eq!([0, 5], again[..2]);
+        assert_eq!([0, 6], again[..2]);
         assert_eq!(loaded, decoded(&again));
     }
 
@@ -497,7 +539,7 @@ mod tests {
         };
         assert_eq!(vec![expected], loaded);
         let again = encode(loaded.clone());
-        assert_eq!([0, 5], again[..2]);
+        assert_eq!([0, 6], again[..2]);
         assert_eq!(loaded, decoded(&again));
     }
 
@@ -512,16 +554,16 @@ mod tests {
                 crops: Vec::new(),
             }],
         };
-        let bytes = postcard::to_extend(&file, vec![0, 5]).unwrap();
+        let bytes = postcard::to_extend(&file, vec![0, 6]).unwrap();
         assert!(fails(&bytes).to_string().contains("mithril_ore"));
-        let newer = [&[0, 6][..], &bytes[2..]].concat();
+        let newer = [&[0, 7][..], &bytes[2..]].concat();
         assert!(fails(&newer).to_string().contains("newer version"));
         // nor does a state the game doesn't know
         let file = RegionFile {
             palette: vec!["planks_stairs[facing=sideways]"],
             ..file
         };
-        let bytes = postcard::to_extend(&file, vec![0, 5]).unwrap();
+        let bytes = postcard::to_extend(&file, vec![0, 6]).unwrap();
         assert!(fails(&bytes).to_string().contains("sideways"));
     }
 
@@ -564,6 +606,65 @@ mod tests {
             (U16Vec3::new(1, 0, 0), BlockType::Furnace.into()),
         ];
         assert_eq!(vec![edits(chunk(0, 0, 0), blocks)], decoded(&old));
+    }
+
+    // Format 5's chunk, as it was laid out, with crops planted at `f32` days.
+    #[derive(Serialize)]
+    #[allow(clippy::type_complexity)]
+    struct Format5 {
+        palette: Vec<&'static str>,
+        chunks: Vec<(
+            [i64; 3],
+            Vec<(u16, u16)>,
+            Vec<(u16, Container)>,
+            Vec<(u16, f32)>,
+        )>,
+    }
+
+    #[test]
+    fn test_a_format_4_or_5_file_with_crops_loads_with_their_times_and_saves_as_format_6() {
+        for format in [4, 5] {
+            let file = Format5 {
+                palette: vec!["wheat_1", "furnace"],
+                chunks: vec![(
+                    [1, 2, 3],
+                    vec![(10, 0), (20, 1)],
+                    vec![(20, furnace())],
+                    vec![(10, 12.75), (30, 0.1)],
+                )],
+            };
+            let bytes = postcard::to_extend(&file, vec![0, format]).unwrap();
+            let loaded = decoded(&bytes);
+            assert_eq!(
+                vec![
+                    (U16Vec3::new(10, 0, 0), 12.75),
+                    (U16Vec3::new(14, 0, 1), 0.1f32.into())
+                ],
+                loaded[0].crops,
+                "format {format}"
+            );
+            assert_eq!(1, loaded[0].containers.len());
+            let again = encode(loaded.clone());
+            assert_eq!([0, 6], again[..2]);
+            assert_eq!(loaded, decoded(&again));
+        }
+    }
+
+    #[test]
+    fn test_crops_planted_millions_of_days_in_keep_their_times_to_a_tiny_fraction() {
+        let planted = vec![
+            (U16Vec3::new(1, 1, 1), 1_000_000.123_456_789),
+            (U16Vec3::new(2, 1, 1), 40_000_000.000_001),
+        ];
+        let blocks = planted
+            .iter()
+            .map(|&(at, _)| (at, BlockType::Wheat0.into()))
+            .collect();
+        let saved = vec![ChunkEdits {
+            crops: planted,
+            ..edits(chunk(0, 0, 0), blocks)
+        }];
+        assert_eq!(saved, decoded(&encode(saved.clone())));
     }
 
     #[test]

@@ -303,7 +303,7 @@ The world's state beyond the seed (INV-1).
   the Singleplayer menu since M-U1, or with `RC_WORLD` (default `world`) for development. A missing world is made with `RC_SEED` or a random seed, and its
   `world.toml` written at once; an existing one keeps its seed, and a disagreeing `RC_SEED` is
   ignored with a log line.
-  - `world.toml` holds the format version (`FORMAT_VERSION`, now 4), the game version that wrote
+  - `world.toml` holds the format version (`FORMAT_VERSION`, now 6), the game version that wrote
     it, the seed, the time of day, and a `[player]` table with the one local player's position,
     look (yaw and pitch), movement, game mode, hotbar (the selected slot) and inventory (each
     stack's slot, item name and count, and the stack on the cursor if the inventory screen was
@@ -326,7 +326,7 @@ The world's state beyond the seed (INV-1).
     written every 30 s while it does. `world.toml`'s format is 3 so an older game refuses the
     world rather than misreading its region files; it reads format 2's `world.toml` as it was.
   - **Since format 4 (M1.9b)** each chunk has its crops after its containers: each as its block
-    index and when it was planted, in game days, an `f32` (§5.5a). A format 3 file (`0, 3`) is
+    index and when it was planted, in game days, an `f32` until format 6 (§5.5a). A format 3 file (`0, 3`) is
     read with no crops, and written as format 4 the next time its region changes; format 2 still
     loads as before. Crops changing (planted, broken, ripened and let go of) mark their chunk for
     saving as edits do; a crop growing a stage is an edit. `world.toml`'s format is 4, for the
@@ -336,6 +336,10 @@ The world's state beyond the seed (INV-1).
     block with no state is its name, so format 4 is laid out the same and read as format 5, and
     rewritten as it the next time its region changes; a state the game doesn't know fails the
     load. `world.toml`'s format is 5 so an older game refuses the world.
+  - **Since format 6 (M-R1 follow-up)** crops' planting times are `f64`s, as `TimeOfDay` is.
+    Formats 4 and 5 (`0, 4` and `0, 5`), which have them as `f32`s, are read with each widened
+    exactly and rewritten as format 6 the next time their region changes. `world.toml`'s format
+    is 6, and its `time_of_day` is an `f64`; one written as an `f32` reads as the same days.
   - `Edits` remembers which chunks changed since the last save. Every 30 s, and only if
     something changed, the main thread copies `world.toml`'s contents and the edits of the
     regions with new ones, which is quick, and the IO pool writes them, one
@@ -495,7 +499,11 @@ The world's state beyond the seed (INV-1).
   keeps the server's time as before. Over a network a client's clock jumps at each sync by
   however far its frames have drifted from the server's, a fraction of a second's worth, or a
   moment's while it's wound; neither is worth smoothing yet. A client that leaves while
-  winding should unwind the clock (M0.6).
+  winding should unwind the clock (M0.6). `TimeOfDay` has been an `f64` of days since the
+  M-R1 follow-up (`PROTOCOL_VERSION` 18, `TimeSync` and `ClockRate` in `f64`s), so `run_clock`
+  and `follow_clock` simply add each frame's time, however many days have passed. What needs an
+  `f32` takes it from the `f64` first: `day_fraction` for the sky and ambience, and the clouds'
+  drift wraps its seconds by the wind's period before narrowing.
 - **Built (M0.5f):** `World` keeps who holds each chunk, a bit for each `Holder` (`Client`,
   `Server`): `hold` as a chunk's asked for, before it's generated, and `release`, which unloads
   it once nothing holds it, in place of `clear_chunk`. The client holds a chunk as
@@ -793,9 +801,10 @@ The world's state beyond the seed (INV-1).
     holds, so with none it records nothing to drain (a test). The night's skipped once every
     player there sleeps, all of them joiners. The clock runs while nobody's on, as furnaces do:
     the world goes on, as a Minecraft server's does, and costs nothing with no chunks loaded.
-    `run_clock` now counts in an `f64` beside `TimeOfDay`: an `f32` of 1,024 days can't add a
+    `run_clock` counted in an `f64` beside `TimeOfDay`, as an `f32` of 1,024 days can't add a
     30th of a second (5.6e-5 days), so a server left on for a week would have stopped its
-    clock, and crops with it, which grow by the days it counts.
+    clock, and crops with it, which grow by the days it counts; `TimeOfDay` is an `f64` now,
+    and the shadow is gone (§4.4).
   - **Console:** a thread reads lines from stdin (`Console`), and `ConsolePlugin` writes each
     as the App's own `RunCommand` or `Chat`, which replicon hands the server from
     `ClientId::Server` as it does the host's, and logs the `CommandOutput` that comes back. So
@@ -824,8 +833,8 @@ The world's state beyond the seed (INV-1).
     ignored, as a script's background job is, `ctrlc` declines to handle signals, so SIGTERM
     stops the server without saving; from a terminal, systemd or Docker it saves. A client
     quitting doesn't say so, so the server sees it leave only once it times out, about 15
-    seconds on. A client's clock still adds in an `f32` between syncs, so after 512 days at
-    60 frames a second its sky moves only at each sync, 5 seconds' worth at a time.
+    seconds on. (A client's clock once added in an `f32` between syncs, so its sky moved only at
+    each sync after 512 days; it's an `f64` now.)
   - `tests/multiplayer.rs` runs `DedicatedServerPlugins` with a console fed by a channel:
     nobody's there until a client joins; `list`, `op` and `say` reach it, with or without the
     `/`; the clock runs with nobody on; building in the air records no reroofs; leaving saves
@@ -2098,9 +2107,10 @@ Done when: **the world feels inhabited, and night is dangerous.**
 ### Throughout
 
 - ☑ **M-R1 Release builds** for Windows, macOS and Linux, and a dedicated server (§5.9, §4.4).
-  - ☐ Follow-up: make `TimeOfDay` an `f64` of days, with `TimeSync`, `world.toml` and crops'
-    planting times, so a client's clock runs smoothly however many days have passed, as the
-    server's now does (§4.4, Built M-R1).
+  - ☑ Follow-up: `TimeOfDay` is an `f64` of days, with `TimeSync`, `world.toml` and crops'
+    planting times (region format 6, read from 4 and 5), so every clock runs smoothly however
+    many days have passed (§4.4). A crop's growth hash now takes its planting time's `f64`
+    bits, so crops planted before it grow to a different, equally varied, schedule.
 - ☐ **M-A1 Art pass, 32px.** Block and item tiles redrawn at 32×32 in a richer, natural style —
   inspired by the look of packs like Patrix (soft, detailed, naturally lit surfaces), never copied
   (INV-8) — by our own drawing scripts, with the atlas, shaders, LOD colours and map relief following.

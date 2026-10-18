@@ -36,7 +36,7 @@ pub enum Session {
     Singleplayer {
         dir: PathBuf,
         seed: Option<u32>,
-        time_of_day: Option<f32>,
+        time_of_day: Option<f64>,
         host: Option<u16>,
     },
     /// A world on the server at `address`, `host:port` or `host`.

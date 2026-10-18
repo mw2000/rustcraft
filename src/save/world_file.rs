@@ -14,8 +14,8 @@ use crate::survival::{SpawnBed, Vitals};
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 /// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), format 3 added
 /// containers to the region files (M1.6), format 4 crops (M1.9b) and format 5 blocks' states
-/// (M2.4a), each reading the region files before it as they were.
-pub const FORMAT_VERSION: u32 = 5;
+/// (M2.4a) and format 6 crops' planting times as `f64`s (M-R1), each reading the region files before it as they were.
+pub const FORMAT_VERSION: u32 = 6;
 
 /// A world's `world.toml`: everything about it but its edits.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -26,7 +26,7 @@ pub struct WorldFile {
     pub game_version: String,
     pub seed: u32,
     /// In days, as `TimeOfDay` has it.
-    pub time_of_day: f32,
+    pub time_of_day: f64,
     /// The names of the players besides the host who may run every command (`Operators`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ops: Vec<String>,
@@ -139,7 +139,7 @@ impl PlayerState {
 }
 
 impl WorldFile {
-    pub fn new(seed: u32, time_of_day: f32) -> Self {
+    pub fn new(seed: u32, time_of_day: f64) -> Self {
         Self {
             format: FORMAT_VERSION,
             game_version: env!("CARGO_PKG_VERSION").into(),
@@ -202,6 +202,16 @@ mod tests {
         assert!(text.contains("movement = \"walk\""), "{text}");
         assert!(text.contains("game_mode = \"survival\""), "{text}");
         assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+    }
+
+    #[test]
+    fn test_the_time_keeps_every_day_of_a_long_lived_world() {
+        let file = WorldFile::new(1, 1_000_000.123_456);
+        let back = WorldFile::from_toml(&file.to_toml()).unwrap();
+        assert_eq!(1_000_000.123_456, back.time_of_day);
+        // and a time written when it was an `f32` reads as the same number of days
+        let text = file.to_toml().replace("1000000.123456", "12.75");
+        assert_eq!(12.75, WorldFile::from_toml(&text).unwrap().time_of_day);
     }
 
     #[test]

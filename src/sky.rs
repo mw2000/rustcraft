@@ -19,7 +19,7 @@ use bevy::{
 
 use std::f32::consts::{PI, TAU};
 
-use crate::clock::{TimeOfDay, START_TIME};
+use crate::clock::{day_fraction, TimeOfDay, START_TIME};
 use crate::curvature::WORLD_CURVE;
 
 /// How opaque fog gets at its far end.
@@ -99,8 +99,8 @@ pub fn moon() -> impl Bundle {
 }
 
 // Where the sun is on its path at `time` days, in radians: 0 as it rises, a quarter turn at noon.
-fn sun_angle(time: f32) -> f32 {
-    TAU * (time.fract() - 0.25)
+fn sun_angle(time: f64) -> f32 {
+    TAU * (day_fraction(time) - 0.25)
 }
 
 // The sun's path across the sky as a circle through `east` and `peak`, which are square to each other.
@@ -116,12 +116,12 @@ fn on_path(angle: f32) -> Vec3 {
 }
 
 /// Toward the sun at `time` days.
-pub fn sun_direction(time: f32) -> Vec3 {
+pub fn sun_direction(time: f64) -> Vec3 {
     on_path(sun_angle(time))
 }
 
 /// Toward the moon at `time` days: opposite the sun, so it rises as the sun sets.
-pub fn moon_direction(time: f32) -> Vec3 {
+pub fn moon_direction(time: f64) -> Vec3 {
     on_path(sun_angle(time) + PI + MOON_LAG)
 }
 
@@ -213,6 +213,16 @@ pub fn match_sky_horizon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_the_sun_moves_the_same_however_many_days_have_passed() {
+        for days in [1_000.0, 1_000_000.0] {
+            for fraction in [0.0, 0.3, 0.625, 0.9] {
+                let (now, then) = (sun_direction(days + fraction), sun_direction(fraction));
+                assert!((now - then).length() < 1e-4, "{days} {fraction}");
+            }
+        }
+    }
 
     #[test]
     fn test_sun_rises_peaks_and_sets_on_its_path() {
