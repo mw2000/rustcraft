@@ -321,7 +321,7 @@ fn dimensions(size: I64Vec3) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use bevy::ecs::message::Messages;
     use bevy::math::I64Vec3;
@@ -340,7 +340,7 @@ mod tests {
     use crate::player::{Player, PlayerLook, PlayerOwner};
     use crate::protocol::{CommandOutput, ProtocolPlugin, RunCommand};
     use crate::save::WorldSave;
-    use crate::server::{Operators, ServerPlugin};
+    use crate::server::{Operators, ServerChunks, ServerPlugin};
     use crate::world::World;
 
     // Standing on a floor of stone at y 0, over the middle of the chunks loaded, from -32 to 31
@@ -410,6 +410,21 @@ mod tests {
                 ))
                 .id();
             app.finish();
+            // The server generates the chunks around its players on other threads, and they land
+            // in the world on whichever frame they finish, which under load can be in the middle
+            // of a test. So they're let land first, and each test starts from the same world.
+            let started = Instant::now();
+            loop {
+                app.update();
+                if !app.world().resource::<ServerChunks>().is_generating() {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(60),
+                    "the chunks around the players weren't generated"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
             Self { app, dir, host }
         }
 
@@ -505,11 +520,14 @@ mod tests {
         server.run("/pos2 ~ 33 ~").unwrap();
         let refused = server.run("/structure save hut").unwrap_err();
         assert!(refused.contains("at most"), "{refused}");
-        // one wide enough, but reaching out of the chunks loaded
-        server.run("/pos2 40 5 0").unwrap();
+        // one small enough, but out of the chunks loaded, past the ones the server generates
+        // around the players, which would otherwise be there by the time it's asked
+        server.run("/pos1 200 0 0").unwrap();
+        server.run("/pos2 210 5 0").unwrap();
         let refused = server.run("/structure save hut").unwrap_err();
         assert!(refused.contains("isn't loaded"), "{refused}");
         // and a floor deeper than structures sink isn't saved
+        server.run("/pos1 -20 0 -20").unwrap();
         server.run("/pos2 0 8 0").unwrap();
         let refused = server.run("/structure save hut 7").unwrap_err();
         assert!(refused.contains("wouldn't load"), "{refused}");

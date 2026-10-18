@@ -34,6 +34,15 @@ pub struct ServerChunks {
     generating: HashMap<ChunkCoordinate, Task<ChunkData>>,
 }
 
+impl ServerChunks {
+    /// Whether any chunk is still being generated for the players, which will land in the world
+    /// on some later frame. Tests wait for this to be false before they check blocks.
+    #[cfg(test)]
+    pub fn is_generating(&self) -> bool {
+        !self.generating.is_empty()
+    }
+}
+
 /// Keeps the chunks near every player loaded, for checking edits and movement against and for
 /// creatures to walk on, and lets go of those no player is near. Nothing is meshed. A chunk already loaded, or on its
 /// way for the client, isn't generated again, so in singleplayer, where the client loads far
