@@ -445,9 +445,12 @@ impl TreeTints {
     }
 }
 
-// Whether a tree's `block` may go where `existing` is: into air, and logs through leaves.
+// Whether a tree's `block` may go where `existing` is: into air and over plants, and logs
+// through leaves.
 pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
-    existing == BlockType::Air || (existing == BlockType::Leaves && block == BlockType::Log)
+    existing == BlockType::Air
+        || existing.is_plant()
+        || (existing == BlockType::Leaves && block == BlockType::Log)
 }
 
 // Every tree that could reach into the columns `min..=max` (x, z).
@@ -696,6 +699,8 @@ mod tests {
         assert!(grows_into(BlockType::Air, BlockType::Leaves));
         assert!(grows_into(BlockType::Leaves, BlockType::Log));
         assert!(!grows_into(BlockType::Log, BlockType::Leaves));
+        assert!(grows_into(BlockType::TallGrass, BlockType::Log));
+        assert!(grows_into(BlockType::Poppy, BlockType::Leaves));
         assert!(!grows_into(BlockType::Grass, BlockType::Log));
         assert!(!grows_into(BlockType::Water, BlockType::Leaves));
     }

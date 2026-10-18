@@ -33,7 +33,7 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 
 ## Hand-drawn tiles
 
-`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table and the furnace. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
+`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table, the furnace and the plants. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
 
 ```
 cd .claude/skills/block-textures
@@ -42,7 +42,7 @@ python draw.py CoalOre --seed 3
 python pack.py
 ```
 
-Each tile is a function that paints a few shades by index, like the 4-colour quantise leaves the generated tiles. Shades are taken from tiles already in the atlas (`shades("Stone", contrast)`, `source("Stone")` for the whole tile), so a restyled stone or log carries over when you rerun it: the ores are the Stone tile with mineral deposits grown on it from the seed, planks use the log end's colours with seams from the bark. Small pictures (the crafting table's saw and hammer) are strings in the script. Keep patterns periodic in 16 so they tile, and check `out/contact.png` as for generated tiles.
+Each tile is a function that paints a few shades by index, like the 4-colour quantise leaves the generated tiles. Shades are taken from tiles already in the atlas (`shades("Stone", contrast)`, `source("Stone")` for the whole tile), so a restyled stone or log carries over when you rerun it: the ores are the Stone tile with mineral deposits grown on it from the seed, planks use the log end's colours with seams from the bark. Small pictures (the crafting table's saw and hammer, flower heads) are strings in the script. Plants are drawn on transparency, RGBA, as the shaders cut out their clear texels; tall grass is greyscale from the GrassTop shades, as it's tinted the same way, and flowers keep their colours. Keep patterns periodic in 16 so they tile, and check `out/contact.png` as for generated tiles.
 
 ## How it works
 

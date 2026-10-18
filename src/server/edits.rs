@@ -96,6 +96,19 @@ pub(super) fn receive_edits(
                     by: Some((client, seq)),
                 },
             });
+            // a plant goes with the ground it stood on, until M1.2 has it drop
+            let above = block + I64Vec3::Y;
+            if !to.is_solid() && world.get_block_at(above).is_plant() {
+                world.edit(above, BlockType::Air);
+                changed.write(ToClients {
+                    targets: SendTargets::All,
+                    message: BlockChanged {
+                        block: above,
+                        to: BlockType::Air,
+                        by: None,
+                    },
+                });
+            }
         }
     }
 }
@@ -124,11 +137,14 @@ fn refusal(
         return Some("it's out of reach");
     }
     if to != BlockType::Air {
-        if world.get_block_at(block).is_solid() {
+        if !world.get_block_at(block).is_replaceable() {
             return Some("it's into a solid block");
         }
         if !mode.can_place(to) {
             return Some("they can't place that");
+        }
+        if to.is_plant() && !world.get_block_at(block - I64Vec3::Y).is_solid() {
+            return Some("it's a plant with nothing solid under it");
         }
         let into_player = players
             .iter()
@@ -301,6 +317,49 @@ mod tests {
         // but a block can go just beside the player
         let (changed, _) = request(&mut app, &[(I64Vec3::new(1, 1, 0), BlockType::Stone)]);
         assert_eq!(1, changed.len());
+    }
+
+    #[test]
+    fn test_blocks_placed_into_plants_replace_them() {
+        let mut app = server(GameMode::Creative);
+        let above = FLOOR + I64Vec3::Y;
+        let (changed, rejected) = request(&mut app, &[(above, BlockType::TallGrass)]);
+        assert_eq!((1, 0), (changed.len(), rejected.len()));
+        let (changed, _) = request(&mut app, &[(above, BlockType::Cobblestone)]);
+        assert_eq!(1, changed.len());
+        assert_eq!(BlockType::Cobblestone, block_at(&app, above));
+    }
+
+    #[test]
+    fn test_plants_only_go_on_solid_ground() {
+        let mut app = server(GameMode::Creative);
+        // in the air over the floor, and on top of another plant
+        assert_refused(&mut app, FLOOR + I64Vec3::Y * 2, BlockType::Poppy);
+        request(&mut app, &[(FLOOR + I64Vec3::Y, BlockType::Poppy)]);
+        assert_refused(&mut app, FLOOR + I64Vec3::Y * 2, BlockType::Dandelion);
+    }
+
+    #[test]
+    fn test_breaking_the_ground_under_a_plant_takes_the_plant_too() {
+        let mut app = server(GameMode::Creative);
+        let above = FLOOR + I64Vec3::Y;
+        request(&mut app, &[(above, BlockType::Cornflower)]);
+        let (changed, _) = request(&mut app, &[(FLOOR, BlockType::Air)]);
+        let gone = BlockChanged {
+            block: above,
+            to: BlockType::Air,
+            by: None,
+        };
+        assert_eq!(2, changed.len());
+        assert_eq!(gone, changed[1]);
+        assert_eq!(BlockType::Air, block_at(&app, above));
+        // while breaking the plant itself leaves the ground
+        request(
+            &mut app,
+            &[(FLOOR, BlockType::Stone), (above, BlockType::Poppy)],
+        );
+        request(&mut app, &[(above, BlockType::Air)]);
+        assert_eq!(BlockType::Stone, block_at(&app, FLOOR));
     }
 
     #[test]

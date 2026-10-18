@@ -7,7 +7,7 @@ import bevy_pbr::render::{
     view_transformations::{position_world_to_clip, position_world_to_view},
 };
 import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
-import super::foliage::{is_leaf, swayed};
+import super::foliage::{is_leaf, sway, swayed};
 import super::fog::fogged;
 import super::lighting::{direct_moon, direct_sun, open_sky};
 import super::sky::SUN_LIGHT;
@@ -76,8 +76,8 @@ fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     return normalize(mix(normal, vec3<f32>(0.0, 1.0, 0.0), flatten));
 }
 
-// Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves
-// swaying in the wind and the land curving away. Block meshes always carry vertex colours,
+// Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves and
+// plants swaying in the wind and the land curving away. Block meshes always carry vertex colours,
 // see `MeshBuffers`.
 @vertex
 fn vertex(vertex_in: Vertex) -> VertexOutput {
@@ -85,11 +85,11 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
-    var coarse = false;
+    var draws = 0.0;
 @if(VERTEX_UVS_B) {
-    coarse = vertex.uv_b.y > 0.5;
+    draws = vertex.uv_b.y;
 }
-    let swaying = swayed(out.world_position.xyz, vertex.color.a, coarse, view_bindings::globals.time);
+    let swaying = swayed(out.world_position.xyz, sway(vertex.color.a, draws, vertex.uv.y), view_bindings::globals.time);
     // bent where it's drawn, so shadows and fog are looked up where it's seen
     out.world_position = vec4<f32>(curved(swaying), 1.0);
     out.color = vertex.color;
@@ -180,7 +180,8 @@ fn fragment(
     if threshold < material_fade.x || threshold >= material_fade.y {
         discard;
     }
-    // the holes in leaves: this shader replaces Bevy's, so must cut out alpha-masked texels itself
+    // the holes in leaves and round plants: this shader replaces Bevy's, so must cut out
+    // alpha-masked texels itself
 @if(!SOLID_LEAVES) {
     if color.a < 0.5 {
         discard;

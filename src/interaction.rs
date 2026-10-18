@@ -118,7 +118,7 @@ fn target_block(
     // blocks not generated yet can't be reached, nor can air and water, which are looked through
     let stops = |block: I64Vec3| {
         world.is_chunk_generated(ChunkCoordinate::containing(block))
-            && world.get_block_at(block).is_solid()
+            && world.get_block_at(block).is_tangible()
     };
     target.0 = raycast(eye, look.forward(), REACH, stops);
 }
@@ -134,9 +134,9 @@ fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {
 }
 
 // Left click breaks the block looked at, right click places the selected block in the hotbar
-// against the face looked at, and middle click picks the block looked at into the hotbar. The
-// server decides whether a block can go where it's placed: into air or water, which it
-// replaces, and never into a player.
+// against the face looked at, or in place of a block that's replaceable, such as tall grass,
+// and middle click picks the block looked at into the hotbar. The server decides whether a
+// block can go where it's placed: into a replaceable block, and never into a player.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
@@ -161,10 +161,16 @@ fn use_target(
     if mouse.just_pressed(MouseButton::Left) {
         request(hit.block, BlockType::Air);
     }
-    if mouse.just_pressed(MouseButton::Right) && hit.face != I64Vec3::ZERO {
+    let replaceable = world.get_block_at(hit.block).is_replaceable();
+    if mouse.just_pressed(MouseButton::Right) && (replaceable || hit.face != I64Vec3::ZERO) {
         // never used up, until M1.1 has survival take it from the slot
         if let Some(held) = hotbar.held() {
-            request(hit.block + hit.face, held);
+            let at = if replaceable {
+                hit.block
+            } else {
+                hit.block + hit.face
+            };
+            request(at, held);
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
@@ -230,6 +236,26 @@ mod tests {
         // and from above the water, down through it to the bottom
         let hit = raycast(Vec3::new(0.5, 3.5, 0.5), Vec3::NEG_Y, REACH, stops).unwrap();
         assert_eq!((I64Vec3::ZERO, I64Vec3::Y), (hit.block, hit.face));
+    }
+
+    #[test]
+    fn test_plants_are_hit_but_air_and_water_looked_through() {
+        use crate::block::BlockType;
+        // a poppy on the floor at x 2, with water beyond it
+        let block = |b: I64Vec3| match b {
+            b if b.y <= 0 => BlockType::Grass,
+            b if b == I64Vec3::new(2, 1, 0) => BlockType::Poppy,
+            b if b.x > 2 && b.y == 1 => BlockType::Water,
+            _ => BlockType::Air,
+        };
+        let stops = |b| block(b).is_tangible();
+        let hit = raycast(Vec3::new(-0.5, 1.5, 0.5), Vec3::X, REACH, stops).unwrap();
+        assert_eq!(
+            (I64Vec3::new(2, 1, 0), I64Vec3::NEG_X),
+            (hit.block, hit.face)
+        );
+        let hit = raycast(Vec3::new(3.5, 1.5, 0.5), Vec3::X, REACH, stops);
+        assert!(hit.is_none());
     }
 
     #[test]
@@ -365,6 +391,19 @@ mod tests {
             assert_eq!(
                 at(I64Vec3::Y, BlockType::Stone, 2),
                 click(&mut app, MouseButton::Right)
+            );
+        }
+
+        #[test]
+        fn test_placing_onto_tall_grass_replaces_it() {
+            let mut app = app(AWAY, GameMode::Creative);
+            app.world_mut()
+                .resource_mut::<crate::world::World>()
+                .edit(I64Vec3::ZERO, BlockType::TallGrass);
+            let requests = click(&mut app, MouseButton::Right);
+            assert_eq!(
+                vec![I64Vec3::ZERO],
+                requests.iter().map(|r| r.block).collect::<Vec<_>>()
             );
         }
 

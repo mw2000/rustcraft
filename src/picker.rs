@@ -80,8 +80,8 @@ fn spawn_picker(mut commands: Commands, icons: Res<BlockIcons>) {
                     ..default()
                 })
                 .with_children(|grid| {
-                    // the solid blocks, which is all but air and water
-                    for block in BlockType::ALL.into_iter().filter(|block| block.is_solid()) {
+                    // all but air and water
+                    for block in BlockType::ALL.into_iter().filter(BlockType::is_tangible) {
                         grid.spawn(tile(block))
                             .with_child(icons.icon(block))
                             .observe(put_in_hotbar);

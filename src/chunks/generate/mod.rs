@@ -6,6 +6,7 @@ pub mod generator;
 pub mod light;
 pub mod noise;
 pub mod ores;
+pub mod plants;
 pub mod region;
 pub mod region_store;
 pub mod trees;

@@ -10,6 +10,7 @@ use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::ores::place_ores;
+use crate::chunks::generate::plants::plant_on;
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
@@ -37,24 +38,41 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
-            // above the ground and the sea, the column is air here whatever its climate
-            if world_y >= ground_top(column_height).max(WATER_LEVEL) {
-                cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
-                continue;
-            }
             let (gradient, biome, temperature) = (
                 columns.gradient(x, z),
                 columns.biome(x, z),
                 columns.temperature(x, z),
             );
-            cells.extend((world_y..world_y + size).map(|y| {
-                under_surface(
-                    column_block(biomes, biome, y, column_height, gradient, temperature),
-                    y,
+            let start = cells.len();
+            // above the ground and the sea, the column is air here whatever its climate
+            if world_y >= ground_top(column_height).max(WATER_LEVEL) {
+                cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
+            } else {
+                cells.extend((world_y..world_y + size).map(|y| {
+                    under_surface(
+                        column_block(biomes, biome, y, column_height, gradient, temperature),
+                        y,
+                        column_height,
+                        1,
+                    )
+                }));
+            }
+            // a plant stands over the ground, unless a cave mouth has taken the ground away
+            let over = column_height - world_y;
+            if (0..size).contains(&over) && columns.sky_reach(x, z) == ground_top(column_height) {
+                let ground = column_block(
+                    biomes,
+                    biome,
+                    column_height - 1,
                     column_height,
-                    1,
-                )
-            }));
+                    gradient,
+                    temperature,
+                );
+                let (world_x, world_z) = (origin.x + x, origin.z + z);
+                if let Some(plant) = plant_on(regions.noise(), world_x, world_z, ground, gradient) {
+                    cells[start + over as usize] = plant;
+                }
+            }
         }
     }
     if let Some(carved) = caves.chunk(origin, |x, z| columns.cave_top(x, z), columns.cave_highest) {

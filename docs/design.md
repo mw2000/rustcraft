@@ -63,6 +63,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it and ores in its stone (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`, `ores.rs`) |
 | Biomes | Climate-driven desert, forest, foothills, glacier; tinted grass and leaves | `src/chunks/generate/biome/` |
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
+| Plants | Tall grass and flowers on the grass, by climate, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk; no block light | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
@@ -73,7 +74,8 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
-cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace).
+cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace), and plants
+(tall grass, poppy, dandelion, cornflower).
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
@@ -119,10 +121,15 @@ Rules that hold across the codebase. A change that breaks one needs this section
 
 Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D-9).
 
-- A row declares a `BlockType` variant with its properties: its name, whether it's solid, its
-  `light_opacity` and occlusion weight, and its tiles per face and for LODs. Properties are
-  added to the row as the features that use them land (hardness, drops, emitted light, render
-  style).
+- A row declares a `BlockType` variant with its properties: its name, whether it's solid,
+  whether it's replaceable (a block placed into it takes its place: air, water, plants), its
+  `light_opacity` and occlusion weight, its render style, and its tiles per face and for LODs.
+  Properties are added to the row as the features that use them land (hardness, drops, emitted
+  light).
+- Render styles (`RenderStyle`): `None` (air), `Cube` (faces, culled against opaque neighbours
+  and greedy-merged), `Liquid` (water's own mesh) and `Cross` (two diagonal quads, double-sided
+  and alpha cut out, at full detail only). A `Cross` block is a plant: not solid, lets all light
+  through, hides no faces, and stands on the block below.
 - `BlockType` stays a one-byte enum, stored in `ChunkData`'s runs, so generation and meshing can
   match on it and its properties are plain array lookups.
 - Each block has a stable snake_case name such as `"sandstone"` (`BlockType::name` and
@@ -370,9 +377,10 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   or uses a block (opening a chest, a door, a crafting table).
 - Mouse wheel and 1–9 pick the hotbar slot.
 - **Built (M0.2):** `src/interaction.rs` steps a ray from the eye through the blocks it crosses
-  (a DDA), stopping at the first solid one within 5 blocks, so it passes through air and water,
+  (a DDA), stopping at the first solid one or plant within 5 blocks, so it passes through air and water,
   and outlines it with a gizmo. Left click breaks it at once, right click places the hotbar's
-  selected block against the face looked at, into air or water but not into the player's body
+  selected block against the face looked at, or in place of a replaceable block looked at (tall
+  grass), into air, water or a plant but not into the player's body
   (checked by the server since M0.5b, §4.4), and middle click picks the block looked at into the hotbar (§5.2). None of it happens while
   paused, in the block picker or with the command bar open.
 
@@ -487,6 +495,19 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   time they were planted, so unloaded fields catch up when they load rather than ticking forever.
 - **Food:** bread from wheat at a crafting table; apples from leaves sometimes; meat from animals
   once they exist (§5.8). Food items say how much hunger they fill.
+- **Built (M1.9a):** the `Cross` render style and four plants, `tall_grass` (greyscale, tinted to
+  the climate's grass), `poppy`, `dandelion` and `cornflower`, their tiles drawn by the
+  block-textures skill's `draw.py`. The chunk mesher draws each as two quads through its cell,
+  each wound both ways over shared vertices, facing up so they're lit as the ground is, with the
+  light of their own cell; they sway from the roots up, more gently than leaves, and cut out their
+  texture's holes in the shadow and depth passes as leaves do (`foliage.wesl`,
+  `world_prepass.wesl`). LODs leave plants out, so they draw just as before. Generation puts one
+  on a grass column's top by the column's hash alone (`generate/plants.rs`, INV-2, INV-3), on
+  gentle ground with its top block intact: tall grass in tufts, dense where it's wet and warm and
+  sparse where it's dry or cold, and flowers in patches of one kind, rarer. Deserts, glaciers and
+  snow have no grass, so no plants. Trees grow over them. The server lets plants go only on solid
+  ground and removes a plant whose ground is broken, as a `BlockChanged` of its own; it simply
+  goes, until M1.2 gives drops (seeds from tall grass come with farming).
 
 ### 5.6 Structures
 
@@ -607,8 +628,9 @@ Done when: **you can start with nothing and make iron tools.**
 - ☐ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
 - ☐ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
   (§5.5).
-- ☐ **M1.9 Plants and farming.** Cross-shaped plant blocks, tall grass and flowers in the world,
-  hoes, farmland, wheat that grows, bread and apples (§5.5a).
+- ☐ **M1.9 Plants and farming** (§5.5a).
+  - ☑ **M1.9a Plant blocks.** The cross render style, tall grass and flowers in the world.
+  - ☐ **M1.9b Farming.** Hoes, farmland, wheat that grows, bread and apples.
 
 ### Phase 2: exploration
 

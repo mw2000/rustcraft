@@ -349,9 +349,15 @@ fn test_lod_level_zero_matches_full_detail_chunk() {
                         .caves()
                         .carves(block, columns.cave_top(x as i64, z as i64));
                     let expected = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
+                    // and plants, which are too small to see from afar
+                    let block = chunk.get_block_at(U16Vec3::new(x, y, z));
                     assert_eq!(
                         if carved { BlockType::Air } else { expected },
-                        chunk.get_block_at(U16Vec3::new(x, y, z)),
+                        if block.is_plant() {
+                            BlockType::Air
+                        } else {
+                            block
+                        },
                         "chunk {coord} block ({x},{y},{z})"
                     );
                 }
@@ -2282,4 +2288,137 @@ fn test_a_shaft_dug_down_into_a_cave_lights_it_until_its_roofed_over() {
     world.edit(I64Vec3::new(8, 33 * 16 - 1, 8), BlockType::Stone);
     assert!(world.get_chunk_data(cave).unwrap().roofed.contains(8, 8));
     assert!(floor_light(&world) < 0.1);
+}
+
+fn draws(mesh: &Mesh) -> Vec<f32> {
+    let Some(VertexAttributeValues::Float32x2(modes)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+        panic!("missing uv_b");
+    };
+    modes.iter().map(|m| m[1]).collect()
+}
+
+#[test]
+fn test_a_plant_is_two_crossed_quads_seen_from_both_sides() {
+    let mut chunk = ChunkData::default();
+    chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Poppy);
+    let mesh = mesh_chunk(chunk).opaque;
+    assert_eq!(8, mesh.count_vertices());
+    assert_eq!(Some(24), mesh.indices().map(Indices::len));
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("missing positions");
+    };
+    for p in positions {
+        // on one diagonal of the cell or the other, from its floor to its ceiling
+        let (dx, dz) = (p[0] - 4.0, p[2] - 4.0);
+        assert!(
+            (dx.abs() - dz.abs()).abs() < 1e-5 && dx.abs() < 0.5,
+            "{p:?}"
+        );
+        assert!(p[1] == 3.5 || p[1] == 4.5, "{p:?}");
+    }
+    assert!(draws(&mesh).iter().all(|&d| d == super::buffers::PLANT));
+    // each quad twice, wound both ways
+    let Some(Indices::U32(indices)) = mesh.indices() else {
+        panic!("missing indices");
+    };
+    let normal = |t: &[u32]| {
+        let p = |i: u32| Vec3::from(positions[i as usize]);
+        (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).normalize()
+    };
+    let windings: Vec<Vec3> = indices.chunks(6).map(normal).collect();
+    assert_eq!(windings[0], -windings[1]);
+    assert_eq!(windings[2], -windings[3]);
+}
+
+#[test]
+fn test_plants_hide_none_of_their_neighbours_faces() {
+    let mut stones = ChunkData::default();
+    stones.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+    stones.set_block_at(U16Vec3::new(6, 4, 4), BlockType::Stone);
+    let mut planted = stones.clone();
+    planted.set_block_at(U16Vec3::new(5, 4, 4), BlockType::TallGrass);
+    planted.set_block_at(U16Vec3::new(4, 5, 4), BlockType::Dandelion);
+    assert_eq!(2 * 24 + 2 * 8, mesh_vertices(planted));
+    assert_eq!(2 * 24, mesh_vertices(stones));
+}
+
+#[test]
+fn test_tall_grass_is_tinted_and_flowers_are_not() {
+    for (plant, tinted) in [(BlockType::TallGrass, true), (BlockType::Cornflower, false)] {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), plant);
+        let colours = tints(&mesh_chunk(chunk).opaque);
+        assert!(
+            colours.iter().all(|&c| (c != Vec3::ONE) == tinted),
+            "{plant:?}"
+        );
+    }
+}
+
+#[test]
+fn test_a_plant_takes_the_light_of_its_cell() {
+    let mut chunk = ChunkData::default();
+    chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::TallGrass);
+    let open = mesh_chunk(chunk.clone()).opaque;
+    // and under a roof, in the shade
+    for x in 0..16 {
+        for z in 0..16 {
+            chunk.set_block_at(U16Vec3::new(x, 6, z), BlockType::Stone);
+        }
+    }
+    let roofed = mesh_chunk(chunk).opaque;
+    let light = |mesh: &Mesh, plant: usize| {
+        let Some(VertexAttributeValues::Float32x2(modes)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
+            panic!("missing uv_b");
+        };
+        let plants: Vec<f32> = modes
+            .iter()
+            .filter(|m| m[1] == super::buffers::PLANT)
+            .map(|m| m[0])
+            .collect();
+        assert_eq!(plant, plants.len());
+        plants[0]
+    };
+    assert_eq!(1.0, light(&open, 8));
+    assert!(light(&roofed, 8) < 1.0);
+}
+
+#[test]
+fn test_coarse_lods_leave_plants_out() {
+    let plant = (IVec3::new(4, 4, 4), BlockType::TallGrass);
+    assert_eq!(0, mesh_lod(&lod_with(&[plant])).count_vertices());
+}
+
+#[test]
+fn test_plants_grow_on_the_grass_at_full_detail_and_never_in_lods() {
+    let regions = test_regions();
+    let (x, z, height) = regions.noise().find_spawn();
+    let spawn = ChunkCoordinate::containing(I64Vec3::new(x, height as i64, z)).0;
+    let mut plants = 0;
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            for dy in -1..=1 {
+                let coord = spawn + I64Vec3::new(dx, dy, dz);
+                let chunk = generate_chunk(regions.clone(), ChunkCoordinate(coord));
+                let below = generate_chunk(regions.clone(), ChunkCoordinate(coord - I64Vec3::Y));
+                let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+                for (at, block) in chunk.iter_non_air().filter(|(_, b)| b.is_plant()) {
+                    plants += 1;
+                    let ground = match at.y {
+                        0 => below.get_block_at(at.with_y(15)),
+                        y => chunk.get_block_at(at.with_y(y - 1)),
+                    };
+                    assert_eq!(BlockType::Grass, ground, "{block:?} at {at} in {coord}");
+                    assert_eq!(BlockType::Air, lod.raw(at.as_ivec3()));
+                }
+                // and generated the same again
+                let again = generate_chunk(regions.clone(), ChunkCoordinate(coord));
+                assert!(again.iter_non_air().eq(chunk.iter_non_air()));
+            }
+        }
+    }
+    assert!(plants > 20, "{plants} plants");
 }

@@ -8,6 +8,7 @@ use super::source::{BlockSource, GridView};
 use super::terrain::is_solid;
 use crate::block::BlockType;
 use crate::block::Face;
+use crate::block::RenderStyle;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
@@ -81,7 +82,7 @@ pub(super) fn face_span(
     block: BlockType,
     leaves_cover_leaves: bool,
 ) -> Option<Option<[f32; 2]>> {
-    if matches!(block, BlockType::Air | BlockType::Water) {
+    if block.style() != RenderStyle::Cube {
         return None;
     }
     let neighbour = coord + normal;
@@ -192,7 +193,7 @@ pub(super) fn mesh_opaque_greedy(
                 for a in 0..size {
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
-                    if matches!(block, BlockType::Air | BlockType::Water) {
+                    if block.style() != RenderStyle::Cube {
                         continue;
                     }
                     // past the mesh's edge the terrain may be drawn at another detail, with no

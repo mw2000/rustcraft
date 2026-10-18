@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Draw the hand-made tiles (those with `drawn=True` in TILES) into out/<Tile>.png, for pack.py. Usage: draw.py [tile ...] [--seed N]
 
-Built blocks and ores need hard edges (mortar, board seams, ore deposits) that SD can't draw at 16px, so they're
-drawn here instead: each tile is a map of indices into a few shades, the way the generated tiles end up after
+Built blocks, ores and plants need hard edges (mortar, board seams, ore deposits, petals) or cut-outs that SD can't
+draw at 16px, so they're drawn here instead: each tile is a map of indices into a few shades, the way the generated tiles end up after
 their 4-colour quantise. Shades come from tiles already in the atlas, so the new ones sit beside them."""
 import argparse
 
@@ -190,8 +190,69 @@ def furnace_side(rng):
     return out
 
 
+def clear():
+    """A tile with nothing in it yet, as RGBA, for plants drawn on transparency."""
+    return np.zeros((16, 16, 4))
+
+
+def paint(out, y, x, colour):
+    out[y, x] = (*colour, 255)
+
+
+def tall_grass(rng):
+    """Greyscale blades, tinted per climate like the grass top, whose shades they take: a darker one
+    down each blade's middle, the lightest at its tips, and the darkest near the ground."""
+    grey = shades("GrassTop", 1.4)
+    out = clear()
+    for x0 in [1, 3, 5, 7, 8, 10, 12, 14]:
+        height = rng.integers(7, 15)
+        lean = rng.uniform(-0.35, 0.35)
+        for i in range(height):  # from the ground up
+            x = int(round(x0 + lean * i * i / height))
+            if not 0 <= x < 16:
+                break
+            shade = grey[0] if i < 2 else grey[-1] if i >= height - 2 else grey[1 + (i + x0) % (len(grey) - 2)]
+            paint(out, 15 - i, x, shade)
+    return out
+
+
+STEM = [(58, 98, 30), (76, 124, 40), (98, 148, 52)]  # untinted green, darkest first
+
+
+def flower(rng, head, colours, stem_height=8, leaves=((11, -1), (13, 1))):
+    """A stem with a leaf or two, under a head drawn as a picture of `colours` keyed by its chars."""
+    out = clear()
+    x = 7 + rng.integers(0, 2)
+    for y in range(16 - stem_height, 16):
+        paint(out, y, x, STEM[1])
+    for y, side in leaves:  # a leaf sticking out from the stem, two texels long and rising
+        paint(out, y, x + side, STEM[2])
+        paint(out, y - 1, x + 2 * side, STEM[2])
+        paint(out, y + 1, x + side, STEM[0])
+    top = 16 - stem_height - len(head)
+    for dy, dx, c in sprite(head, colours):
+        paint(out, top + dy, x - len(head[0]) // 2 + dx, c)
+    return out
+
+
+def poppy(rng):
+    return flower(rng, [".rrr.", "rRrrr", "rrkrr", "rrrrd", ".ddd."],
+                  dict(R=(236, 84, 64), r=(204, 40, 32), d=(150, 24, 22), k=(40, 30, 28)))
+
+
+def dandelion(rng):
+    return flower(rng, [".y.y.", "yYyyy", ".yyy.", "..g.."], dict(Y=(255, 236, 110), y=(240, 200, 40), g=STEM[0]),
+                  stem_height=7, leaves=((13, -1), (14, 1)))
+
+
+def cornflower(rng):
+    return flower(rng, ["b.b.b", ".BbB.", "bbdbb", ".bbb.", "..g.."], dict(B=(130, 160, 255), b=(70, 100, 220), d=(40, 50, 140), g=STEM[0]),
+                  stem_height=7)
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
-            IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side)
+            IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
+            TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":
@@ -202,5 +263,6 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     for name in a.tiles or DRAW:
         rgb = DRAW[name](np.random.default_rng([a.seed, list(DRAW).index(name)]))
+        # plants are drawn as RGBA, on transparency, and every other tile as RGB
         Image.fromarray(np.clip(np.asarray(rgb).round(), 0, 255).astype("uint8")).convert("RGBA").save(OUT / f"{name}.png")
         print("drew", name)

@@ -38,10 +38,10 @@ impl GameMode {
         self == GameMode::Creative
     }
 
-    /// Whether the player may place `block`: any solid block in either mode, until M1.1 has
-    /// survival place only what it carries.
+    /// Whether the player may place `block`: any but air and water in either mode, until M1.1
+    /// has survival place only what it carries.
     pub fn can_place(self, block: BlockType) -> bool {
-        block.is_solid()
+        block.is_tangible()
     }
 }
 

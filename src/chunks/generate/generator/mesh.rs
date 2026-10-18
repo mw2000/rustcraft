@@ -1,5 +1,5 @@
 use super::buffers::{
-    tiled_uvs, ChunkMeshes, GrassTint, MeshBuffers, MeshStyle, BOX_TEXTURE_MAX_CELL, CUBE,
+    tiled_uvs, ChunkMeshes, GrassTint, MeshBuffers, MeshStyle, BOX_TEXTURE_MAX_CELL, CROSS, CUBE,
     TEXTURED, TEXTURED_SOLID,
 };
 use super::greedy::mesh_opaque_greedy;
@@ -12,6 +12,7 @@ use crate::block::Face;
 use crate::block::Tile;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
 use std::collections::HashMap;
@@ -58,16 +59,14 @@ pub(super) fn mesh_blocks(
         blocks[grid_index(size, coord)] = block;
     }
 
-    for (block_coord, block) in non_air {
+    for &(block_coord, block) in &non_air {
         if block != BlockType::Water {
             continue;
         }
 
         for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
-            if !matches!(
-                source.block(block_coord + offset),
-                BlockType::Air | BlockType::Leaves
-            ) {
+            let neighbour = source.block(block_coord + offset);
+            if !(matches!(neighbour, BlockType::Air | BlockType::Leaves) || neighbour.is_plant()) {
                 continue;
             }
             // Only the top face carries the shore, depth, top flag and shore distance (R, G, B,
@@ -107,6 +106,14 @@ pub(super) fn mesh_blocks(
         grass_tint,
         light,
     );
+    // plants are too small to make out from afar, so coarse LODs leave them out
+    let plants = opaque.vertices.len();
+    if cell_size == 1 {
+        for &(coord, block) in non_air.iter().filter(|(_, block)| block.is_plant()) {
+            push_cross(&mut opaque, coord, block, grass_tint, light);
+        }
+    }
+    opaque.plants = plants..opaque.vertices.len();
     opaque.tint_grass_sides(grass_tint);
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
@@ -161,5 +168,34 @@ pub(super) fn mesh_blocks(
     ChunkMeshes {
         opaque: opaque.build_mesh(),
         water: water_mesh,
+    }
+}
+
+// A plant at `coord`, as two crossed quads lit by the light of its cell, tinted to the climate's
+// grass if its tile is greyscale.
+fn push_cross(
+    buffers: &mut MeshBuffers,
+    coord: IVec3,
+    block: BlockType,
+    grass_tint: &GrassTint,
+    light: &SkyLight,
+) {
+    let tile = block.tile(Face::Side);
+    let centre = coord.as_vec3();
+    let tint = if tile.tinted() {
+        grass_tint.at(centre)
+    } else {
+        Vec3::ONE
+    };
+    let colour = tint.extend(tile.atlas_cell()).to_array();
+    let level = light.level(coord) as f32 / MAX_LIGHT as f32;
+    for quad in &CROSS {
+        buffers.push_double_sided_quad(
+            quad.map(|v| (Vec3::from(v.position) + centre).to_array()),
+            quad[0].normal,
+            quad.map(|v| v.uv),
+            [colour; 4],
+            [level; 4],
+        );
     }
 }

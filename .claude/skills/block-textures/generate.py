@@ -46,6 +46,10 @@ TILES = [
     dict(name="CraftingTableTop", drawn=True),
     dict(name="CraftingTableSide", drawn=True),
     dict(name="FurnaceSide", drawn=True),
+    dict(name="TallGrass", drawn=True),  # greyscale, tinted per climate like GrassTop
+    dict(name="Poppy", drawn=True),
+    dict(name="Dandelion", drawn=True),
+    dict(name="Cornflower", drawn=True),
 ]
 
 

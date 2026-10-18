@@ -8,6 +8,7 @@ use bevy::math::Vec3;
 use bevy::render::mesh::Indices;
 use bevy::render::mesh::Mesh;
 use bevy::render::mesh::VertexAttributeValues;
+use std::ops::Range;
 
 // Accumulates one mesh's worth of vertex/index/color data - one instance for the
 // opaque blocks, a second for water, so they can become separate `Mesh`es with
@@ -23,13 +24,17 @@ pub(super) struct MeshBuffers {
     pub(super) untextured: bool,
     // grass sides' vertices and their shade without the grass's tint, see `tint_grass_sides`
     pub(super) grass_sides: Vec<(usize, f32)>,
+    // the plants' vertices, which sway by their tops, see `foliage.wesl`
+    pub(super) plants: Range<usize>,
     // where tree boxes start and how they draw, which is on their own terms
     pub(super) boxes: Option<(usize, f32)>,
 }
 
-// How a face draws, carried in each vertex's second uv, see `world.wesl`: its own tile, its
-// tile with leaves' holes filled, or its block's mean colour.
+// How a face draws, carried in each vertex's second uv, see `world.wesl`: its own tile, a
+// plant's, its tile with leaves' holes filled, or its block's mean colour.
 pub(super) const TEXTURED: f32 = 0.0;
+
+pub(super) const PLANT: f32 = 0.25;
 
 pub(super) const TEXTURED_SOLID: f32 = 0.75;
 
@@ -81,6 +86,21 @@ impl MeshBuffers {
             self.lights.push(lights[j]);
         }
         self.push_quad_indices(triangle_start);
+    }
+
+    // A quad seen from both sides, its back sharing its vertices, as the material culls the
+    // faces looking away.
+    pub(super) fn push_double_sided_quad(
+        &mut self,
+        positions: [[f32; 3]; 4],
+        normal: [f32; 3],
+        uvs: [[f32; 2]; 4],
+        colors: [[f32; 4]; 4],
+        lights: [f32; 4],
+    ) {
+        let start = self.vertices.len() as u32;
+        self.push_tiled_quad(positions, normal, uvs, colors, lights);
+        self.indices.extend([2, 1, 0, 3, 1, 2].map(|i| start + i));
     }
 
     // Vertices at every block step round the border, so neighbours share exact edge points and leave no cracks.
@@ -178,6 +198,7 @@ impl MeshBuffers {
                 .enumerate()
                 .map(|(i, l)| match self.boxes {
                     Some((start, flag)) if i >= start => [l, flag],
+                    _ if self.plants.contains(&i) => [l, PLANT],
                     _ => [
                         l,
                         if self.untextured {
@@ -352,3 +373,25 @@ pub(super) const CUBE: [[Vertex; 4]; 6] = [
         v([0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 0.0]),
     ],
 ];
+
+// How far out from its middle along each axis a plant's quads reach, short of the cell's corners,
+// as a tile drawn across the diagonal is already wider than a block.
+const CROSS_REACH: f32 = 0.45;
+
+// A plant's quad from `from` to `to` across its cell, in x and z, with v = 0 at its top.
+const fn cross_quad(from: [f32; 2], to: [f32; 2]) -> [Vertex; 4] {
+    // facing up, so a plant is lit as the ground it stands on is, and alike from every side
+    let up = [0.0, 1.0, 0.0];
+    [
+        v([from[0], 0.5, from[1]], up, [0.0, 0.0]),
+        v([from[0], -0.5, from[1]], up, [0.0, 1.0]),
+        v([to[0], 0.5, to[1]], up, [1.0, 0.0]),
+        v([to[0], -0.5, to[1]], up, [1.0, 1.0]),
+    ]
+}
+
+// A plant's two quads, corner to corner through its cell.
+pub(super) const CROSS: [[Vertex; 4]; 2] = {
+    let r = CROSS_REACH;
+    [cross_quad([-r, -r], [r, r]), cross_quad([-r, r], [r, -r])]
+};
