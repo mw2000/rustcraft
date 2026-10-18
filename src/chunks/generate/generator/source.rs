@@ -89,6 +89,8 @@ pub(super) struct ChunkNeighbourhood<'a> {
     blocks: Vec<BlockType>,
     // the roofed columns of the 3x3 chunks above, x outermost
     roofed_above: [ColumnSet; 9],
+    /// The blocks in it giving off light, from the chunk's lowest block, with their levels.
+    pub(super) emitters: Vec<(IVec3, u8)>,
 }
 
 impl<'a> ChunkNeighbourhood<'a> {
@@ -98,6 +100,7 @@ impl<'a> ChunkNeighbourhood<'a> {
         let mut blocks = vec![BlockType::Air; (SPAN * SPAN * SPAN) as usize];
         let mut cells = [BlockType::Air; CELLS];
         let mut roofed_above = [ColumnSet::default(); 9];
+        let mut emitters = Vec::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -111,6 +114,11 @@ impl<'a> ChunkNeighbourhood<'a> {
                             _ => continue,
                         },
                     };
+                    let offset = IVec3::new(dx, dy, dz) * size;
+                    emitters.extend(
+                        data.emitters()
+                            .map(|(coord, level)| (coord.as_ivec3() + offset, level)),
+                    );
                     data.decode_into(&mut cells);
                     // both grids run y innermost, so each column copies across whole
                     for x in 0..size {
@@ -129,6 +137,7 @@ impl<'a> ChunkNeighbourhood<'a> {
             chunk,
             blocks,
             roofed_above,
+            emitters,
         }
     }
 

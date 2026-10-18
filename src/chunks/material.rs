@@ -178,7 +178,15 @@ impl Material for ChunkMaterial {
         let grass_top_cell =
             ShaderDefVal::UInt("GRASS_TOP_CELL".into(), Tile::GrassTop.atlas_cell() as u32);
         let dirt_cell = ShaderDefVal::UInt("DIRT_CELL".into(), Tile::Dirt.atlas_cell() as u32);
-        let mut defs = vec![leaf_cell, grass_top_cell, dirt_cell, water_level()];
+        // a torch's flame glows, see `world.wesl`
+        let torch_cell = ShaderDefVal::UInt("TORCH_CELL".into(), Tile::Torch.atlas_cell() as u32);
+        let mut defs = vec![
+            leaf_cell,
+            grass_top_cell,
+            dirt_cell,
+            torch_cell,
+            water_level(),
+        ];
         // compiled in or out, so the switches leave no trace of the code they turn off
         if key.bind_group_data.still_leaves {
             defs.push("STILL_LEAVES".into());

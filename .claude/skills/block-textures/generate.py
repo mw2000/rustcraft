@@ -50,6 +50,7 @@ TILES = [
     dict(name="Poppy", drawn=True),
     dict(name="Dandelion", drawn=True),
     dict(name="Cornflower", drawn=True),
+    dict(name="Torch", drawn=True),
 ]
 
 

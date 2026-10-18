@@ -232,6 +232,18 @@ impl ChunkData {
         })
     }
 
+    /// Its blocks that give off light, each with the level it gives off.
+    pub fn emitters(&self) -> impl Iterator<Item = (U16Vec3, u8)> + '_ {
+        let mut start = 0usize;
+        self.runs.iter().flat_map(move |run| {
+            let first = start;
+            start += run.length as usize;
+            let level = run.block.emits();
+            let end = if level > 0 { start } else { first };
+            (first..end).map(move |i| (coord_from_index(i), level))
+        })
+    }
+
     /// Writes every cell's block to `out`, in `linear_index` order.
     pub fn decode_into(&self, out: &mut [BlockType; CELLS]) {
         // Short runs, which layers of soil and veins of ore cut columns into, are written as a

@@ -12,7 +12,7 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::{BiomeId, Biomes};
 use crate::chunks::generate::columns::ColumnGrid;
 use crate::chunks::generate::columns::COARSE_CELL;
-use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::{Light, SkyLight};
 use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::trees::grows_into;
@@ -563,15 +563,16 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
     let blocks = LodBlocks::sample(&regions, key);
     let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
-    // the padded cells are already in `SkyLight::index` order
+    // the padded cells are already in `SkyLight::index` order, and LODs leave out edits, so
+    // there are no torches to give block light
     let light = LazyCell::new(|| {
         let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
-        SkyLight::new(
+        Light::sky(SkyLight::new(
             IVec3::splat(-1),
             IVec3::splat(blocks.size + 2),
             sky_above(top, cell_size),
             opacity,
-        )
+        ))
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
     // untextured leaves are drawn solid, so hide the leaves behind them

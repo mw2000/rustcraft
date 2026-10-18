@@ -250,9 +250,25 @@ def cornflower(rng):
                   stem_height=7)
 
 
+def torch(rng):
+    """A stick under a flame, in the tile's two middle columns from row 6 down, which the torch's box shows
+    (`generator::TORCH`): its lit side on the left, the flame bright at the top and charred at the stick."""
+    out = clear()
+    bark, end = shades("LogBark"), shades("LogEnd")
+    flame = [((255, 246, 184), (255, 224, 120)), ((255, 200, 76), (248, 164, 48)), ((228, 112, 34), (176, 78, 26))]
+    for y, (lit, shaded) in enumerate(flame, 6):
+        paint(out, y, 7, lit)
+        paint(out, y, 8, shaded)
+    for y in range(9, 16):
+        grain = rng.integers(0, 2)
+        paint(out, y, 7, end[grain])
+        paint(out, y, 8, bark[2 + grain])
+    return out
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
-            TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower)
+            TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":
@@ -263,6 +279,6 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     for name in a.tiles or DRAW:
         rgb = DRAW[name](np.random.default_rng([a.seed, list(DRAW).index(name)]))
-        # plants are drawn as RGBA, on transparency, and every other tile as RGB
+        # plants and the torch are drawn as RGBA, on transparency, and every other tile as RGB
         Image.fromarray(np.clip(np.asarray(rgb).round(), 0, 255).astype("uint8")).convert("RGBA").save(OUT / f"{name}.png")
         print("drew", name)

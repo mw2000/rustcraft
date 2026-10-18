@@ -1,6 +1,6 @@
 use super::buffers::{
     tiled_uvs, ChunkMeshes, GrassTint, MeshBuffers, MeshStyle, BOX_TEXTURE_MAX_CELL, CROSS, CUBE,
-    TEXTURED, TEXTURED_SOLID,
+    TEXTURED, TEXTURED_SOLID, TORCH,
 };
 use super::greedy::mesh_opaque_greedy;
 use super::shading::{
@@ -9,9 +9,10 @@ use super::shading::{
 use super::source::{grid_index, BlockSource, BoxFaces, GridView};
 use crate::block::BlockType;
 use crate::block::Face;
+use crate::block::RenderStyle;
 use crate::block::Tile;
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
@@ -24,7 +25,7 @@ pub(super) fn mesh_blocks(
     cell_size: i64,
     style: MeshStyle,
     grass_tint: &GrassTint,
-    light: &impl Deref<Target = SkyLight>,
+    light: &impl Deref<Target = Light>,
 ) -> ChunkMeshes {
     let MeshStyle { textured, .. } = style;
     let mut opaque = MeshBuffers {
@@ -66,7 +67,9 @@ pub(super) fn mesh_blocks(
 
         for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
             let neighbour = source.block(block_coord + offset);
-            if !(matches!(neighbour, BlockType::Air | BlockType::Leaves) || neighbour.is_plant()) {
+            if !(matches!(neighbour, BlockType::Air | BlockType::Leaves)
+                || neighbour.needs_ground())
+            {
                 continue;
             }
             // Only the top face carries the shore, depth, top flag and shore distance (R, G, B,
@@ -106,14 +109,19 @@ pub(super) fn mesh_blocks(
         grass_tint,
         light,
     );
-    // plants are too small to make out from afar, so coarse LODs leave them out
-    let plants = opaque.vertices.len();
+    // plants and torches are too small to make out from afar, so coarse LODs leave them out
     if cell_size == 1 {
+        let plants = opaque.vertices.len();
         for &(coord, block) in non_air.iter().filter(|(_, block)| block.is_plant()) {
             push_cross(&mut opaque, coord, block, grass_tint, light);
         }
+        opaque.plants = plants..opaque.vertices.len();
+        for &(coord, block) in &non_air {
+            if block.style() == RenderStyle::Torch {
+                push_torch(&mut opaque, coord, block, light);
+            }
+        }
     }
-    opaque.plants = plants..opaque.vertices.len();
     opaque.tint_grass_sides(grass_tint);
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
@@ -154,7 +162,7 @@ pub(super) fn mesh_blocks(
                 face[0].normal,
                 uvs,
                 [tint.extend(tile.atlas_cell()).to_array(); 4],
-                [BOX_LIGHT; 4],
+                [[BOX_LIGHT, 0.0]; 4],
             );
         }
     }
@@ -178,7 +186,7 @@ fn push_cross(
     coord: IVec3,
     block: BlockType,
     grass_tint: &GrassTint,
-    light: &SkyLight,
+    light: &Light,
 ) {
     let tile = block.tile(Face::Side);
     let centre = coord.as_vec3();
@@ -188,14 +196,31 @@ fn push_cross(
         Vec3::ONE
     };
     let colour = tint.extend(tile.atlas_cell()).to_array();
-    let level = light.level(coord) as f32 / MAX_LIGHT as f32;
+    let levels = light.levels(coord).map(|l| l as f32 / MAX_LIGHT as f32);
     for quad in &CROSS {
         buffers.push_double_sided_quad(
             quad.map(|v| (Vec3::from(v.position) + centre).to_array()),
             quad[0].normal,
             quad.map(|v| v.uv),
             [colour; 4],
-            [level; 4],
+            [levels; 4],
+        );
+    }
+}
+
+// A torch at `coord`, as a stick standing on the floor of its cell, lit by the light of its
+// cell. It shows the middle of its tile, the flame at the top, see `TORCH`.
+fn push_torch(buffers: &mut MeshBuffers, coord: IVec3, block: BlockType, light: &Light) {
+    let tile = block.tile(Face::Side);
+    let colour = Vec3::ONE.extend(tile.atlas_cell()).to_array();
+    let levels = light.levels(coord).map(|l| l as f32 / MAX_LIGHT as f32);
+    for face in &TORCH {
+        buffers.push_tiled_quad(
+            face.map(|v| (Vec3::from(v.position) + coord.as_vec3()).to_array()),
+            face[0].normal,
+            face.map(|v| v.uv),
+            [colour; 4],
+            [levels; 4],
         );
     }
 }

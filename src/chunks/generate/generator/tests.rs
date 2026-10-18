@@ -14,7 +14,7 @@ use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
 use super::terrain::{freeze_cell, terrain_block, under_surface, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
-use crate::chunks::generate::light::{SkyLight, MAX_LIGHT};
+use crate::chunks::generate::light::{Light, SkyLight, MAX_LIGHT};
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::WATER_LEVEL;
@@ -404,12 +404,12 @@ fn sloped_lod() -> LodBlocks {
 fn mesh_lod(lod: &LodBlocks) -> Mesh {
     let top = lod.base_y + (lod.size as i64 + 1) * lod.cell;
     let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
-    let light = Box::new(SkyLight::new(
+    let light = Box::new(Light::sky(SkyLight::new(
         IVec3::splat(-1),
         IVec3::splat(lod.size + 2),
         super::chunk::sky_above(top, lod.cell),
         opacity,
-    ));
+    )));
     let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
     super::mesh::mesh_blocks(lod, lod.cell, style(false, false), &tint, &light).opaque
 }
@@ -1184,12 +1184,12 @@ fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
     let tint = super::buffers::GrassTint::new(&noise, Vec3::ZERO, 1.0);
     let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
     let light = std::cell::LazyCell::new(|| {
-        crate::chunks::generate::light::SkyLight::new(
+        Light::sky(SkyLight::new(
             IVec3::splat(-1),
             IVec3::splat(18),
-            crate::chunks::generate::light::MAX_LIGHT,
+            MAX_LIGHT,
             opacity,
-        )
+        ))
     });
     let mesh = super::mesh::mesh_blocks(&lod, 1, style(true, false), &tint, &light).opaque;
     let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) =
@@ -1514,12 +1514,12 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
         };
         let tint = super::buffers::GrassTint::new(regions.noise(), Vec3::ZERO, 1.0);
         let light = std::cell::LazyCell::new(|| {
-            crate::chunks::generate::light::SkyLight::new(
+            Light::sky(SkyLight::new(
                 IVec3::splat(-1),
                 IVec3::splat(18),
-                crate::chunks::generate::light::MAX_LIGHT,
+                MAX_LIGHT,
                 vec![0; 18 * 18 * 18],
-            )
+            ))
         });
         let mesh =
             super::mesh::mesh_blocks(&lone, key.cell_size(), style(false, false), &tint, &light)
@@ -1993,7 +1993,7 @@ fn test_lod_non_air_only_covers_interior() {
 #[test]
 fn test_an_edit_remeshes_the_chunks_its_faces_and_light_reach() {
     let remeshed = |x, y, z| -> Vec<I64Vec3> {
-        chunks_meshed_with(I64Vec3::new(x, y, z))
+        chunks_meshed_with(I64Vec3::new(x, y, z), false)
             .map(|c| c.0)
             .collect()
     };
@@ -2048,7 +2048,7 @@ fn test_digging_a_shaft_through_the_chunk_above_lights_a_cave_below() {
         "{dark} under stone, {open} under the shaft"
     );
     // the chunk below is one an edit in the shaft remeshes
-    assert!(chunks_meshed_with(I64Vec3::new(8, 41 * 16 + 3, 8)).any(|c| c == coord));
+    assert!(chunks_meshed_with(I64Vec3::new(8, 41 * 16 + 3, 8), false).any(|c| c == coord));
 }
 
 // Full-detail blocks anywhere, generating chunks as they're needed.
@@ -2191,7 +2191,7 @@ fn test_sky_light_stays_out_of_ground_with_caves_in_it() {
         let source = ChunkNeighbourhood::new(&chunk, &neighbours);
         let light =
             super::chunk::neighbourhood_light(&source, ChunkCoordinate(I64Vec3::new(0, 40, 0)));
-        light.level(IVec3::splat(8))
+        light.sky.level(IVec3::splat(8))
     };
     assert_eq!(MAX_LIGHT, light_inside(false));
     assert_eq!(0, light_inside(true));
@@ -2390,6 +2390,107 @@ fn test_a_plant_takes_the_light_of_its_cell() {
 fn test_coarse_lods_leave_plants_out() {
     let plant = (IVec3::new(4, 4, 4), BlockType::TallGrass);
     assert_eq!(0, mesh_lod(&lod_with(&[plant])).count_vertices());
+}
+
+// The vertices drawing `tile`, by position, with their sky light and block light.
+fn tile_vertices(mesh: &Mesh, tile: Tile) -> Vec<([f32; 3], [f32; 2])> {
+    let attribute = |id| match mesh.attribute(id) {
+        Some(VertexAttributeValues::Float32x3(values)) => {
+            values.iter().map(|v| v.to_vec()).collect()
+        }
+        Some(VertexAttributeValues::Float32x4(values)) => {
+            values.iter().map(|v| v.to_vec()).collect()
+        }
+        Some(VertexAttributeValues::Float32x2(values)) => {
+            values.iter().map(|v| v.to_vec()).collect()
+        }
+        _ => Vec::<Vec<f32>>::new(),
+    };
+    let (positions, colours) = (
+        attribute(Mesh::ATTRIBUTE_POSITION),
+        attribute(Mesh::ATTRIBUTE_COLOR),
+    );
+    let (lights, blocks) = (
+        attribute(Mesh::ATTRIBUTE_UV_1),
+        attribute(Mesh::ATTRIBUTE_TANGENT),
+    );
+    (0..positions.len())
+        .filter(|&i| colours[i][3] == tile.atlas_cell())
+        .map(|i| {
+            let block = blocks.get(i).map_or(0.0, |b| b[0]);
+            (
+                [positions[i][0], positions[i][1], positions[i][2]],
+                [lights[i][0], block],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn test_a_torch_is_a_thin_stick_standing_on_the_floor_lit_by_its_own_flame() {
+    let mut chunk = floor_chunk();
+    chunk.set_block_at(U16Vec3::new(4, 1, 6), BlockType::Torch);
+    let torch = tile_vertices(&mesh_chunk(chunk).opaque, Tile::Torch);
+    // four sides and a top, but no bottom, which stands on the stone
+    assert_eq!(5 * 4, torch.len());
+    let (min, max) = torch
+        .iter()
+        .fold((Vec3::MAX, Vec3::MIN), |(min, max), (p, _)| {
+            (min.min(Vec3::from(*p)), max.max(Vec3::from(*p)))
+        });
+    let half = 1.0 / 16.0;
+    assert_eq!(Vec3::new(4.0 - half, 0.5, 6.0 - half), min);
+    assert_eq!(Vec3::new(4.0 + half, 0.5 + 10.0 / 16.0, 6.0 + half), max);
+    let lit = 14.0 / MAX_LIGHT as f32;
+    assert!(
+        torch.iter().all(|(_, light)| *light == [1.0, lit]),
+        "{torch:?}"
+    );
+}
+
+#[test]
+fn test_coarse_lods_leave_torches_out() {
+    let torch = (IVec3::new(4, 4, 4), BlockType::Torch);
+    assert_eq!(0, mesh_lod(&lod_with(&[torch])).count_vertices());
+}
+
+#[test]
+fn test_torchlight_crosses_into_the_next_chunk_alongside_sky_light() {
+    // floors under open sky, with a torch on the one to +x, 2 blocks from the border
+    let floor = || floor_chunk();
+    let mut beside = floor();
+    beside.set_block_at(U16Vec3::new(1, 1, 8), BlockType::Torch);
+    let mesh = |beside: ChunkData| {
+        let mut neighbours = vec![None; 26];
+        neighbours[neighbor_26_index(1, 0, 0)] = Some(Arc::new(beside));
+        let mesh = generate_chunk_mesh(
+            Arc::new(floor()),
+            neighbours,
+            ChunkCoordinate(I64Vec3::new(0, 40, 0)),
+            &NoiseGenerator::new(3),
+            false,
+        );
+        mesh.opaque
+    };
+    let (unlit, lit) = (mesh(floor()), mesh(beside));
+    // a mesh no light reaches carries none, so draws just as it did before torches
+    assert!(!unlit.contains_attribute(Mesh::ATTRIBUTE_TANGENT));
+    let floor = tile_vertices(&lit, Tile::Stone);
+    let at = |x: f32, z: f32| {
+        floor
+            .iter()
+            .find(|(p, _)| p[0] == x && p[1] == 0.5 && p[2] == z)
+            .map(|(_, light)| *light)
+            .unwrap_or_else(|| panic!("no vertex at {x}, {z}"))
+    };
+    // the corner nearest it averages the 4 cells over it, 1 to 3 blocks from the torch, and
+    // the light falls away a level a block from there
+    let level = |l: u8| l as f32 / MAX_LIGHT as f32;
+    assert_eq!([1.0, level(14 - 2)], at(15.5, 8.5));
+    assert_eq!([1.0, level(14 - 2 - 4)], at(11.5, 8.5));
+    assert_eq!([1.0, 0.0], at(-0.5, 8.5));
+    // while the sky still lights the open floor fully
+    assert!(top_lights(&lit).iter().all(|(_, sky)| *sky == 1.0));
 }
 
 #[test]

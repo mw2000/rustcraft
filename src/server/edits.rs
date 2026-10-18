@@ -140,12 +140,12 @@ pub(super) fn receive_edits(
         } else if !mode.has_every_block() {
             inventory.use_one(slot.into(), Item::Block(to));
         }
-        // a plant goes with the ground it stood on
+        // a plant or a torch goes with the ground it stood on
         let above = block + I64Vec3::Y;
-        let plant = world.get_block_at(above);
-        if !to.is_solid() && plant.is_plant() {
+        let standing = world.get_block_at(above);
+        if !to.is_solid() && standing.needs_ground() {
             world.edit(above, BlockType::Air);
-            leave(plant, above);
+            leave(standing, above);
             changed.write(BlockChanged {
                 block: above,
                 to: BlockType::Air,
@@ -192,8 +192,8 @@ fn refusal(
         if !mode.has_every_block() && held.is_none_or(|stack| stack.item != Item::Block(to)) {
             return Some("they aren't holding that");
         }
-        if to.is_plant() && !world.get_block_at(block - I64Vec3::Y).is_solid() {
-            return Some("it's a plant with nothing solid under it");
+        if to.needs_ground() && !world.get_block_at(block - I64Vec3::Y).is_solid() {
+            return Some("it needs solid ground under it");
         }
         let into_player = players
             .iter()
@@ -405,6 +405,28 @@ mod tests {
         );
         request(&mut app, &[(above, BlockType::Air)]);
         assert_eq!(BlockType::Stone, block_at(&app, FLOOR));
+    }
+
+    #[test]
+    fn test_torches_stand_on_solid_ground_and_drop_when_it_goes() {
+        let mut app = server(GameMode::Survival);
+        let above = FLOOR + I64Vec3::Y;
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Block(BlockType::Torch), 2));
+        assert_refused(&mut app, above + I64Vec3::Y, BlockType::Torch);
+        let (changed, _) = request(&mut app, &[(above, BlockType::Torch)]);
+        assert_eq!(1, changed.len());
+        // nor does a torch hold up another, or count as ground for anything placed on it
+        assert_refused(&mut app, above + I64Vec3::Y, BlockType::Torch);
+        assert_refused(&mut app, above, BlockType::Stone);
+        request(&mut app, &[(FLOOR, BlockType::Air)]);
+        assert_eq!(BlockType::Air, block_at(&app, above));
+        let mut items: Vec<_> = dropped(&mut app).into_iter().map(|(s, _)| s).collect();
+        items.sort_unstable_by_key(|stack| stack.item.name());
+        let one = |block| ItemStack::new(Item::Block(block), 1);
+        assert_eq!(
+            vec![one(BlockType::Cobblestone), one(BlockType::Torch)],
+            items
+        );
     }
 
     fn inventory(app: &mut App) -> Mut<'_, Inventory> {

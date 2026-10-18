@@ -10,7 +10,7 @@ use crate::block::BlockType;
 use crate::block::Face;
 use crate::block::RenderStyle;
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
@@ -29,14 +29,24 @@ pub(super) fn uv_tangent(face: &[Vertex], k: usize, a_axis: usize) -> usize {
     }
 }
 
+// A face's values at its corners, [along its first tangent][along its second], with `corners`
+// where each corner is along them.
+fn by_corner<T: Copy + Default>(corners: &[[bool; 2]; 4], values: [T; 4]) -> [[T; 2]; 2] {
+    let mut out = [[T::default(); 2]; 2];
+    for (j, [far_a, far_b]) in corners.iter().enumerate() {
+        out[*far_a as usize][*far_b as usize] = values[j];
+    }
+    out
+}
+
 #[derive(Copy, Clone)]
 pub(super) struct FaceCell {
     pub(super) block: BlockType,
     // the tree's own tint over the grass's, for leaves, see `Tree::tint`
     pub(super) tint: Vec3,
     pub(super) ao: [f32; 4],
-    // sky light at each corner, 0..1
-    pub(super) light: [f32; 4],
+    // sky light and block light at each corner, 0..1
+    pub(super) light: [[f32; 2]; 4],
     // where the face starts and ends up the mesh, if not the whole cell, see `face_span`
     pub(super) span: Option<[f32; 2]>,
 }
@@ -132,7 +142,7 @@ pub(super) fn mesh_opaque_greedy(
     // how many times the texture repeats across a cell
     uv_tiles: f32,
     grass_tint: &GrassTint,
-    light: &impl Deref<Target = SkyLight>,
+    light: &impl Deref<Target = Light>,
 ) {
     let MeshStyle {
         ambient_occlusion,
@@ -178,13 +188,6 @@ pub(super) fn mesh_opaque_greedy(
                 template[j].position[b_axis] > 0.0,
             ]
         });
-        let by_corner = |values: [f32; 4]| {
-            let mut out = [[0.0; 2]; 2];
-            for (j, [far_a, far_b]) in corners.iter().enumerate() {
-                out[*far_a as usize][*far_b as usize] = values[j];
-            }
-            out
-        };
 
         for slice in 0..size {
             // merging takes every face it finds out of the mask, so it's left empty for the next slice
@@ -223,7 +226,9 @@ pub(super) fn mesh_opaque_greedy(
                     let skirt_light = skirt.then(|| {
                         let air = (0..=SKIRT_CELLS + 1)
                             .find(|&dy| !is_solid(source.terrain(coord + IVec3::Y * dy)));
-                        face_light(air.map_or(MAX_LIGHT, |dy| light.level(coord + IVec3::Y * dy)))
+                        let levels =
+                            air.map_or([MAX_LIGHT, 0], |dy| light.levels(coord + IVec3::Y * dy));
+                        levels.map(face_light)
                     });
                     mask[(b * size + a) as usize] = Some(FaceCell {
                         span,
@@ -245,7 +250,9 @@ pub(super) fn mesh_opaque_greedy(
                                 vertex_light(source, light, coord, i, template[j].position)
                             })
                         } else {
-                            [skirt_light.unwrap_or_else(|| face_light(light.level(lit_from))); 4]
+                            let level = skirt_light
+                                .unwrap_or_else(|| light.levels(lit_from).map(face_light));
+                            [level; 4]
                         },
                     });
                 }
@@ -379,8 +386,8 @@ pub(super) fn mesh_opaque_greedy(
                         size: (w, h),
                         normal: template[0].normal,
                         color: &color,
-                        ao: by_corner(cell.ao),
-                        light: by_corner(cell.light),
+                        ao: by_corner(&corners, cell.ao),
+                        light: by_corner(&corners, cell.light),
                         uv_at: &uv_at,
                         reversed: !ccw_in_ab,
                     });

@@ -65,7 +65,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Plants | Tall grass and flowers on the grass, by climate, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
-| Light | Sky light (0–15) spread through each chunk; no block light | `src/chunks/generate/light.rs` |
+| Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
@@ -75,14 +75,14 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
-cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace), and plants
-(tall grass, poppy, dandelion, cornflower).
+cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace), plants
+(tall grass, poppy, dandelion, cornflower) and the torch.
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits and the player (`src/save/`).
 
-Not there yet: crafting, breaking times, health, block light, structures, mobs, networking.
+Not there yet: crafting, breaking times, health, structures, mobs, networking.
 
 ---
 
@@ -124,14 +124,19 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
 
 - A row declares a `BlockType` variant with its properties: its name, whether it's solid,
   whether it's replaceable (a block placed into it takes its place: air, water, plants), its
-  `light_opacity` and occlusion weight, its render style, and its tiles per face and for LODs.
-  Properties are added to the row as the features that use them land (hardness, emitted light).
+  `light_opacity` and occlusion weight, the block light it `emits` (0–14, a torch's 14), its
+  render style, and its tiles per face and for LODs. Properties are added to the row as the
+  features that use them land (hardness).
   Since M1.1 a row says what the block `drops` when broken in survival: `Nothing`, `Itself`
   (its own block item) or another block's item (§5.2).
 - Render styles (`RenderStyle`): `None` (air), `Cube` (faces, culled against opaque neighbours
-  and greedy-merged), `Liquid` (water's own mesh) and `Cross` (two diagonal quads, double-sided
-  and alpha cut out, at full detail only). A `Cross` block is a plant: not solid, lets all light
-  through, hides no faces, and stands on the block below.
+  and greedy-merged), `Liquid` (water's own mesh), `Cross` (two diagonal quads, double-sided
+  and alpha cut out, at full detail only) and `Torch` (a stick 2/16 wide and 10/16 tall on the
+  floor of its cell, showing the middle of its tile, its flame drawn unshaded, at full detail
+  only). A `Cross` block is a plant: not solid, lets all light through, hides no faces, and
+  stands on the block below. A torch stands on the block below the same way
+  (`BlockType::needs_ground`), but isn't built over. Torches stand on floors only; on walls
+  they need blocks to face a way.
 - `BlockType` stays a one-byte enum, stored in `ChunkData`'s runs, so generation and meshing can
   match on it and its properties are plain array lookups.
 - Each block has a stable snake_case name such as `"sandstone"` (`BlockType::name` and
@@ -157,6 +162,9 @@ The world's state beyond the seed (INV-1).
   (`chunks_meshed_with`): those whose sky light takes it in, which reaches 8 blocks sideways and a
   chunk down, and covers faces, ambient occlusion and shores across borders. Light is worked out
   per mesh from the chunk and the one above, so a shaft or a roof changes light that far down.
+  An edit that changes block light (an emitter placed or broken, or a block letting light
+  through differently within an emitter's reach) also rebuilds every chunk that light can reach,
+  13 blocks round it (`World::take_relit`, §5.5); other edits rebuild no more than before.
   Rebuilds mesh from the world's blocks on the compute pool, ahead of loading work, and swap the
   new mesh onto the same entity with no fade (`group::rebuild_groups`, `load_groups`). Since
   M0.5b the server makes edits and the client queues the rebuilds (§4.4).
@@ -653,8 +661,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - Sky light falls straight down columns, so each chunk records which of its columns have ground
   over them (`ChunkData::roofed`), and light reaches into the chunks below only down open shafts
   (`Caves::sky_reach`). Edits keep it up to date down the loaded chunks under them
-  (`World::edit`), so a shaft dug into a cave lights it. Cave interiors are dark until block
-  light (M1.7).
+  (`World::edit`), so a shaft dug into a cave lights it. Cave interiors are dark but for the
+  torches players bring (§5.5).
 - A chunk sealed off from the sky, with every column of it and the chunks beside it roofed, is
   only seen from in the caves, so it's meshed only near the camera: within 9 chunks from under
   ground, further than sight reaches along a cave, and 3 from the open. On the surface the caves
@@ -689,8 +697,30 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   Eating refills it; a fuller bar heals over time and an empty one hurts, down to half a heart.
   No saturation or exhaustion arithmetic beyond that.
 - Day and night already exist; night brings hostile mobs (§5.8).
-- Block light from torches and other light blocks, alongside sky light, so caves and nights can be
-  lit. Needs light to spread across chunk borders and update when blocks change.
+- **Block light (built, M1.7).** Blocks that `emit` light (the torch, 14) light the blocks round
+  them alongside sky light, so caves and nights can be lit. It loses a level a block, and the
+  `light_opacity` of what it passes through, so a torch's light reaches 13 blocks
+  (`BLOCK_LIGHT_REACH`), round corners but not through walls.
+  - Like sky light it's worked out per mesh, on the compute pool, from the chunk and its 26
+    neighbours (`neighbourhood_light`, `BlockLight`), for the chunk and a block round it. Every
+    block that can light those is within 13 of them, so inside the neighbours already decoded
+    for meshing: light crosses chunk borders exactly, with nothing stored, saved or kept in step
+    (INV-1). It spreads brightest first, so each block is spread from once, and only as far
+    out as it could still get back into the chunk. A chunk with no emitter in its neighbours
+    pays only a scan of their runs for one, and meshing costs what it did. Meshing a chunk
+    among torches on every floor 8 blocks apart costs about 0.05 ms more (a quarter more), and
+    4 apart 0.08 ms, with the torches' faces and the faces their light stops merging.
+  - Placing or breaking an emitter, or changing how a block lets light through within an
+    emitter's reach, rebuilds the meshes that light reaches (§4.2).
+  - Meshes carry it per vertex beside sky light, smoothed the same way, in the tangent attribute
+    (Bevy has no spare one), and only meshes with any block light carry it, so the rest draw
+    exactly as before. The shader lights a face by the brighter, colour by colour, of the sky's
+    light, which follows the day, and a warm torchlight from block light, which doesn't. A
+    torch's flame is drawn at full brightness whatever the light. Ambient occlusion is as before.
+  - LODs leave edits out, so have no block light; torches aren't drawn in them, like plants.
+  - Later: wall torches (blocks with a facing), lit water (its shader takes sky light only),
+    a flicker, and coloured or dimmer emitters (lava, glowstone, lanterns) in the `emits`
+    column.
 
 ### 5.5a Farming and food
 
@@ -834,7 +864,7 @@ Done when: **you can start with nothing and make iron tools.**
 - ☐ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,
   copper and iron tools (§5.3).
 - ☐ **M1.6 Furnace.** Smelting ores, with containers (§5.2).
-- ☐ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
+- ☑ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
 - ☐ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
   (§5.5).
 - ☐ **M1.9 Plants and farming** (§5.5a).

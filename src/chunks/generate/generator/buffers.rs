@@ -18,8 +18,8 @@ pub(super) struct MeshBuffers {
     pub(super) vertices: Vec<Vertex>,
     pub(super) indices: Vec<u32>,
     pub(super) colors: Vec<[f32; 4]>,
-    // sky light per vertex, for block faces only, see `world.wesl`
-    pub(super) lights: Vec<f32>,
+    // sky light and block light per vertex, for block faces only, see `world.wesl`
+    pub(super) lights: Vec<[f32; 2]>,
     // whether faces draw their block's mean colour instead of its texture, see `world.wesl`
     pub(super) untextured: bool,
     // grass sides' vertices and their shade without the grass's tint, see `tint_grass_sides`
@@ -73,7 +73,7 @@ impl MeshBuffers {
         normal: [f32; 3],
         uvs: [[f32; 2]; 4],
         colors: [[f32; 4]; 4],
-        lights: [f32; 4],
+        lights: [[f32; 2]; 4],
     ) {
         let triangle_start: u32 = self.vertices.len() as u32;
         for j in 0..4 {
@@ -96,7 +96,7 @@ impl MeshBuffers {
         normal: [f32; 3],
         uvs: [[f32; 2]; 4],
         colors: [[f32; 4]; 4],
-        lights: [f32; 4],
+        lights: [[f32; 2]; 4],
     ) {
         let start = self.vertices.len() as u32;
         self.push_tiled_quad(positions, normal, uvs, colors, lights);
@@ -126,7 +126,8 @@ impl MeshBuffers {
             let (u, v) = (i / w as f32, j / h as f32);
             self.colors
                 .push((quad.color)(blend(quad.ao, u, v), position));
-            self.lights.push(blend(quad.light, u, v));
+            self.lights
+                .push([0, 1].map(|k| blend(quad.light.map(|c| c.map(|l| l[k])), u, v)));
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
@@ -192,11 +193,22 @@ impl MeshBuffers {
                 self.vertices.len(),
                 "only some vertices carry light"
             );
+            // Bevy lays out only its own vertex attributes, and the second uv's are both taken,
+            // so block light goes in the tangent, which nothing else uses. Only meshes with some
+            // carry it, so the rest draw as they did.
+            if self.lights.iter().any(|l| l[1] > 0.0) {
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_TANGENT,
+                    VertexAttributeValues::Float32x4(
+                        self.lights.iter().map(|l| [l[1], 0.0, 0.0, 0.0]).collect(),
+                    ),
+                );
+            }
             let mut lights: Vec<[f32; 2]> = self
                 .lights
                 .into_iter()
                 .enumerate()
-                .map(|(i, l)| match self.boxes {
+                .map(|(i, [l, _])| match self.boxes {
                     Some((start, flag)) if i >= start => [l, flag],
                     _ if self.plants.contains(&i) => [l, PLANT],
                     _ => [
@@ -229,9 +241,10 @@ pub(super) struct FanQuad<'a> {
     pub(super) normal: [f32; 3],
     // the colour at a position, given its ambient occlusion
     pub(super) color: &'a dyn Fn(f32, Vec3) -> [f32; 4],
-    // ambient occlusion and sky light at the quad's corners, [along ta][along tb], blended across it
+    // ambient occlusion, and sky light and block light, at the quad's corners, [along ta][along
+    // tb], blended across it
     pub(super) ao: [[f32; 2]; 2],
-    pub(super) light: [[f32; 2]; 2],
+    pub(super) light: [[[f32; 2]; 2]; 2],
     pub(super) uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
     pub(super) reversed: bool,
 }
@@ -373,6 +386,39 @@ pub(super) const CUBE: [[Vertex; 4]; 6] = [
         v([0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 0.0]),
     ],
 ];
+
+// A torch's stick, as shares of a block.
+const TORCH_WIDTH: f32 = 2.0 / 16.0;
+const TORCH_HEIGHT: f32 = 10.0 / 16.0;
+
+// A torch's faces, a thin box standing on the floor of its cell, in `FACE_NORMAL_OFFSET` order
+// but for the bottom, which stands on the ground. The sides show the tile's two middle columns
+// from the stick's height down, and the top the top of those, the flame's, so the tile is a
+// picture of the torch as it stands.
+pub(super) const TORCH: [[Vertex; 4]; 5] = {
+    let mut faces = [CUBE[0], CUBE[1], CUBE[2], CUBE[3], CUBE[4]];
+    let mut i = 0;
+    while i < faces.len() {
+        let mut j = 0;
+        while j < 4 {
+            let v = &mut faces[i][j];
+            let [x, y, z] = v.position;
+            v.position = [
+                x * TORCH_WIDTH,
+                -0.5 + (y + 0.5) * TORCH_HEIGHT,
+                z * TORCH_WIDTH,
+            ];
+            let down = if i == 4 { TORCH_WIDTH } else { TORCH_HEIGHT };
+            v.uv = [
+                (1.0 - TORCH_WIDTH) / 2.0 + v.uv[0] * TORCH_WIDTH,
+                1.0 - TORCH_HEIGHT + v.uv[1] * down,
+            ];
+            j += 1;
+        }
+        i += 1;
+    }
+    faces
+};
 
 // How far out from its middle along each axis a plant's quads reach, short of the cell's corners,
 // as a tile drawn across the diagonal is already wider than a block.

@@ -7,6 +7,7 @@ use bevy::{
 };
 
 use crate::block::BlockType;
+use crate::chunks::generate::light::BLOCK_LIGHT_REACH;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 use crate::chunks::generate::WORLD_HEIGHT;
@@ -48,6 +49,8 @@ pub struct World {
     edits: Edits,
     // chunks whose roofs edits have changed, see `take_reroofed`
     reroofed: Vec<Reroofed>,
+    // blocks whose edits have changed block light, see `take_relit`
+    relit: Vec<I64Vec3>,
     // what lies below and above the world, which isn't generated, see `beyond_world`
     below: Arc<ChunkData>,
     above: Arc<ChunkData>,
@@ -81,6 +84,7 @@ impl World {
             holders: HashMap::new(),
             edits,
             reroofed: Vec::new(),
+            relit: Vec::new(),
             below: Arc::new(below),
             above: Arc::new(ChunkData::default()),
             region_store: Arc::new(
@@ -147,15 +151,55 @@ impl World {
         }
         if let Some(data) = self.chunks.get_mut(&coord) {
             let local = ChunkCoordinate::local_block(block);
-            if data.get_block_at(local) == to {
+            let was = data.get_block_at(local);
+            if was == to {
                 return false;
             }
             // copied only if a meshing task still holds the old blocks
             Arc::make_mut(data).set_block_at(local, to);
             self.reroof_below(coord);
+            // only what the client holds is drawn, as for roofs
+            if self.holders.get(&coord) != Some(&Holder::Server.bit())
+                && self.relights(block, was, to)
+            {
+                self.relit.push(block);
+            }
         }
         self.edits.set(block, to);
         true
+    }
+
+    // Whether changing `block` from `was` to `to` changes block light: it starts or stops
+    // giving off light, or it lets light through differently where some block's light reaches.
+    // Most edits are far from any, so they leave meshes rebuilt only as far as sky light goes.
+    fn relights(&self, block: I64Vec3, was: BlockType, to: BlockType) -> bool {
+        if was.emits() > 0 || to.emits() > 0 {
+            return true;
+        }
+        if was.light_opacity() == to.light_opacity() {
+            return false;
+        }
+        let reach = I64Vec3::splat(BLOCK_LIGHT_REACH as i64);
+        let (first, last) = (
+            ChunkCoordinate::containing(block - reach).0,
+            ChunkCoordinate::containing(block + reach).0,
+        );
+        let size = CHUNK_SIZE as i64;
+        (first.x..=last.x).any(|x| {
+            (first.y..=last.y).any(|y| {
+                (first.z..=last.z).any(|z| {
+                    let coord = I64Vec3::new(x, y, z);
+                    self.chunks
+                        .get(&ChunkCoordinate(coord))
+                        .is_some_and(|data| {
+                            data.emitters().any(|(local, level)| {
+                                let from = coord * size + local.as_i64vec3();
+                                (from - block).abs().element_sum() < level as i64
+                            })
+                        })
+                })
+            })
+        })
     }
 
     // Brings the roofs of the loaded chunks under `coord` in line with it: a column is roofed
@@ -194,6 +238,13 @@ impl World {
     /// draws them.
     pub fn take_reroofed(&mut self) -> Vec<Reroofed> {
         std::mem::take(&mut self.reroofed)
+    }
+
+    /// The blocks whose edits changed block light since this was last called, for the chunks
+    /// that light reaches to be meshed again. As for `take_reroofed`, those in chunks the server
+    /// alone holds are left out.
+    pub fn take_relit(&mut self) -> Vec<I64Vec3> {
+        std::mem::take(&mut self.relit)
     }
 
     /// The chunk layers the world is generated in, from the bottom up.
@@ -418,6 +469,60 @@ mod tests {
             vec![under],
             reroofed.iter().map(|r| r.chunk).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_torches_and_walls_by_them_relight_the_chunks_their_light_reaches() {
+        use crate::chunks::generate::generator::{chunks_meshed_with, generate_chunk_mesh};
+        let mut world = World::new(16);
+        let size = CHUNK_SIZE as i64;
+        for x in -1..=2 {
+            for y in 39..=41 {
+                for z in -1..=1 {
+                    world
+                        .insert_chunk(ChunkCoordinate(I64Vec3::new(x, y, z)), ChunkData::default());
+                }
+            }
+        }
+        // a torch 12 blocks short of the next chunk to +x, further than sky light reaches
+        let torch = I64Vec3::new(4, 40 * size + 1, 8);
+        let beside = ChunkCoordinate(I64Vec3::new(1, 40, 0));
+        assert!(!chunks_meshed_with(torch, false).any(|c| c == beside));
+        let block_lit = |world: &World| {
+            let mesh = generate_chunk_mesh(
+                world.get_chunk_data(beside).unwrap(),
+                world.adjacent_chunk_data(beside),
+                beside,
+                world.region_store.noise(),
+                false,
+            );
+            mesh.opaque
+                .contains_attribute(bevy::render::mesh::Mesh::ATTRIBUTE_TANGENT)
+        };
+        // a floor to light, across both chunks
+        for x in 0..2 * size {
+            world.edit(I64Vec3::new(x, torch.y - 1, 8), BlockType::Stone);
+        }
+        assert_eq!(
+            Vec::<I64Vec3>::new(),
+            world.take_relit(),
+            "no light to change yet"
+        );
+        assert!(!block_lit(&world));
+
+        world.edit(torch, BlockType::Torch);
+        assert_eq!(vec![torch], world.take_relit());
+        assert!(chunks_meshed_with(torch, true).any(|c| c == beside));
+        assert!(block_lit(&world));
+        // a wall by it changes where its light goes, while one out of its reach doesn't
+        let wall = torch + I64Vec3::Z;
+        world.edit(wall, BlockType::Stone);
+        world.edit(torch + I64Vec3::new(40, 0, 0), BlockType::Stone);
+        assert_eq!(vec![wall], world.take_relit());
+        // and breaking it takes its light away again
+        world.edit(torch, BlockType::Air);
+        assert_eq!(vec![torch], world.take_relit());
+        assert!(!block_lit(&world));
     }
 
     #[test]

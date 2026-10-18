@@ -309,6 +309,11 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
     let mut uvs = Vec::with_capacity(vertices);
     let mut colors = Vec::with_capacity(vertices);
     let mut lights = Vec::with_capacity(vertices);
+    // block light, which only meshes with some carry, see `MeshBuffers::build_mesh`
+    let block_lit = parts
+        .iter()
+        .any(|(_, mesh)| mesh.contains_attribute(Mesh::ATTRIBUTE_TANGENT));
+    let mut block_lights = Vec::new();
     let mut indices = Vec::new();
     for (offset, mesh) in &parts {
         let start = positions.len() as u32;
@@ -323,6 +328,14 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
         // block faces carry light, water doesn't, and a mesh has either on all its vertices or none
         if let Some(light) = float2(mesh, Mesh::ATTRIBUTE_UV_1) {
             lights.extend_from_slice(light);
+        }
+        if block_lit {
+            match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+                Some(VertexAttributeValues::Float32x4(light)) => {
+                    block_lights.extend_from_slice(light)
+                }
+                _ => block_lights.resize(positions.len(), [0.0; 4]),
+            }
         }
         let Some(Indices::U32(part)) = mesh.indices() else {
             panic!("chunk meshes have u32 indices");
@@ -341,6 +354,9 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
     if !lights.is_empty() {
         assert_eq!(vertices, lights.len(), "only some vertices carry light");
         merged.insert_attribute(Mesh::ATTRIBUTE_UV_1, lights);
+    }
+    if block_lit {
+        merged.insert_attribute(Mesh::ATTRIBUTE_TANGENT, block_lights);
     }
     Some(merged)
 }

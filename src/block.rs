@@ -13,8 +13,10 @@ struct Properties {
     style: RenderStyle,
     /// What it leaves when it's broken in survival.
     drops: Drops,
-    /// How many levels of sky light it takes from light passing through it, see `light.rs`.
+    /// How many levels of light it takes from light passing through it, see `light.rs`.
     light_opacity: u8,
+    /// The level of block light it gives off, 0 for none, see `BlockLight`.
+    emits: u8,
     /// How much it darkens the ambient occlusion of the faces beside it.
     occlusion_weight: f32,
     // The tiles its top, side and bottom faces draw.
@@ -37,6 +39,9 @@ pub enum RenderStyle {
     /// As two quads crossing diagonally through the cell, seen from either side, at full detail
     /// only. Plants are drawn this way.
     Cross,
+    /// As a thin stick standing on the floor of the cell, its flame unshaded, at full detail
+    /// only.
+    Torch,
 }
 
 /// What a block leaves behind when it's broken in survival, to be picked up.
@@ -72,114 +77,114 @@ macro_rules! blocks {
 blocks! {
     #[default]
     Air {
-        name: "air", solid: false, light_opacity: 0, occlusion_weight: 0.0,
+        name: "air", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::None, replaceable: true, drops: Drops::Nothing,
         // Never drawn.
         top: Tile::Stone, side: Tile::Stone, bottom: Tile::Stone, lod: Tile::Stone,
     },
     Stone {
-        name: "stone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "stone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Cobblestone),
         top: Tile::Stone, side: Tile::Stone, bottom: Tile::Stone, lod: Tile::Stone,
     },
     Grass {
-        name: "grass", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "grass", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Dirt),
         // Far off, grass stays green on hillsides.
         top: Tile::GrassTop, side: Tile::GrassSide, bottom: Tile::Dirt, lod: Tile::GrassTop,
     },
     Sand {
-        name: "sand", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "sand", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Sand, side: Tile::Sand, bottom: Tile::Sand, lod: Tile::Sand,
     },
     Water {
-        name: "water", solid: false, light_opacity: 2, occlusion_weight: 0.4,
+        name: "water", solid: false, light_opacity: 2, occlusion_weight: 0.4, emits: 0,
         style: RenderStyle::Liquid, replaceable: true, drops: Drops::Nothing,
         top: Tile::Water, side: Tile::Water, bottom: Tile::Water, lod: Tile::Water,
     },
     Snow {
-        name: "snow", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "snow", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Snow, side: Tile::SnowSide, bottom: Tile::Snow, lod: Tile::SnowSide,
     },
     Log {
-        name: "log", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "log", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::LogEnd, side: Tile::LogBark, bottom: Tile::LogEnd, lod: Tile::LogBark,
     },
     Leaves {
-        name: "leaves", solid: true, light_opacity: 1, occlusion_weight: 0.3,
+        name: "leaves", solid: true, light_opacity: 1, occlusion_weight: 0.3, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Nothing,
         // Saplings and apples come with farming (M1.9b).
         top: Tile::Leaves, side: Tile::Leaves, bottom: Tile::Leaves, lod: Tile::Leaves,
     },
     Dirt {
-        name: "dirt", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "dirt", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Dirt, side: Tile::Dirt, bottom: Tile::Dirt, lod: Tile::Dirt,
     },
     Gravel {
-        name: "gravel", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "gravel", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Gravel, side: Tile::Gravel, bottom: Tile::Gravel, lod: Tile::Gravel,
     },
     Ice {
-        name: "ice", solid: true, light_opacity: 3, occlusion_weight: 1.0,
+        name: "ice", solid: true, light_opacity: 3, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Ice, side: Tile::Ice, bottom: Tile::Ice, lod: Tile::Ice,
     },
     Sandstone {
-        name: "sandstone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "sandstone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::SandstoneTop, side: Tile::SandstoneSide, bottom: Tile::SandstoneTop,
         lod: Tile::SandstoneSide,
     },
     Planks {
-        name: "planks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "planks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Planks, side: Tile::Planks, bottom: Tile::Planks, lod: Tile::Planks,
     },
     Cobblestone {
-        name: "cobblestone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "cobblestone", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Cobblestone, side: Tile::Cobblestone, bottom: Tile::Cobblestone,
         lod: Tile::Cobblestone,
     },
     StoneBricks {
-        name: "stone_bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "stone_bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::StoneBricks, side: Tile::StoneBricks, bottom: Tile::StoneBricks,
         lod: Tile::StoneBricks,
     },
     Bricks {
-        name: "bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "bricks", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::Bricks, side: Tile::Bricks, bottom: Tile::Bricks, lod: Tile::Bricks,
     },
     CoalOre {
-        name: "coal_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "coal_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::CoalOre, side: Tile::CoalOre, bottom: Tile::CoalOre, lod: Tile::CoalOre,
     },
     CopperOre {
-        name: "copper_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "copper_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::CopperOre, side: Tile::CopperOre, bottom: Tile::CopperOre, lod: Tile::CopperOre,
     },
     IronOre {
-        name: "iron_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "iron_ore", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::IronOre, side: Tile::IronOre, bottom: Tile::IronOre, lod: Tile::IronOre,
     },
     CraftingTable {
-        name: "crafting_table", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "crafting_table", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         top: Tile::CraftingTableTop, side: Tile::CraftingTableSide, bottom: Tile::Planks,
         lod: Tile::CraftingTableSide,
     },
     Furnace {
-        name: "furnace", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0,
+        name: "furnace", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
         style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
         // Blocks have no facing yet, so every side has the furnace's mouth.
         top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
@@ -188,25 +193,31 @@ blocks! {
     // and the player through and are built over, so their faces hide nothing. They drop nothing
     // until farming, which has tall grass drop seeds.
     TallGrass {
-        name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0,
+        name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
         top: Tile::TallGrass, side: Tile::TallGrass, bottom: Tile::TallGrass, lod: Tile::TallGrass,
     },
     Poppy {
-        name: "poppy", solid: false, light_opacity: 0, occlusion_weight: 0.0,
+        name: "poppy", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
         top: Tile::Poppy, side: Tile::Poppy, bottom: Tile::Poppy, lod: Tile::Poppy,
     },
     Dandelion {
-        name: "dandelion", solid: false, light_opacity: 0, occlusion_weight: 0.0,
+        name: "dandelion", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
         top: Tile::Dandelion, side: Tile::Dandelion, bottom: Tile::Dandelion, lod: Tile::Dandelion,
     },
     Cornflower {
-        name: "cornflower", solid: false, light_opacity: 0, occlusion_weight: 0.0,
+        name: "cornflower", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
         top: Tile::Cornflower, side: Tile::Cornflower, bottom: Tile::Cornflower,
         lod: Tile::Cornflower,
+    },
+    // Stands on the floor of its cell; torches on walls need blocks to face a way.
+    Torch {
+        name: "torch", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 14,
+        style: RenderStyle::Torch, replaceable: false, drops: Drops::Itself,
+        top: Tile::Torch, side: Tile::Torch, bottom: Tile::Torch, lod: Tile::Torch,
     },
 }
 
@@ -231,6 +242,10 @@ impl BlockType {
         self.properties().light_opacity
     }
 
+    pub fn emits(&self) -> u8 {
+        self.properties().emits
+    }
+
     pub fn is_solid(&self) -> bool {
         self.properties().solid
     }
@@ -252,15 +267,20 @@ impl BlockType {
         }
     }
 
-    /// Whether it's a plant, which stands on the block under it and goes when that does.
+    /// Whether it's a plant.
     pub fn is_plant(&self) -> bool {
         self.style() == RenderStyle::Cross
+    }
+
+    /// Whether it stands on the block under it, and goes when that does: plants and torches.
+    pub fn needs_ground(&self) -> bool {
+        matches!(self.style(), RenderStyle::Cross | RenderStyle::Torch)
     }
 
     /// Whether it's something there, rather than air or water: what's looked at, broken and
     /// placed.
     pub fn is_tangible(&self) -> bool {
-        self.is_solid() || self.is_plant()
+        self.is_solid() || self.needs_ground()
     }
 
     // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
@@ -350,9 +370,10 @@ pub enum Tile {
     Poppy,
     Dandelion,
     Cornflower,
+    Torch,
 }
 
-pub const TILE_COUNT: usize = 29;
+pub const TILE_COUNT: usize = 30;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -395,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Cornflower as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Torch as usize + 1);
     }
 
     #[test]
@@ -455,6 +476,18 @@ mod tests {
             assert_eq!(0.0, plant.occlusion_weight());
             assert!(plant.is_replaceable() && plant.is_tangible());
         }
+    }
+
+    #[test]
+    fn test_torches_glow_let_light_and_players_through_and_stand_on_the_ground() {
+        let torch = BlockType::Torch;
+        assert_eq!(14, torch.emits());
+        assert_eq!(RenderStyle::Torch, torch.style());
+        assert!(!torch.is_solid() && !torch.is_opaque() && !torch.is_replaceable());
+        assert_eq!(0, torch.light_opacity());
+        assert!(torch.needs_ground() && torch.is_tangible() && !torch.is_plant());
+        assert_eq!(Some(crate::items::Item::Block(torch)), torch.drops());
+        assert_eq!(0, BlockType::Stone.emits());
     }
 
     #[test]

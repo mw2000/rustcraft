@@ -33,7 +33,7 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 
 ## Hand-drawn tiles
 
-`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table, the furnace and the plants. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
+`draw.py` draws the tiles marked `drawn=True` in `TILES`: planks, cobblestone, bricks, the ores, the crafting table, the furnace, the plants and the torch. Use it, not `generate.py`, for tiles whose look is hard edges or pictures (mortar, board seams, ore deposits, tools), which SD can't draw at 16px, and wherever ComfyUI isn't set up.
 
 ```
 cd .claude/skills/block-textures

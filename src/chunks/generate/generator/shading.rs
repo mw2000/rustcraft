@@ -1,6 +1,6 @@
 use super::source::BlockSource;
 use super::terrain::is_solid;
-use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
 
@@ -65,16 +65,16 @@ pub(super) fn vertex_ao(
     1.0 - (sum / 2.0).clamp(0.0, 1.0) * AO_STRENGTH
 }
 
-// Sky light at a face's corner, 0..1: the average over the cells around the corner on the
-// face's open side, leaving out solid ones, and the diagonal when both sides are solid
-// since light can't reach round to it.
+// Sky light and block light at a face's corner, 0..1: the average over the cells around the
+// corner on the face's open side, leaving out solid ones, and the diagonal when both sides are
+// solid since light can't reach round to it.
 pub(super) fn vertex_light(
     source: &impl BlockSource,
-    light: &SkyLight,
+    light: &Light,
     block_coord: IVec3,
     face_index: usize,
     vertex_local_pos: [f32; 3],
-) -> f32 {
+) -> [f32; 2] {
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
     let front = block_coord + FACE_NORMAL_OFFSET[face_index];
     // the terrain the light was worked out from, not the skirts LODs add at their edges
@@ -87,12 +87,13 @@ pub(super) fn vertex_light(
         side_b.then_some(front + offset_b),
         corner.then_some(front + offset_a + offset_b),
     ];
-    let levels: Vec<f32> = cells
-        .into_iter()
-        .flatten()
-        .map(|c| light.level(c) as f32)
-        .collect();
-    levels.iter().sum::<f32>() / levels.len() as f32 / MAX_LIGHT as f32
+    let (mut total, mut count) = ([0.0; 2], 0.0);
+    for cell in cells.into_iter().flatten() {
+        let levels = light.levels(cell);
+        total = [0, 1].map(|i| total[i] + levels[i] as f32);
+        count += 1.0;
+    }
+    total.map(|t| t / count / MAX_LIGHT as f32)
 }
 
 // One light level for a whole face, 0..1, in a few coarse steps so neighbouring faces

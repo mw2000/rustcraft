@@ -162,9 +162,13 @@ impl ChunkLoader {
 
 impl ChunkLoader {
     /// Has every loaded group rebuilt whose mesh a change to the block at `block` reaches,
-    /// along with those lit through roofs the world's edits have changed.
+    /// along with those lit through roofs the world's edits have changed, and as far as block
+    /// light reaches from blocks whose edits changed it.
     pub fn rebuild_edited(&mut self, world: &mut World, block: I64Vec3) {
-        self.rebuild(chunks_meshed_with(block));
+        self.rebuild(chunks_meshed_with(block, false));
+        for relit in world.take_relit() {
+            self.rebuild(chunks_meshed_with(relit, true));
+        }
         self.rebuild_reroofed(world);
     }
 

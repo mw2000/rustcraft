@@ -27,9 +27,28 @@ const SUN_SKY_GATE: f32 = 0.3;
 // Shadows fade out over this last part of their reach, instead of stopping at a line.
 const SHADOW_FADE_START: f32 = 0.8;
 
+// Torchlight at full strength, warm against the sky's light, and how it falls away with block
+// light, as sky light does.
+const TORCH_LIGHT: vec3<f32> = vec3<f32>(0.9, 0.5, 0.22);
+const BLOCK_LIGHT_CURVE: f32 = 2.0;
+// A torch's flame, the top of its tile down to here, see `generator::TORCH`, which glows this
+// brightly whatever the light.
+const FLAME_BOTTOM: f32 = 9.0 / 16.0;
+const FLAME_GLOW: f32 = 1.6;
+
 // Light from the sky for sky light 0..1, see `light.rs`.
 fn sky_ambient(sky: f32, normal: vec3<f32>) -> vec3<f32> {
     return CAVE_AMBIENT + open_sky(normal) * pow(clamp(sky, 0.0, 1.0), SKY_LIGHT_CURVE);
+}
+
+// Light from torches and other blocks for block light 0..1, the same by day or night.
+fn block_ambient(block: f32) -> vec3<f32> {
+    return TORCH_LIGHT * pow(clamp(block, 0.0, 1.0), BLOCK_LIGHT_CURVE);
+}
+
+// Whether a fragment of a block face is a torch's flame, from its atlas cell and uv.
+fn is_flame(vertex_alpha: f32, uv: vec2<f32>) -> bool {
+    return abs(vertex_alpha - f32(constants::TORCH_CELL)) < 0.5 && fract(uv.y) < FLAME_BOTTOM;
 }
 
 fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
@@ -101,6 +120,10 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
 @if(VERTEX_UVS_B) {
     out.uv_b = vertex.uv_b;
 }
+    // block light, where there's any, see `MeshBuffers::build_mesh`
+@if(VERTEX_TANGENTS) {
+    out.world_tangent = vertex.tangent;
+}
 @if(VERTEX_OUTPUT_INSTANCE_INDEX) {
     out.instance_index = vertex.instance_index;
 }
@@ -168,8 +191,18 @@ fn fragment(
     sky = in.uv_b.x;
 }
 
+    var block = 0.0;
+@if(VERTEX_TANGENTS) {
+    block = in.world_tangent.x;
+}
+
     let shaded = lit_normal(normal, world_position);
-    let light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded);
+    let sky_light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded);
+    // the brighter of the sky's light and the torches', colour by colour
+    var light = max(sky_light, block_ambient(block));
+    if is_flame(in.color.a, in.uv) {
+        light = vec3<f32>(FLAME_GLOW);
+    }
     color = vec4<f32>(color.rgb * light, color.a);
 
     // so distant chunks fade into the sky instead of popping in and out

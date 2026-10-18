@@ -6,8 +6,7 @@ use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::light::SkyLight;
-use crate::chunks::generate::light::MAX_LIGHT;
+use crate::chunks::generate::light::{BlockLight, Light, SkyLight, BLOCK_LIGHT_REACH, MAX_LIGHT};
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::ores::place_ores;
 use crate::chunks::generate::plants::plant_on;
@@ -156,13 +155,13 @@ pub(super) fn sky_above(top: i64, cell: i64) -> u8 {
     MAX_LIGHT.saturating_sub(water_above.saturating_mul(BlockType::Water.light_opacity()))
 }
 
-// How far to each side of a chunk its light takes blocks into account: light that could
+// How far to each side of a chunk its sky light takes blocks into account: light that could
 // only arrive from further out would already have faded to deep shade.
 pub(super) const LIGHT_MARGIN: i32 = 8;
 
-// The box of blocks a chunk's light is worked out over, as its minimum corner from the chunk's
-// and its size: the chunk and a block around it, `LIGHT_MARGIN` to each side, and up to the top
-// of the chunk above.
+// The box of blocks a chunk's sky light is worked out over, as its minimum corner from the
+// chunk's and its size: the chunk and a block around it, `LIGHT_MARGIN` to each side, and up to
+// the top of the chunk above.
 fn light_box() -> (IVec3, IVec3) {
     let size = CHUNK_SIZE as i32;
     let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);
@@ -172,14 +171,30 @@ fn light_box() -> (IVec3, IVec3) {
     )
 }
 
-/// The chunks whose meshes change when `block` does: those whose light takes it into account,
-/// which takes in those whose faces, ambient occlusion and shores reach it across a border.
-pub fn chunks_meshed_with(block: I64Vec3) -> impl Iterator<Item = ChunkCoordinate> {
-    let (min, span) = light_box();
+// The box of blocks a chunk's block light is worked out for, as `light_box`: the chunk and a
+// block around it, which meshing reads the light of. The blocks that can light it are as far
+// again as block light reaches, inside the chunk's 26 neighbours.
+fn block_light_box() -> (IVec3, IVec3) {
+    (IVec3::splat(-1), IVec3::splat(CHUNK_SIZE as i32 + 2))
+}
+
+/// The chunks whose meshes change when `block` does: those whose sky light takes it in, which
+/// takes in those whose faces, ambient occlusion and shores reach it across a border, and if
+/// the change `relights` block light (see `World::take_relit`), those that light could reach.
+pub fn chunks_meshed_with(block: I64Vec3, relights: bool) -> impl Iterator<Item = ChunkCoordinate> {
+    let (mut min, span) = light_box();
+    let mut max = min + span;
+    if relights {
+        // the blocks whose block light meshing reads, and as far round them as it comes from
+        let (block_min, block_span) = block_light_box();
+        let reach = IVec3::splat(BLOCK_LIGHT_REACH);
+        min = min.min(block_min - reach);
+        max = max.max(block_min + block_span + reach);
+    }
     let size = CHUNK_SIZE as i64;
     // each chunk whose box, starting at `chunk * size + min`, holds the block
     let from = block - min.as_i64vec3();
-    let first = (from - span.as_i64vec3() + size).div_euclid(I64Vec3::splat(size));
+    let first = (from - (max - min).as_i64vec3() + size).div_euclid(I64Vec3::splat(size));
     let last = from.div_euclid(I64Vec3::splat(size));
     (first.x..=last.x).flat_map(move |x| {
         (first.y..=last.y).flat_map(move |y| {
@@ -188,9 +203,10 @@ pub fn chunks_meshed_with(block: I64Vec3) -> impl Iterator<Item = ChunkCoordinat
     })
 }
 
-// Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
-// high as the top of the chunk above, with open sky above that unless the ground roofs it over.
-pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> SkyLight {
+// Light for the chunk and a block around it, from the chunk and its 26 neighbours: sky light
+// as high as the top of the chunk above, with open sky above that unless the ground roofs it
+// over, and the light of any blocks near enough to give it some.
+pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> Light {
     let size = CHUNK_SIZE as i32;
     let (min, span) = light_box();
     let mut opacity = Vec::with_capacity((span.x * span.y * span.z) as usize);
@@ -211,5 +227,14 @@ pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoord
             sky
         }
     };
-    SkyLight::with_sky(min, span, sky, opacity)
+    let sky = SkyLight::with_sky(min, span, sky, opacity);
+    let block = if source.emitters.is_empty() {
+        BlockLight::default()
+    } else {
+        let (min, span) = block_light_box();
+        BlockLight::new(min, span, &source.emitters, |c| {
+            source.block(c).light_opacity()
+        })
+    };
+    Light { sky, block }
 }
