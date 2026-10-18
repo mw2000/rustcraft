@@ -27,6 +27,7 @@ use rustcraft::client::join::{connect, GenerationChecksum};
 use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
+use rustcraft::clock::TimeOfDay;
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
@@ -34,11 +35,11 @@ use rustcraft::items::{Item, ItemStack};
 use rustcraft::player::name::PlayerName;
 use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
-    BlockChanged, ChunkEdits, CommandOutput, ContainerChanged, EditRejected, PlayerMoved,
-    PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand, StartBreaking, Teleport,
-    UseBlock,
+    BlockChanged, Chat, ChatLine, ChunkEdits, CommandOutput, ContainerChanged, EditRejected,
+    PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand, StartBreaking,
+    Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
 };
-use rustcraft::save::SavePlugin;
+use rustcraft::save::{SavePlugin, WorldFile};
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
@@ -51,8 +52,8 @@ const FRAME: Duration = Duration::from_millis(20);
 const FAR: I64Vec3 = I64Vec3::new(100 * 16, 0, 0);
 
 // A world hosted with seed 3 in `dir`, its host playing in creative, so its edits are made at
-// once, and a client to join it on the other end of an in-memory socket. The client is given
-// `version` too, as a game of another version would have.
+// once, and a client to join it on the other end of an in-memory socket, an operator so it can
+// `/tp`. The client is given `version` too, as a game of another version would have.
 fn server_and_client(dir: &std::path::Path, version: Option<&str>) -> (App, App) {
     server_and_client_with(dir, version, GenerationChecksum::default())
 }
@@ -63,7 +64,8 @@ fn server_and_client_with(
     version: Option<&str>,
     checksum: GenerationChecksum,
 ) -> (App, App) {
-    let (server, mut sockets) = host(dir, 1, false);
+    let (mut server, mut sockets) = host(dir, 1, false);
+    op(&mut server, "guest");
     let client = joiner(&server, sockets.pop().unwrap(), "guest", version, checksum);
     (server, client)
 }
@@ -239,7 +241,15 @@ fn move_player(app: &mut App, player: Entity, to: Vec3) {
         .translation = to;
 }
 
-// Sends a client's player to `to` with `/tp`, as it can't go far in one go by itself.
+// Makes the player called `name` an operator, as the host would.
+fn op(server: &mut App, name: &str) {
+    let line = RunCommand(format!("/op {name}"));
+    server.world_mut().write_message(line);
+    server.update();
+}
+
+// Sends a client's player to `to` with `/tp`, as it can't go far in one go by itself. Only an
+// operator can.
 fn teleport(client: &mut App, to: Vec3) {
     let line = format!("/tp {} {} {}", to.x, to.y, to.z);
     client.world_mut().write_message(RunCommand(line));
@@ -1065,7 +1075,8 @@ fn test_a_joiner_comes_back_where_they_left_with_what_they_had() {
     };
     let gift = ItemStack::new(Item::Block(BlockType::Bricks), 5);
     {
-        let (server, mut sockets) = host(&dir, 1, true);
+        let (mut server, mut sockets) = host(&dir, 1, true);
+        op(&mut server, "guest");
         let client = joiner(
             &server,
             sockets.pop().unwrap(),
@@ -1157,4 +1168,256 @@ fn test_a_client_is_told_its_players_health_and_respawns_where_the_server_puts_i
         client.world().get::<Transform>(local).unwrap().translation == spawn
     });
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// The host and joiners called `names`, all in, keeping what each has been sent since in its
+// bar, as lines printed (errors marked) and chat.
+struct Gathering {
+    apps: Vec<App>,
+    output: Vec<MessageCursor<CommandOutput>>,
+    chat: Vec<MessageCursor<ChatLine>>,
+    said: Vec<Vec<String>>,
+    chatted: Vec<Vec<(String, String)>>,
+}
+
+impl Gathering {
+    fn new(dir: &std::path::Path, names: &[&str], saving: bool) -> Self {
+        let (server, mut sockets) = host(dir, names.len() as u16, saving);
+        let mut apps = vec![];
+        for name in names {
+            let socket = sockets.pop().unwrap();
+            apps.push(joiner(&server, socket, name, None, Default::default()));
+        }
+        apps.insert(0, server);
+        update_all_until(&mut apps, |apps| apps[1..].iter().all(joined));
+        let everyone = apps.len();
+        let mut gathering = Self {
+            apps,
+            output: (0..everyone).map(|_| Default::default()).collect(),
+            chat: (0..everyone).map(|_| Default::default()).collect(),
+            said: vec![Vec::new(); everyone],
+            chatted: vec![Vec::new(); everyone],
+        };
+        // past the lines saying who's joined
+        gathering.wait();
+        gathering.said.iter_mut().for_each(Vec::clear);
+        gathering
+    }
+
+    // Has app `app`, 0 for the host, run `line`.
+    fn run(&mut self, app: usize, line: &str) {
+        let line = RunCommand(line.into());
+        self.apps[app].world_mut().write_message(line);
+    }
+
+    fn say(&mut self, app: usize, text: &str) {
+        self.apps[app].world_mut().write_message(Chat(text.into()));
+    }
+
+    // Runs everyone a frame, keeping what's been sent.
+    fn update(&mut self) {
+        std::thread::sleep(Duration::from_millis(1));
+        for app in self.apps.iter_mut().rev() {
+            app.update();
+        }
+        for (app, client) in self.apps.iter().enumerate() {
+            let said = received(client, &mut self.output[app]).into_iter();
+            self.said[app].extend(said.map(|line| match line.error {
+                true => format!("error: {}", line.text),
+                false => line.text,
+            }));
+            let chatted = received(client, &mut self.chat[app]).into_iter();
+            let chatted = chatted.map(|line| (line.from.as_str().to_owned(), line.text));
+            self.chatted[app].extend(chatted);
+        }
+    }
+
+    // Runs everyone long enough for anything sent to arrive.
+    fn wait(&mut self) {
+        for _ in 0..30 {
+            self.update();
+        }
+    }
+
+    // Runs everyone until `done`.
+    fn update_until(&mut self, mut done: impl FnMut(&Self) -> bool) {
+        let start = Instant::now();
+        while !done(self) {
+            assert!(start.elapsed() < Duration::from_secs(30), "never done");
+            self.update();
+        }
+    }
+
+    // Runs everyone until app `app` has had a line printed, and takes it.
+    fn answer(&mut self, app: usize) -> String {
+        self.update_until(|gathering| !gathering.said[app].is_empty());
+        self.said[app].remove(0)
+    }
+}
+
+#[test]
+fn test_chat_reaches_everyone_by_name_tidied() {
+    let dir = temp_dir("chat");
+    let mut gathering = Gathering::new(&dir, &["alice", "bob"], false);
+    gathering.say(1, "  hello\u{1b}[31m everyone\n");
+    gathering.say(0, &"long ".repeat(100));
+    gathering.wait();
+    let hello = ("alice".to_owned(), "hello[31m everyone".to_owned());
+    for app in 0..3 {
+        let lines = &gathering.chatted[app];
+        assert_eq!(2, lines.len(), "{lines:?}");
+        assert_eq!(hello, lines[0]);
+        assert_eq!("host", lines[1].0);
+        assert_eq!(MAX_CHAT_LENGTH, lines[1].1.len());
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_chat_is_held_to_a_few_lines_at_once() {
+    let dir = temp_dir("chat-flood");
+    let mut gathering = Gathering::new(&dir, &["spammer"], false);
+    for n in 0..10 {
+        gathering.say(1, &format!("buy gold {n}"));
+    }
+    gathering.wait();
+    let heard = &gathering.chatted[0];
+    assert_eq!(5, heard.len(), "{heard:?}");
+    let told = &gathering.said[1];
+    assert_eq!(5, told.len(), "{told:?}");
+    assert!(told.iter().all(|line| line.contains("too quickly")));
+    // and a second later can say one more
+    for _ in 0..50 {
+        gathering.update();
+    }
+    gathering.say(1, "sorry");
+    gathering.wait();
+    assert_eq!(6, gathering.chatted[0].len());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_commands_that_change_things_are_for_operators_whom_the_world_keeps() {
+    let dir = temp_dir("operators");
+    let world_file = || {
+        let text = std::fs::read_to_string(dir.join("world.toml")).unwrap();
+        WorldFile::from_toml(&text).unwrap()
+    };
+    let mut gathering = Gathering::new(&dir, &["guest"], true);
+    let guest = guests_player(&mut gathering.apps[0]);
+    let mode =
+        |gathering: &Gathering, player| *gathering.apps[0].world().get::<GameMode>(player).unwrap();
+
+    // not an operator: what changes things is refused, and help lists only the rest
+    for line in ["/gamemode creative", "/tp 0 500 0", "/op guest"] {
+        gathering.run(1, line);
+        let answer = gathering.answer(1);
+        assert!(answer.contains("permission"), "{line}: {answer}");
+    }
+    assert_eq!(GameMode::Survival, mode(&gathering, guest));
+    gathering.run(1, "/help");
+    let help = gathering.answer(1);
+    assert!(
+        help.contains("/msg") && !help.contains("/gamemode"),
+        "{help}"
+    );
+    gathering.run(1, "/seed");
+    assert_eq!("Seed: 3", gathering.answer(1));
+
+    // made one by the host, which the world keeps, and told so
+    gathering.run(0, "/op guest");
+    assert_eq!("Made guest an operator", gathering.answer(0));
+    assert_eq!("host made you an operator", gathering.answer(1));
+    gathering.update_until(|_| world_file().ops == ["guest"]);
+    gathering.run(1, "/help");
+    assert!(gathering.answer(1).contains("/gamemode"));
+    gathering.run(1, "/gamemode creative");
+    assert_eq!("Game mode set to creative", gathering.answer(1));
+    assert_eq!(GameMode::Creative, mode(&gathering, guest));
+
+    // who can change others, but can't make the host anything less
+    let host = player_of(&mut gathering.apps[0], ClientId::Server);
+    gathering.run(1, "/gamemode s host");
+    assert_eq!("Set host's game mode to survival", gathering.answer(1));
+    assert_eq!("guest set your game mode to survival", gathering.answer(0));
+    assert_eq!(GameMode::Survival, mode(&gathering, host));
+    gathering.run(1, "/tp host 10 500 20");
+    assert_eq!("Teleported host to 10.0, 500.0, 20.0", gathering.answer(1));
+    assert_eq!(
+        "guest teleported you to 10.0, 500.0, 20.0",
+        gathering.answer(0)
+    );
+    let at = gathering.apps[0].world().get::<Transform>(host).unwrap();
+    assert_eq!(Vec3::new(10.0, 500.0, 20.0), at.translation);
+    gathering.run(1, "/deop host");
+    assert!(gathering.answer(1).contains("always an operator"));
+
+    // and stops being one
+    gathering.run(0, "/deop GUEST");
+    assert_eq!("GUEST is no longer an operator", gathering.answer(0));
+    assert_eq!("host made you no longer an operator", gathering.answer(1));
+    gathering.update_until(|_| world_file().ops.is_empty());
+    gathering.run(1, "/gamemode survival");
+    assert!(gathering.answer(1).contains("permission"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_message_reaches_only_its_target_and_list_names_everyone() {
+    let dir = temp_dir("whispers");
+    let mut gathering = Gathering::new(&dir, &["alice", "bob"], false);
+    let (alice, bob) = (1, 2);
+    gathering.run(alice, "/msg Bob meet at the  tower");
+    assert_eq!(
+        "alice whispers to you: meet at the  tower",
+        gathering.answer(bob)
+    );
+    assert_eq!(
+        "You whisper to bob: meet at the  tower",
+        gathering.answer(alice)
+    );
+    gathering.wait();
+    assert!(gathering.said[0].is_empty());
+    assert!(gathering.chatted[0].is_empty());
+    gathering.run(alice, "/msg carol hi");
+    assert_eq!(
+        "error: No player called carol is here",
+        gathering.answer(alice)
+    );
+
+    gathering.run(bob, "/list");
+    assert_eq!("3 players here: alice, bob, host", gathering.answer(bob));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_only_operators_wind_everyones_clock() {
+    let dir = temp_dir("winding");
+    let mut gathering = Gathering::new(&dir, &["guest"], false);
+    let clock = |gathering: &Gathering| gathering.apps[0].world().resource::<TimeOfDay>().0;
+    // how far the clock goes in a wait, a lot more if it's wound on
+    let waited = |gathering: &mut Gathering| {
+        let before = clock(gathering);
+        gathering.wait();
+        clock(gathering) - before
+    };
+    let unwound = waited(&mut gathering);
+
+    let wind = |gathering: &mut Gathering, wind| {
+        gathering.apps[1].world_mut().write_message(WindClock(wind));
+    };
+    wind(&mut gathering, 1);
+    assert!(waited(&mut gathering) < unwound * 1.5);
+    wind(&mut gathering, 0);
+    gathering.wait();
+    // told once, as they started
+    let told = std::mem::take(&mut gathering.said[1]);
+    assert_eq!(["error: Only operators can change the time"], told[..]);
+
+    gathering.run(0, "/op guest");
+    gathering.wait();
+    wind(&mut gathering, 1);
+    gathering.wait();
+    assert!(waited(&mut gathering) > unwound * 10.0);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

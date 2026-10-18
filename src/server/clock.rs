@@ -3,8 +3,11 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
+use super::Operators;
 use crate::clock::{TimeOfDay, DAY_SECONDS};
-use crate::protocol::{TimeSync, WindClock};
+use crate::player::name::PlayerName;
+use crate::player::PlayerOwner;
+use crate::protocol::{CommandOutput, TimeSync, WindClock};
 
 // How often clients are told the time, between which they run their clocks themselves. Their
 // frames add up to a little more or less than the server's, so this keeps them from drifting.
@@ -29,14 +32,38 @@ pub fn run_clock(time: Res<Time>, rate: Res<ClockRate>, mut clock: ResMut<TimeOf
     clock.0 += time.delta_secs() * rate.0;
 }
 
-/// Winds the clock back or forward as players ask, for looking at the sky at any hour, or lets
-/// it run at its own pace again. The last to ask has their way, as one player winds it at a time.
+/// Winds the clock back or forward as operators ask, for looking at the sky at any hour, or
+/// lets it run at its own pace again. The last to ask has their way, as one player winds it at a
+/// time. Anyone else is told, as they start winding, that they can't, as it's everyone's clock.
 pub(super) fn wind_clock(
     mut requests: MessageReader<FromClient<WindClock>>,
+    operators: Res<Operators>,
+    players: Query<(&PlayerOwner, &PlayerName)>,
     mut rate: ResMut<ClockRate>,
+    mut output: MessageWriter<ToClients<CommandOutput>>,
 ) {
-    for request in requests.read() {
-        let wound = request.message.0.clamp(-1, 1) as f32;
+    for &FromClient {
+        client_id: client,
+        message: WindClock(wind),
+    } in requests.read()
+    {
+        let allowed = client == ClientId::Server
+            || players
+                .iter()
+                .any(|(owner, name)| owner.0 == client && operators.allow(client, name));
+        if !allowed {
+            if wind != 0 {
+                output.write(ToClients {
+                    targets: SendTargets::Single(client),
+                    message: CommandOutput {
+                        text: "Only operators can change the time".into(),
+                        error: true,
+                    },
+                });
+            }
+            continue;
+        }
+        let wound = wind.clamp(-1, 1) as f32;
         rate.set_if_neq(ClockRate(DAY_RATE + wound * WIND_SPEED));
     }
 }

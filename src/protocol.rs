@@ -38,7 +38,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -98,7 +98,10 @@ impl Plugin for ProtocolPlugin {
             // player's health after the damage before it
             .add_client_message::<Eat>(Channel::Ordered)
             .add_client_message::<Respawn>(Channel::Ordered)
-            .add_server_message::<VitalsChanged>(Channel::Ordered);
+            .add_server_message::<VitalsChanged>(Channel::Ordered)
+            // in the order they're said
+            .add_client_message::<Chat>(Channel::Ordered)
+            .add_server_message::<ChatLine>(Channel::Ordered);
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -140,11 +143,27 @@ pub struct EditRejected {
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RunCommand(pub String);
 
-/// What a command printed, for the player who ran it, and whether it's an error.
+/// A line for a player's command bar, and whether it's an error: what a command they ran
+/// printed, a private message, or news for everyone, such as someone joining.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     pub text: String,
     pub error: bool,
+}
+
+/// The longest a chat line can be, in characters. The server cuts a longer one short, and the
+/// command bar takes no more.
+pub const MAX_CHAT_LENGTH: usize = 256;
+
+/// A line a player said in chat, for the server to pass on to everyone.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Chat(pub String);
+
+/// What a player said in chat, as the server passes it on to everyone.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatLine {
+    pub from: PlayerName,
+    pub text: String,
 }
 
 /// A player winding the clock back (-1) or forward (1), or letting it run at its own pace

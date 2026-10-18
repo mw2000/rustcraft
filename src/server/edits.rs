@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use bevy::math::I64Vec3;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
+use super::allowances::Allowances;
 use super::drops::{Chance, DroppedItem};
 use super::sync::BlockChanges;
 use crate::block::BlockType;
@@ -40,36 +40,13 @@ const EDIT_BURST: f32 = 20.0;
 // refused, and the client's prediction rolled back.
 const BREAK_SLACK: f32 = 0.1;
 
-/// What each client may still edit straight away: a burst of edits, used up by each request
-/// and refilled at a steady rate.
-#[derive(Resource, Default)]
-pub(super) struct EditAllowances(HashMap<ClientId, Allowance>);
+/// What each client may still edit straight away.
+#[derive(Resource, Deref, DerefMut)]
+pub(super) struct EditAllowances(Allowances);
 
-struct Allowance {
-    edits: f32,
-    at: Duration,
-}
-
-impl EditAllowances {
-    // Takes an edit from the client's allowance at `now`, if it has one left.
-    fn take(&mut self, client: ClientId, now: Duration) -> bool {
-        let allowance = self.0.entry(client).or_insert(Allowance {
-            edits: EDIT_BURST,
-            at: now,
-        });
-        let refilled = (now - allowance.at).as_secs_f32() * EDITS_PER_SECOND;
-        allowance.edits = (allowance.edits + refilled).min(EDIT_BURST);
-        allowance.at = now;
-        let allowed = allowance.edits >= 1.0;
-        if allowed {
-            allowance.edits -= 1.0;
-        }
-        allowed
-    }
-
-    /// Forgets a client that's left.
-    pub(super) fn forget(&mut self, client: ClientId) {
-        self.0.remove(&client);
+impl Default for EditAllowances {
+    fn default() -> Self {
+        Self(Allowances::new(EDIT_BURST, EDITS_PER_SECOND))
     }
 }
 

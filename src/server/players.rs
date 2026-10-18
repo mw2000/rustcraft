@@ -8,6 +8,7 @@ use bevy_replicon::shared::backend::connected_client::NetworkId;
 use bevy_replicon_renet2::netcode::NetcodeServerTransport;
 use serde::{Deserialize, Serialize};
 
+use super::chat::ChatAllowances;
 use super::edits::EditAllowances;
 use super::sync::SyncedArea;
 use crate::chunks::chunk::ChunkCoordinate;
@@ -167,17 +168,19 @@ type Leaving<'a> = (
 );
 
 /// Sees a client off as it disconnects: keeps its player's state to save, despawns them, which
-/// takes them off everyone's screen, forgets its edits and tells everyone they've left.
+/// takes them off everyone's screen, forgets its allowances and tells everyone they've left.
 pub(super) fn see_off(
     gone: On<Remove<ConnectedClient>>,
     players: Query<Leaving>,
     mut save: ResMut<WorldSave>,
     mut allowances: ResMut<EditAllowances>,
+    mut chat: ResMut<ChatAllowances>,
     mut output: MessageWriter<ToClients<CommandOutput>>,
     mut commands: Commands,
 ) {
     let client = ClientId::Client(gone.entity);
     allowances.forget(client);
+    chat.forget(client);
     let leaving = players.iter().find(|(_, owner, ..)| owner.0 == client);
     if let Some((player, _, name, body, look, state, mode, hotbar, inventory, vitals, bed)) =
         leaving

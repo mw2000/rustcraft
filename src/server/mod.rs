@@ -1,7 +1,9 @@
 //! What the server decides (INV-4): in singleplayer it runs in the same App as the client, and
 //! a dedicated server runs it on its own (§4.4).
 
+mod allowances;
 mod beds;
+mod chat;
 mod chunks;
 mod clock;
 mod commands;
@@ -17,6 +19,7 @@ mod sync;
 
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
+pub use commands::Operators;
 pub use host::{host, serve};
 pub use players::HeldItem;
 
@@ -44,6 +47,8 @@ impl Plugin for ServerPlugin {
             .init_resource::<ServerChunks>()
             .init_resource::<Containers>()
             .init_resource::<drops::Chance>()
+            .init_resource::<chat::ChatAllowances>()
+            .init_resource::<Operators>()
             .add_observer(players::welcome)
             .add_observer(survival::start_living)
             .add_observer(players::see_off)
@@ -83,6 +88,7 @@ impl Plugin for ServerPlugin {
                         .chain(),
                     crafting::receive_crafts,
                     commands::run_commands,
+                    chat::receive_chat,
                     (clock::wind_clock, clock::sync_clock).chain(),
                 )
                     .after(ClientSystems::Send)
@@ -195,6 +201,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
     commands.insert_resource(containers);
+    commands.insert_resource(Operators::new(saved.ops));
     commands.insert_resource(save);
     commands.remove_resource::<WorldToOpen>();
 }

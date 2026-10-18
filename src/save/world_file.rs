@@ -26,6 +26,9 @@ pub struct WorldFile {
     pub seed: u32,
     /// In days, as `TimeOfDay` has it.
     pub time_of_day: f32,
+    /// The names of the players besides the host who may run every command (`Operators`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ops: Vec<String>,
     /// The host's player, once they've played in it, the only one saved until M0.6.
     pub player: Option<PlayerState>,
 }
@@ -138,6 +141,7 @@ impl WorldFile {
             game_version: env!("CARGO_PKG_VERSION").into(),
             seed,
             time_of_day,
+            ops: Vec::new(),
             player: None,
         }
     }
@@ -191,6 +195,17 @@ mod tests {
         let text = file.to_toml();
         assert!(text.contains("movement = \"walk\""), "{text}");
         assert!(text.contains("game_mode = \"survival\""), "{text}");
+        assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+    }
+
+    #[test]
+    fn test_operators_round_trip_and_none_write_nothing() {
+        let mut file = WorldFile::new(1, 0.5);
+        assert!(!file.to_toml().contains("ops"));
+        file.ops = vec!["alex".into(), "Sam".into()];
+        file.player = Some(PlayerState::arriving_at(Vec3::ONE));
+        let text = file.to_toml();
+        assert!(text.contains(r#"ops = ["alex", "Sam"]"#), "{text}");
         assert_eq!(file, WorldFile::from_toml(&text).unwrap());
     }
 

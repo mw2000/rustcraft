@@ -35,13 +35,16 @@ cargo run --release
 
 ## Commands
 
-Press T, or / to start with the slash typed, to open the command bar. Enter runs the command and Escape closes it.
+Press T or Enter, or / to start with the slash typed, to open the command bar, which shows what's been said lately. Enter runs the command, or says what you typed to everyone if it doesn't start with /, and Escape closes it.
 
 - `/tp <x> <y> <z>` teleports there. `~` means where you are, and `~10` means ten blocks on from it.
 - `/tp <x> <z>` teleports to just above the ground there.
-- `/gamemode survival` or `/gamemode creative` (`s` or `c` for short) switches game mode. Survival can't fly, places only what it carries, and breaks blocks over time.
+- `/tp <player>` teleports to a player, and `/tp <player> <x> <y> <z>` teleports them.
+- `/gamemode survival` or `/gamemode creative` (`s` or `c` for short) switches game mode, and `/gamemode <mode> <player>` switches someone else's. Survival can't fly, places only what it carries, and breaks blocks over time.
 - `/seed` prints the world's seed. Run with `RC_SEED=<seed>` and a new world's name to get the same world again.
-- `/help` lists the commands.
+- `/list` lists the players here, and `/msg <player> <text>` says something only they see.
+- `/op <player>` and `/deop <player>` let a player run the commands that change things, or stop them (see below).
+- `/help` lists the commands you may run.
 
 ## Worlds
 
@@ -53,7 +56,11 @@ To let friends join the world you're playing, choose Open to Friends in the menu
 
 Everyone plays by a name, shown over their head to the others: `RC_NAME=<name>`, or else the name you're logged in as. A name already taken gets a number after it. The host's world keeps each friend's place, look and inventory under their name, so they come back where they left. A friend's game decides how they move, but the host puts them back if they go faster than they can or walk into a wall.
 
-It's early days: there's no chat yet, and connections aren't encrypted nor players' names checked, so play with people you trust.
+Anything typed into the command bar without a / is said to everyone, by your name; saying a lot at once is slowed to a line a second.
+
+Commands that change the world or other players, `/tp`, `/gamemode`, `/op` and `/deop`, and winding the clock with `[` and `]`, are for operators: the host, always, and whoever they make one with `/op <name>`. The world keeps its operators by name in `world.toml` (`ops = ["alex"]`), and `/deop <name>` takes it away again, except from the host. Anyone may `/seed`, `/list`, `/msg` and chat.
+
+It's early days: connections aren't encrypted nor players' names checked, so anyone who can reach your world can join under any name, an operator's included, and take their place. Only open your world to friends you trust.
 
 ## License
 

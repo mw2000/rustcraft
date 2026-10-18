@@ -28,6 +28,7 @@ use crate::hotbar::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
+use crate::server::Operators;
 use crate::survival::{SpawnBed, Vitals};
 use crate::world::World;
 use region::{ChunkEdits, Region};
@@ -195,6 +196,11 @@ impl WorldSave {
     /// Keeps the state of the player from elsewhere called `name` as they leave, to save soon.
     pub fn left(&mut self, name: &PlayerName, state: PlayerState) {
         self.keep_player(name, state);
+        self.save_soon();
+    }
+
+    /// Saves what's changed at the next frame's autosave rather than waiting for its time.
+    pub fn save_soon(&mut self) {
         self.next_autosave = Duration::ZERO;
     }
 
@@ -322,6 +328,7 @@ struct Savable<'w, 's> {
     world: ResMut<'w, World>,
     containers: ResMut<'w, Containers>,
     clock: Res<'w, TimeOfDay>,
+    operators: Res<'w, Operators>,
     players: Query<
         'w,
         's,
@@ -343,6 +350,7 @@ struct Savable<'w, 's> {
 impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
+        file.ops = self.operators.names().to_vec();
         for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players
         {
             let state = PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory)

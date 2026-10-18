@@ -574,7 +574,8 @@ The world's state beyond the seed (INV-1).
     Older games ignore the directory, so the format isn't raised.
   - `PROTOCOL_VERSION` is 5.
   - **Known gaps:** names aren't authenticated, so anyone can join as anyone and take their
-    save, which is fine among friends. Labels show through terrain. The host's own player is only relayed, never
+    save, and since M0.6e their operator's permission, which is fine among friends. Labels
+    show through terrain. The host's own player is only relayed, never
     checked, as it's the server's.
   - `tests/multiplayer.rs` adds, with up to three Apps: two joiners named alike get names of
     their own, each sees the host and the other but not themselves, and one leaving goes from
@@ -583,8 +584,52 @@ The world's state beyond the seed (INV-1).
     ground is refused with a `Teleport` back; `/tp` and `/gamemode` reach a joiner's own
     player; and a joiner comes back to a server opened again from the save where they left,
     looking the same way with what they carried. Tests that moved a client far now `/tp` it.
+- **Built (M0.6e):** chat and operators (`src/server/chat.rs`, `src/server/commands.rs`,
+  `src/commands.rs`).
+  - **Chat:** a line typed into the command bar without a leading `/` goes as `Chat(text)`;
+    the server takes out control characters, trims it and cuts it to `MAX_CHAT_LENGTH` (256
+    characters, which the bar also stops typing at), and sends `ChatLine { from, text }` to
+    everyone, the host included, which the bar prints as `<name> text` and fades like any
+    other line. In singleplayer that's the player's own line coming back. T or Enter opens
+    the bar, which while open shows the last 20 lines. Each client may say 5 lines at once
+    and then one a second (`ChatAllowances`, the same token bucket as `EditAllowances`, now
+    `server::allowances`), which lets a quick exchange through but not a flood of
+    everyone's bar; `/msg` counts against it too. Over it, the sender is told it's too quick.
+  - **Operators:** `Operators`, the names in `world.toml`'s `ops`, compared ignoring case as
+    names are. It's optional and left out when empty, and older games ignore it, so the
+    format isn't raised. The host
+    (`ClientId::Server`) always is one, whatever its name. Which commands only operators may
+    run is one table in `commands.rs`, `USAGES`, which `/help` prints from, showing each
+    player only what they may run: `/tp` and `/gamemode` (anything that changes the world or
+    another player), `/op` and `/deop`. `/seed`, `/list`, `/msg` and `/help` are anyone's.
+    `parse` refuses an operators' command to anyone else before reading its arguments, with
+    "You don't have permission to use /…". There's no `/time`, but `[` and `]` wind
+    everyone's clock (M0.5e), so the server ignores `WindClock` from anyone else, telling
+    them "Only operators can change the time" as they start winding, and `/help` lists the
+    keys among the operators' commands.
+  - **Commands:** `/tp <player>`, `/tp <player> <x> <y> <z>` (`~` from where the sender is,
+    as in Minecraft) and `/gamemode <mode> [player]` act on others, who are told who did it;
+    `/op <name>` and `/deop <name>` take any name a player could have, here or not, save
+    soon (`WorldSave::save_soon`) rather than at the next autosave, and tell the player if
+    they're here; the host can't be de-opped. `/list` names everyone here, and
+    `/msg <player> <text>` sends "X whispers to you: …" to them alone, as `CommandOutput`.
+    A player's found by name ignoring case.
+  - `PROTOCOL_VERSION` is 8.
+  - **Known gaps:** operators are only as safe as names, which aren't authenticated (M0.6d):
+    anyone who can reach the server can join under an operator's name and run what they
+    may, so a host should only open a world to friends until clients are authenticated.
+    Chat isn't saved, so a joiner sees only what's said after they arrive.
+  - `tests/multiplayer.rs` adds: chat reaches the host and every joiner under the sender's
+    name, tidied and cut short; a flood of chat is held to 5 lines and the sender told, and
+    a second later another gets through; a joiner who isn't an operator is refused
+    `/gamemode`, `/tp` and `/op` and shown only the open commands in `/help`, until the host
+    `/op`s them, which `world.toml` keeps, after which they can change the host's game mode
+    and teleport them but not de-op them, and a `/deop` takes it away again; a joiner's
+    winding changes nothing until they're an operator; `/msg` reaches only its target; and
+    `/list`. Tests that `/tp` a joiner make them an operator first.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
-  `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, `host.rs`, `players.rs`, `sync.rs`); `src/save/`
+  `edits.rs`, `chunks.rs`, `commands.rs`, `chat.rs`, `allowances.rs`, `clock.rs`, `host.rs`,
+  `players.rs`, `sync.rs`); `src/save/`
   under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup,
   `edits.rs`, `player.rs`, `join.rs`, `others.rs`, `models.rs`).
   Shared modules stay where they are. Later a default-on `client` cargo feature keeps wgpu and
@@ -1124,7 +1169,7 @@ and loads.**
   - ☑ **M0.5d Commands and game modes on the server.**
   - ☑ **M0.5e Time on the server**, with `TimeSync`.
   - ☑ **M0.5f Server chunk residency**, headless, with shared holders in `World`.
-- ◐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
+- ☑ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
   replicated, simple player models, chat (§4.4). In steps:
   - ☑ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
     two-App tests over the memory transport. `EditAllowances` forgets a client when it
@@ -1135,7 +1180,8 @@ and loads.**
     prediction with rollback.
   - ☑ **M0.6d Other players**: names, interpolated poses, simple models, plausibility checks with
     `Teleport` corrections, a save per player.
-  - ☐ **M0.6e Chat and operators**, an `ops` list in `world.toml` with the host as operator.
+  - ☑ **M0.6e Chat and operators**, an `ops` list in `world.toml` with the host as operator,
+    `/op`, `/deop`, `/list` and `/msg`.
 - ☑ **M0.7 CI.** Build, test, clippy and fmt on every PR.
 
 ### Phase 1: the survival core
