@@ -706,7 +706,8 @@ The world's state beyond the seed (INV-1).
     a torso in one of six shirts chosen by the name's hash, bare arms, a head with hair and
     eyes, facing -z as the look does. Five meshes and ten `StandardMaterial`s for everyone,
     like dropped items, which don't bend with the curvature shader either, as neither is
-    drawn far off. The body turns with yaw and the head with pitch; legs and arms swing with
+    drawn far off. (Since lit as the land is, §5.5: their colours are in their meshes, with one
+    `ModelMaterial` for every player, which bends and fogs as the land does.) The body turns with yaw and the head with pitch; legs and arms swing with
     the distance walked across, more the faster up to a walk. The name is a UI label placed
     each frame where the camera sees the head, hidden behind the camera or past 64 blocks.
   - **Plausibility:** `PlayerPose` now carries `at`, `movement`, the hotbar `slot` and
@@ -1064,7 +1065,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     has none. The client draws each as a cube a quarter of a block across with its block's
     tiles, spinning and bobbing over the spot (`src/client/drops.rs`): one mesh per item and
     one `StandardMaterial` on the block atlas for all, so they batch. They're lit by the sun
-    even underground until block light (M1.7) gives them something better.
+    even underground until block light (M1.7) gives them something better. (It has: they're lit
+    as the land where they lie is, §5.5.)
   - **The inventory screen** (`src/inventory/screen.rs`): E opens `GameState::Inventory` in
     either mode, now from the menu's key handling, and it shows the block picker in creative
     and the inventory screen in survival, which hides the hotbar strip. It has the 27 main
@@ -1465,9 +1467,46 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   wash it out, and dim (40,000 lumens, reaching 4 blocks) so a firefly makes a small pool on the
   grass rather than lighting the field. At most `MAX_FIREFLY_LIGHTS` (12) exist, a pool moved
   each frame to the nearest lit fireflies, and none at all while no firefly's about, so by day
-  the shader's lookup finds an empty cluster. Bevy's own materials (creatures, items) are lit by
-  them too; water isn't, its shader taking sky light only. It's only drawn: it's no block light,
+  the shader's lookup finds an empty cluster. Models are lit by them too, as the land is (below);
+  water isn't, its shader taking sky light only. It's only drawn: it's no block light,
   so it keeps no monster from spawning (M3.3's darkness rule reads block light alone).
+- **Models are lit as the land is** (built after M3.3, `src/client/model_light.rs`): creatures,
+  other players, what they hold and wear, dropped items and thrown stones, which Bevy's own
+  lighting left black at night and in caves, as it has none of the shaders' moonlight
+  (`MOON_BOOST`) and no block light.
+  - **The light where they are:** each part drawn with a `ModelMaterial` is lit by the sky light
+    and block light of the block its middle is in, as the land's meshes have it: a chunk's light
+    is worked out on the compute pool by the meshes' own `neighbourhood_light`, from the chunk
+    and its 26 neighbours (`generator::chunk_light`, 0.1 to 0.3 ms), with an opaque block given
+    the brightest of the open ones against it, so a part just inside a floor is lit as the floor
+    is. It's kept while models are in the chunk and worked out again when it or a neighbour
+    changes, which it tells by the chunks' `Arc`s, held weakly so an edit needn't copy them; it
+    goes 4 s after nothing's looked at it. Each part looks its block up as it moves into another
+    or its chunk's light changes, and at least once a second, and eases towards it, over about a
+    sixth of a second, so walking out of a torch's light dims rather than steps.
+  - **Batching:** a part carries its light in its `MeshTag`, per instance (sky and block light
+    a byte each, and a bit saying it's been looked up), so parts still share meshes and
+    materials: a model's colours are in its meshes' vertex colours, and every kind's parts draw
+    with one lit material, one for eyes that glow (`Look::Glow`, still drawn unlit) and their
+    flashing and fading variants. 100 creatures of five kinds draw in 10 main-pass draws, 9
+    before.
+  - **Shading:** `model.wesl` lights a part with the land's own function, `land_light`, now in
+    `land_light.wesl` and shared with `world.wesl`: sunlight with the sun's shadows and the
+    clouds', moonlight kept out of caves by sky light, the open sky's light, the brighter,
+    colour by colour, of that and torchlight, and fireflies' glow on top. So a sheep at night is as moonlit as the grass,
+    a brute beside a torch as warm as the floor, and one in an unlit cave as dark; monsters
+    still read as menacing at night by their dark colours. Models bend with the curvature and
+    fog as the land does, and their shadow pass (`model_prepass.wesl`) bends too and cuts out
+    pictures' holes. By day they look much as they did.
+  - **Cost:** 100 creatures walking about (2,000 parts) cost 0.04 ms a frame to light on the
+    main thread and 0.02 ms to keep their chunks' light (medians, with a load average of 18);
+    nothing allocates per frame.
+  - **Tests** (`client::model_light`, `client::creatures`): a model's light matching the
+    terrain mesh's at the floor under it, in the open, in a closed cave and beside a torch; a
+    part inside a block taking the light beside it; light worked out again as a torch lights the
+    chunk from the next one, and forgotten once unused; a part's tag carrying the light where it
+    is, easing into a torch's, and lighting up as a torch is put down by it; and every kind's
+    parts sharing two materials, coloured by their meshes, with only glowing eyes unlit.
 
 ### 5.5a Farming and food
 
@@ -2022,7 +2061,8 @@ from high places.
     drops scattered as a dead player's are, and despawns. Sheep run when they're hit.
   - **Drawing** (`client::creatures`, `DrawCreaturesPlugin`): each part's box a mesh made once
     per kind, with a material for each colour and a redder one it flashes to for 0.3 s when
-    `Flinches` goes up; the legs swing with the distance walked, as players' do. Health isn't
+    `Flinches` goes up (since lit as the land is, §5.5, the colours are the meshes' and the
+    materials shared by every kind); the legs swing with the distance walked, as players' do. Health isn't
     shown. Targeting is a ray through each seen creature's box (`collision::ray_distance`).
   - **Sheep:** 0.9 wide and 1.3 tall, 8 health, walking 1.4 blocks a second and running 3.4,
     following wheat, a body of wool on four legs with a face, a cap of wool and eyes. They drop 1
@@ -2250,11 +2290,8 @@ from high places.
     leaving monsters out, a creature vanishing near only fading (`client::creatures`), and a
     joined client seeing a brute wind up and strike, taking the blow and feeling it, seeing one
     killed die and a gloamer at sunrise fade without dying (`tests/multiplayer.rs`).
-  - **Later:** monsters drawn darker than the land at night: creatures and players are lit by
-    Bevy's own lights, which the moon barely lights (the world's shaders raise its light 400
-    times, `MOON_BOOST`), so at night they're black shapes with glowing eyes, which suits
-    monsters but hides animals and friends, and wants their light from the sky and block light
-    where they stand; monsters swimming after players; more dungeons' kinds by structure.
+  - **Later:** monsters swimming after players; more dungeons' kinds by structure. (Models are
+    now lit as the land where they stand is, by moonlight and torchlight too, §5.5.)
 - **Built: ambient life** (ported from rornic/rustcraft #79 by Aymen Qader, `src/client/critters/`,
   `AmbientLifePlugin`). Not creatures: creatures are gameplay, owned by the server, replicated
   and hit; critters are decoration round the camera on each client alone. The server

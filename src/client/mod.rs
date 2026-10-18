@@ -11,6 +11,7 @@ pub mod critters;
 pub mod drops;
 pub mod edits;
 pub mod join;
+pub mod model_light;
 pub mod models;
 pub mod others;
 pub mod player;

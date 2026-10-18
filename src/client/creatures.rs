@@ -19,8 +19,10 @@ use super::animation::{
     blinking, breath, death, ease, ease_angle, flap, flinch, grazing, hash, head_look,
     stride_swing, tail, GRAZE_PITCH,
 };
+use super::model_light::{coloured, ModelLook, ModelMaterial, ModelMaterials};
 use super::others::{move_seen, Pose, Poses, SeenPlayer};
 use super::player::LocalPlayer;
+use crate::clouds::spawn_clouds;
 use crate::collision::{ray_distance, Aabb};
 use crate::creatures::{
     Condition, Creature, CreatureKind, CreaturePose, Flinches, Joint, Look, Missile, Part, Stance,
@@ -31,8 +33,9 @@ use crate::server::is_authority;
 
 // How long a creature flashes red when it's hurt, in seconds.
 const FLASH: f32 = 0.3;
-// How much redder it's drawn then.
+// How much redder it's drawn then, and the red.
 const FLASH_RED: f32 = 0.6;
+const HURT_RED: Color = Color::srgb(1.0, 0.1, 0.1);
 // How far the legs swing at a walk, in radians, and how fast they swing fully, in blocks a
 // second, about a creature's walk.
 const SWING: f32 = 0.7;
@@ -222,7 +225,7 @@ pub struct DrawCreaturesPlugin;
 
 impl Plugin for DrawCreaturesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, make_looks)
+        app.add_systems(Startup, make_looks.after(spawn_clouds))
             .add_observer(draw_creature)
             .add_systems(
                 Update,
@@ -240,9 +243,9 @@ impl Plugin for DrawCreaturesPlugin {
 struct CreatureLooks {
     kinds: HashMap<CreatureKind, KindLook>,
     heart: Handle<Mesh>,
-    heart_colour: Handle<StandardMaterial>,
+    heart_colour: Handle<ModelMaterial>,
     missile: Handle<Mesh>,
-    stone: Handle<StandardMaterial>,
+    stone: Handle<ModelMaterial>,
 }
 
 // A kind's parts, where the middle of its body breathes from, and how far over its feet the
@@ -261,9 +264,9 @@ struct PartLook {
     at: Vec3,
     joint: Joint,
     look: Look,
-    material: Handle<StandardMaterial>,
-    hurt: Handle<StandardMaterial>,
-    fading: [Handle<StandardMaterial>; FADE_STEPS],
+    material: Handle<ModelMaterial>,
+    hurt: Handle<ModelMaterial>,
+    fading: [Handle<ModelMaterial>; FADE_STEPS],
 }
 
 /// A box of a creature drawn, what its boxes hang from, or the heart over it.
@@ -320,32 +323,33 @@ fn pivot(part: &Part) -> Vec3 {
         }
 }
 
+// A part's materials: as it is, flashing, and fading in steps as it dies.
+type Materials = (
+    Handle<ModelMaterial>,
+    Handle<ModelMaterial>,
+    [Handle<ModelMaterial>; FADE_STEPS],
+);
+
 fn make_looks(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ModelMaterials,
 ) {
-    type Materials = (
-        Handle<StandardMaterial>,
-        Handle<StandardMaterial>,
-        [Handle<StandardMaterial>; FADE_STEPS],
-    );
-    let mut colours: HashMap<([u32; 3], bool), Materials> = HashMap::new();
-    // glowing ones are drawn as bright as they are whatever the light
-    let mut plain = |colour: Color, unlit: bool| {
-        let alpha_mode = if colour.alpha() < 1.0 {
-            AlphaMode::Blend
-        } else {
-            AlphaMode::Opaque
-        };
-        materials.add(StandardMaterial {
-            base_color: colour,
-            perceptual_roughness: 1.0,
-            alpha_mode,
-            unlit,
-            ..default()
-        })
+    // every kind's parts are drawn with these few, lit as the land is where they are or, for
+    // those that glow, as bright as they are whatever the light, so they're drawn together:
+    // the colours are their meshes'
+    let mut shades = |look: ModelLook| -> Materials {
+        let fading = std::array::from_fn(|step| {
+            let left = 1.0 - (step + 1) as f32 / (FADE_STEPS + 1) as f32;
+            materials.add(look.clone().faded(left))
+        });
+        (
+            materials.add(look.clone()),
+            materials.add(look.flashing(HURT_RED, FLASH_RED)),
+            fading,
+        )
     };
+    let (lit, glowing) = (shades(ModelLook::lit()), shades(ModelLook::glowing()));
     let mut kinds = HashMap::new();
     for &kind in CreatureKind::ALL {
         let properties = kind.properties();
@@ -365,21 +369,14 @@ fn make_looks(
                 Joint::Head => properties.neck,
                 _ => Vec3::ZERO,
             };
-            let mesh = Mesh::from(Cuboid::from_size(part.size)).translated_by(part.centre - pivot);
             let [r, g, b] = part.colour;
-            let glows = part.look == Look::Glow;
-            let (material, hurt, fading) = colours
-                .entry((part.colour.map(f32::to_bits), glows))
-                .or_insert_with(|| {
-                    let colour = Color::srgb(r, g, b);
-                    let red = colour.mix(&Color::srgb(1.0, 0.1, 0.1), FLASH_RED);
-                    let fading = std::array::from_fn(|step| {
-                        let left = 1.0 - (step + 1) as f32 / (FADE_STEPS + 1) as f32;
-                        plain(colour.with_alpha(left), glows)
-                    });
-                    (plain(colour, glows), plain(red, glows), fading)
-                })
-                .clone();
+            let mesh = Mesh::from(Cuboid::from_size(part.size)).translated_by(part.centre - pivot);
+            let mesh = coloured(mesh, Color::srgb(r, g, b));
+            let (material, hurt, fading) = if part.look == Look::Glow {
+                glowing.clone()
+            } else {
+                lit.clone()
+            };
             parts.push(PartLook {
                 mesh: meshes.add(mesh),
                 at: pivot - hangs_from,
@@ -414,18 +411,10 @@ fn make_looks(
     }
     commands.insert_resource(CreatureLooks {
         kinds,
-        heart: meshes.add(heart),
-        heart_colour: materials.add(StandardMaterial {
-            base_color: HEART,
-            unlit: true,
-            ..default()
-        }),
-        missile: meshes.add(Cuboid::from_length(MISSILE)),
-        stone: materials.add(StandardMaterial {
-            base_color: STONE,
-            perceptual_roughness: 1.0,
-            ..default()
-        }),
+        heart: meshes.add(coloured(heart, HEART)),
+        heart_colour: glowing.0,
+        missile: meshes.add(coloured(Cuboid::from_length(MISSILE).into(), STONE)),
+        stone: lit.0,
     });
 }
 
@@ -697,7 +686,7 @@ fn animate(
 fn show_death(
     looks: Res<CreatureLooks>,
     mut dying: Query<(&mut Model, &Dying, &mut Transform, Has<Fading>), Without<CreaturePart>>,
-    mut parts: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut Visibility), With<CreaturePart>>,
+    mut parts: Query<(&mut MeshMaterial3d<ModelMaterial>, &mut Visibility), With<CreaturePart>>,
 ) {
     for (mut model, dying, mut body, fading) in &mut dying {
         let Some((tipped, left)) = death(dying.0) else {
@@ -732,7 +721,7 @@ fn flash(
     time: Res<Time>,
     mut flashing: Query<(Entity, &mut Model, Option<&mut Flash>), With<SeenCreature>>,
     looks: Res<CreatureLooks>,
-    mut materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut materials: Query<&mut MeshMaterial3d<ModelMaterial>>,
     mut commands: Commands,
 ) {
     for (entity, mut model, flash) in &mut flashing {
@@ -883,5 +872,61 @@ mod tests {
         // fading away where it was, which `show_death` draws without tipping it over
         assert!(app.world().get::<Dying>(seen).is_some());
         assert!(app.world().get::<Fading>(seen).is_some());
+    }
+
+    #[test]
+    fn test_every_kind_shares_a_few_materials_and_only_eyes_that_glow_are_unlit() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::mesh::VertexAttributeValues;
+        use bevy::platform::collections::HashSet;
+        use bevy::render::storage::ShaderBuffer;
+
+        use super::{make_looks, CreatureLooks, ModelMaterial};
+        use crate::clouds::CloudLayer;
+        use crate::creatures::{CreatureKind, Look};
+        use crate::curvature::Curvature;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Mesh>()
+            .init_asset::<Image>()
+            .init_asset::<ShaderBuffer>()
+            .init_asset::<ModelMaterial>()
+            .init_resource::<Curvature>()
+            .insert_resource(CloudLayer {
+                pattern: Handle::default(),
+                layer: Handle::default(),
+            });
+        app.world_mut().run_system_once(make_looks).unwrap();
+        let world = app.world();
+        let looks = world.resource::<CreatureLooks>();
+        let (materials, meshes) = (
+            world.resource::<Assets<ModelMaterial>>(),
+            world.resource::<Assets<Mesh>>(),
+        );
+        let mut shared = HashSet::new();
+        for &kind in CreatureKind::ALL {
+            let parts = kind.properties().model;
+            for (part, look) in parts.iter().zip(&looks.kinds[&kind].parts) {
+                shared.insert(look.material.id());
+                let glows = part.look == Look::Glow;
+                for material in [&look.material, &look.hurt].into_iter().chain(&look.fading) {
+                    assert_eq!(glows, materials.get(material).unwrap().glows());
+                }
+                // its colour is its mesh's
+                let Some(VertexAttributeValues::Float32x4(colours)) = meshes
+                    .get(&look.mesh)
+                    .unwrap()
+                    .attribute(Mesh::ATTRIBUTE_COLOR)
+                else {
+                    panic!("{kind:?}'s parts are coloured");
+                };
+                let [r, g, b] = part.colour;
+                let colour = Color::srgb(r, g, b).to_linear().to_f32_array();
+                assert!(colours.iter().all(|&c| c == colour));
+            }
+        }
+        // one lit as the land is, and one for eyes that glow, however many kinds and colours
+        assert_eq!(2, shared.len());
     }
 }

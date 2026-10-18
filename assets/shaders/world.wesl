@@ -2,55 +2,24 @@ import bevy_pbr::render::{
     forward_io::{Vertex, VertexOutput, decompress_vertex},
     mesh_functions,
     mesh_view_bindings as view_bindings,
-    mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
-    shadows::fetch_directional_shadow,
-    view_transformations::{position_world_to_clip, position_world_to_view},
+    view_transformations::position_world_to_clip,
 };
 import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
 import super::foliage::{is_leaf, is_plant, swayed};
 import super::fog::{fogged_by, land_haze};
-import super::lighting::{direct_moon, direct_sun, open_sky};
-import super::sky::SUN_LIGHT;
-import super::cloud_shadow::cloud_shadow;
+import super::land_light::land_light;
 import super::lod_patch::patch_tint;
-import super::point_lights::point_light_glow;
 import super::dither::dither_threshold;
 import super::curvature::{curved, uncurved};
 // How bright the leaves seen through a solid tree box's holes are, to its surface's.
 const HOLE_SHADE: f32 = 0.55;
-// All that's left with no sky light at all, so caves aren't pitch black.
-const CAVE_AMBIENT: vec3<f32> = vec3<f32>(0.02, 0.02, 0.025);
-// Above 1, light falls away quickly at first under cover, then more slowly.
-const SKY_LIGHT_CURVE: f32 = 2.0;
-// Shadow maps only reach so far, so beyond them sunlight is kept out of caves by sky
-// light instead: none gets in below this much of it.
-const SUN_SKY_GATE: f32 = 0.3;
-// Shadows fade out over this last part of their reach, instead of stopping at a line.
-const SHADOW_FADE_START: f32 = 0.8;
-
-// Torchlight at full strength, warm against the sky's light, and how it falls away with block
-// light, as sky light does.
-const TORCH_LIGHT: vec3<f32> = vec3<f32>(0.9, 0.5, 0.22);
-const BLOCK_LIGHT_CURVE: f32 = 2.0;
 // A torch's flame, the top of its tile down to here, see `generator::TORCH`, which glows this
 // brightly whatever the light.
 const FLAME_BOTTOM: f32 = 9.0 / 16.0;
 const FLAME_GLOW: f32 = 1.6;
-// The most fireflies' light adds to a face, so a swarm near a torch doesn't wash it out.
-const POINT_GLOW_MAX: f32 = 0.3;
 // Magma glows at least this brightly, near or far, so a volcano's crater shows at night from
 // kilometres away, where LODs draw no block light.
 const MAGMA_GLOW: f32 = 1.4;
-
-// Light from the sky for sky light 0..1, see `light.rs`.
-fn sky_ambient(sky: f32, normal: vec3<f32>) -> vec3<f32> {
-    return CAVE_AMBIENT + open_sky(normal) * pow(clamp(sky, 0.0, 1.0), SKY_LIGHT_CURVE);
-}
-
-// Light from torches and other blocks for block light 0..1, the same by day or night.
-fn block_ambient(block: f32) -> vec3<f32> {
-    return TORCH_LIGHT * pow(clamp(block, 0.0, 1.0), BLOCK_LIGHT_CURVE);
-}
 
 // A lantern's glass, which glows as a flame does, where its tile has it, see
 // `generator::shapes`'s `LANTERN_BODY`.
@@ -71,49 +40,10 @@ fn is_magma(vertex_alpha: f32) -> bool {
     return abs(vertex_alpha - f32(constants::MAGMA_CELL)) < 0.5;
 }
 
-fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
-    let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
-    if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
-        return 1.0;
-    }
-    let view_z = position_world_to_view(world_position.xyz).z;
-    let shadow = fetch_directional_shadow(SUN_LIGHT, world_position, normal, view_z, frag_coord);
-    let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
-    return mix(shadow, 1.0, smoothstep(reach * SHADOW_FADE_START, reach, -view_z));
-}
-
-// Sunlight reaching a face, shadowed by the land and the clouds, and moonlight, kept out of caves
-// by sky light but not shadowed.
-fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky: f32, frag_coord: vec2<f32>) -> vec3<f32> {
-    let gate = smoothstep(0.0, SUN_SKY_GATE, sky);
-    let moon = direct_moon(shaded) * gate;
-    let light = direct_sun(shaded, uncurved(world_position.xyz)) * gate;
-    // faces it can't reach need no shadow lookups
-    if all(light == vec3<f32>(0.0)) {
-        return moon;
-    }
-    // the clouds are flat, so their shadows fall where the land really is
-    return light * sun_shadow(world_position, normal, frag_coord) * cloud_shadow(uncurved(world_position.xyz)) + moon;
-}
-
-// Faces turn toward up between these distances in blocks, to this much of the way: past
-// where a step is under a pixel, lit tops and dark sides shimmer into each other. LOD cells are
-// a few blocks wide well before then, so it starts where shadows end, the default
-// `RendererSettings::shadow_distance`, and the land is lit block by block as far as it's shadowed.
-const FLATTEN_START: f32 = 1024.0;
-const FLATTEN_END: f32 = 4096.0;
-const FLATTEN_MAX: f32 = 0.85;
-
 // Blocks per pixel at which grass sides start turning to the grass on top, and are wholly it:
 // four pixels tall, as the tile's green fringe is about a quarter of it, to under two.
 const GRASS_SIDE_FADE_START: f32 = 0.25;
 const GRASS_SIDE_FADE_END: f32 = 0.6;
-
-// The normal to light by: turned toward up with distance, which evens out the sun's and sky's contrast between faces.
-fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
-    let flatten = FLATTEN_MAX * smoothstep(FLATTEN_START, FLATTEN_END, distance(world_position, view_bindings::view.world_position));
-    return normalize(mix(normal, vec3<f32>(0.0, 1.0, 0.0), flatten));
-}
 
 // Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves and
 // plants swaying in the wind and the land curving away. Block meshes always carry vertex colours,
@@ -216,12 +146,7 @@ fn fragment(
     block = in.world_tangent.x;
 }
 
-    let shaded = lit_normal(normal, world_position);
-    let sky_light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded);
-    // the brighter of the sky's light and the torches', colour by colour, and on top of it
-    // fireflies' glow, which moves with them, so can't be block light
-    let glow = min(point_light_glow(world_position, normal, in.position.xy), vec3<f32>(POINT_GLOW_MAX));
-    var light = max(sky_light, block_ambient(block)) + glow;
+    var light = land_light(in.world_position, normal, sky, block, in.position.xy);
     if is_flame(in.color.a, in.uv) {
         light = vec3<f32>(FLAME_GLOW);
     }

@@ -23,6 +23,7 @@ use rustcraft::client::cracks::DrawCracksPlugin;
 use rustcraft::client::creatures::DrawCreaturesPlugin;
 use rustcraft::client::critters::AmbientLifePlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
+use rustcraft::client::model_light::ModelLightPlugin;
 use rustcraft::client::models::DrawPlayersPlugin;
 use rustcraft::client::servers::{ServerList, SERVERS_FILE};
 use rustcraft::client::sound::SoundPlugin;
@@ -215,6 +216,7 @@ fn main() {
         HudPlugin,
         PickerPlugin,
         InventoryScreenPlugin,
+        ModelLightPlugin,
         DrawDropsPlugin,
         DrawPlayersPlugin,
         DrawCreaturesPlugin,

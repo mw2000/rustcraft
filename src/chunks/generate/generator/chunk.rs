@@ -2,11 +2,14 @@ use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
 use super::terrain::{column_block, ground_top, under_surface};
+use super::FACE_NORMAL_OFFSET;
 use crate::block::{BlockState, BlockType};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::light::{BlockLight, Light, SkyLight, BLOCK_LIGHT_REACH, MAX_LIGHT};
+use crate::chunks::generate::light::{
+    BlockLight, ChunkLight, Light, SkyLight, BLOCK_LIGHT_REACH, MAX_LIGHT,
+};
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::ores::place_ores;
 use crate::chunks::generate::plants::plant_on;
@@ -209,6 +212,39 @@ pub fn generate_chunk_mesh(
         &tint,
         &light,
     )
+}
+
+/// The light in each block of the chunk at `coord`, from it and its 26 neighbours as meshing
+/// has them, worked out just as its meshes are lit, for models drawn in it (§5.5).
+pub fn chunk_light(
+    chunk: &ChunkData,
+    adjacent_chunks: &[Option<Arc<ChunkData>>],
+    coord: ChunkCoordinate,
+) -> ChunkLight {
+    let source = ChunkNeighbourhood::new(chunk, adjacent_chunks);
+    let light = neighbourhood_light(&source, coord);
+    // as `vertex_light` leaves solid cells out
+    let open = |cell: IVec3| !source.terrain(cell).is_opaque();
+    let size = CHUNK_SIZE as i32;
+    let mut levels = Vec::with_capacity((size * size * size) as usize);
+    for x in 0..size {
+        for z in 0..size {
+            for y in 0..size {
+                let cell = IVec3::new(x, y, z);
+                if open(cell) {
+                    levels.push(light.levels(cell));
+                    continue;
+                }
+                let beside = FACE_NORMAL_OFFSET
+                    .into_iter()
+                    .map(|offset| cell + offset)
+                    .filter(|&next| open(next))
+                    .map(|next| light.levels(next));
+                levels.push(beside.fold([0, 0], |a, b| [a[0].max(b[0]), a[1].max(b[1])]));
+            }
+        }
+    }
+    ChunkLight::new(levels.into_boxed_slice())
 }
 
 // Light falling into the top of a box whose highest block is at `top`, in boxes of `cell`

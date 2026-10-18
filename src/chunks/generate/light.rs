@@ -4,6 +4,8 @@ use super::generator::FACE_NORMAL_OFFSET;
 
 use bevy::math::IVec3;
 
+use crate::chunks::chunk::CHUNK_SIZE;
+
 /// Sky light under open sky. Each block it spreads sideways or up loses one level, and
 /// blocks it passes through take their `light_opacity` too.
 pub const MAX_LIGHT: u8 = 15;
@@ -255,6 +257,30 @@ impl Light {
     #[inline]
     pub fn levels(&self, coord: IVec3) -> [u8; 2] {
         [self.sky.level(coord), self.block.level(coord)]
+    }
+}
+
+/// The sky light and block light of each block of a chunk, as its meshes light the faces against
+/// them, for what's drawn in it that isn't the land: creatures, players and dropped items
+/// (`client::model_light`, §5.5). An opaque block has none of its own, so it has the brightest
+/// of the open blocks against it: a model's part whose middle is just inside a floor or a wall is
+/// lit as that face is.
+pub struct ChunkLight {
+    levels: Box<[[u8; 2]]>,
+}
+
+impl ChunkLight {
+    /// From the levels of each block, `x` outermost and `y` innermost.
+    pub fn new(levels: Box<[[u8; 2]]>) -> Self {
+        let size = CHUNK_SIZE as usize;
+        assert_eq!(size * size * size, levels.len());
+        Self { levels }
+    }
+
+    /// The sky light and block light at `local`, a block of the chunk.
+    pub fn levels(&self, local: IVec3) -> [u8; 2] {
+        let size = CHUNK_SIZE as i32;
+        self.levels[((local.x * size + local.z) * size + local.y) as usize]
     }
 }
 

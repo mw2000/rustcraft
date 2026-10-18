@@ -10,7 +10,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
+use super::model_light::{ModelLook, ModelMaterial, ModelMaterials};
 use crate::block::{BlockType, Face, TILE_COUNT};
+use crate::clouds::spawn_clouds;
 use crate::inventory::icons::{load_icons, ItemIcons};
 use crate::items::Item;
 use crate::server::drops::{DroppedItem, SIZE};
@@ -27,7 +29,7 @@ pub struct DrawDropsPlugin;
 
 impl Plugin for DrawDropsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, make_material.after(load_icons))
+        app.add_systems(Startup, make_material.after(load_icons).after(spawn_clouds))
             .add_observer(draw_drop)
             .add_systems(Update, spin_and_bob);
     }
@@ -37,8 +39,8 @@ impl Plugin for DrawDropsPlugin {
 /// one, and a mesh for each item, made the first time one's drawn.
 #[derive(Resource)]
 pub(super) struct DropLooks {
-    material: Handle<StandardMaterial>,
-    sprites: Handle<StandardMaterial>,
+    material: Handle<ModelMaterial>,
+    sprites: Handle<ModelMaterial>,
     meshes: HashMap<Item, Handle<Mesh>>,
     grass: LinearRgba,
 }
@@ -49,7 +51,7 @@ impl DropLooks {
         &mut self,
         item: Item,
         meshes: &mut Assets<Mesh>,
-    ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+    ) -> (Handle<Mesh>, Handle<ModelMaterial>) {
         let grass = self.grass;
         let mesh = self
             .meshes
@@ -77,26 +79,19 @@ struct Spinning {
     phase: f32,
 }
 
-fn make_material(
-    mut commands: Commands,
-    icons: Res<ItemIcons>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let material = materials.add(StandardMaterial {
-        base_color_texture: Some(icons.atlas().clone()),
-        perceptual_roughness: 1.0,
+fn make_material(mut commands: Commands, icons: Res<ItemIcons>, mut materials: ModelMaterials) {
+    let material = materials.add(ModelLook {
+        texture: Some(icons.atlas().clone()),
         // plants' tiles have holes
         alpha_mode: AlphaMode::Mask(0.5),
-        ..default()
+        ..ModelLook::lit()
     });
-    let sprites = materials.add(StandardMaterial {
-        base_color_texture: Some(icons.items().clone()),
-        perceptual_roughness: 1.0,
+    let sprites = materials.add(ModelLook {
+        texture: Some(icons.items().clone()),
         alpha_mode: AlphaMode::Mask(0.5),
         // seen from both sides as it spins
         double_sided: true,
-        cull_mode: None,
-        ..default()
+        ..ModelLook::lit()
     });
     commands.insert_resource(DropLooks {
         material,
