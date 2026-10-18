@@ -10,6 +10,7 @@ mod commands;
 mod console;
 mod containers;
 mod crafting;
+pub mod creatures;
 pub mod drops;
 mod edits;
 mod farming;
@@ -60,6 +61,8 @@ impl Plugin for ServerPlugin {
             .init_resource::<drops::Chance>()
             .init_resource::<chat::ChatAllowances>()
             .init_resource::<Operators>()
+            .init_resource::<creatures::Dormant>()
+            .init_resource::<creatures::SpawnRate>()
             .add_observer(players::welcome)
             .add_observer(survival::start_living)
             .add_observer(players::see_off)
@@ -70,6 +73,15 @@ impl Plugin for ServerPlugin {
                     run_clock,
                     containers::run_furnaces,
                     (drops::fall, drops::merge, drops::pick_up).chain(),
+                    (
+                        creatures::wake,
+                        creatures::spawn,
+                        creatures::take_paths,
+                        creatures::think,
+                        creatures::move_creatures,
+                        creatures::sleep,
+                    )
+                        .chain(),
                 )
                     .run_if(is_authority),
             )
@@ -101,6 +113,7 @@ impl Plugin for ServerPlugin {
                     commands::run_commands,
                     chat::receive_chat,
                     (clock::wind_clock, clock::sync_clock).chain(),
+                    creatures::receive_hits,
                 )
                     .after(ClientSystems::Send)
                     .before(ServerSystems::Send)
@@ -168,10 +181,19 @@ impl Plugin for ServerPlugin {
             )
             .add_systems(
                 PostUpdate,
-                players::send_host_pose
+                (players::send_host_pose, creatures::send_poses)
                     .before(ServerSystems::Send)
                     .run_if(is_authority)
                     .run_if(on_timer(POSE_INTERVAL)),
+            )
+            .add_systems(
+                PostUpdate,
+                // with every player where they've moved, so each client's shown the creatures
+                // round where its player is now
+                creatures::follow_whereabouts
+                    .after(players::move_players)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
             );
     }
 }
@@ -220,7 +242,7 @@ pub struct WorldToOpen {
 /// were saved, or at the world's spawn if they're new.
 pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     let dir = &open.dir;
-    let (save, saved, edits, containers, crops) = WorldSave::open(dir.clone(), open.seed)
+    let (mut save, saved, edits, containers, crops) = WorldSave::open(dir.clone(), open.seed)
         .unwrap_or_else(|error| panic!("couldn't open the world in {}: {error}", dir.display()));
     let world = World::from_save(saved.seed, edits, open.region_distance);
     info!(
@@ -242,6 +264,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     commands.insert_resource(world);
     commands.insert_resource(containers);
     commands.insert_resource(crops);
+    commands.insert_resource(creatures::Dormant::of(save.take_creatures()));
     commands.insert_resource(Operators::new(saved.ops));
     commands.insert_resource(save);
     commands.remove_resource::<WorldToOpen>();

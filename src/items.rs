@@ -132,7 +132,7 @@ use ToolKind::{Axe, Hoe, Pickaxe, Shovel};
 // Coal comes from coal ore, ingots from smelting ore in a furnace, and the tools are made from
 // planks, cobblestone and ingots at a crafting table (`crafting`). Swords wait for combat (M3.3).
 // Apples come from leaves, now and then, seeds from tall grass, and wheat from the seeds sown
-// (`farming`), which bread is baked from. Meat waits for animals (M3.2).
+// (`farming`), which bread is baked from. Mutton comes from sheep (§5.8) and cooks in a furnace.
 items! {
     Stick { name: "stick" },
     Coal { name: "coal" },
@@ -158,6 +158,8 @@ items! {
     Seeds { name: "seeds", plants(BlockType::Wheat0) },
     Wheat { name: "wheat" },
     Bread { name: "bread", food(5) },
+    Mutton { name: "mutton", food(2) },
+    CookedMutton { name: "cooked_mutton", food(6) },
 }
 
 impl Item {
@@ -185,6 +187,12 @@ impl Item {
     /// What it does as a tool, if it's one.
     pub fn tool(self) -> Option<Tool> {
         self.properties().tool
+    }
+
+    /// How much hitting a creature with it hurts, in half hearts: a bare hand's or anything
+    /// else's 1, and a tool's more the better its tier. Weapons wait for combat (M3.3).
+    pub fn damage(self) -> u8 {
+        self.tool().map_or(1, |tool| 1 + tool.tier)
     }
 
     /// How much of the food bar eating one fills, if it's food.
@@ -556,7 +564,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::Bread.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::CookedMutton.sprite());
     }
 
     #[test]

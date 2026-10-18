@@ -13,9 +13,19 @@ use crate::world::{Holder, World};
 // chunk or one against it, at most sqrt(3) chunks off, so 2 covers those and a chunk more
 // along each axis, for the player to move into while it's generated.
 const LOAD_RADIUS: f32 = 2.0;
-// Chunks are let go only further off, so walking to and fro over a chunk's border doesn't
-// generate the same ones over and over.
-const RELEASE_RADIUS: f32 = 3.0;
+// And for creatures to live in (§5.8), the chunks this far across, in chunks, from the eye's,
+// in its layer and the one either side: 64 blocks, past the 48 they appear within.
+const CREATURE_RADIUS: f32 = 4.0;
+// Chunks are let go only a chunk further off, so walking to and fro over a chunk's border
+// doesn't generate the same ones over and over.
+const RELEASE_SLACK: f32 = 1.0;
+
+// Whether a chunk `offset` from a player's eye chunk is held for them, with `slack` chunks over.
+fn held_for(offset: I64Vec3, slack: f32) -> bool {
+    let offset = offset.as_vec3();
+    offset.length() <= LOAD_RADIUS + slack
+        || (offset.y.abs() <= 1.0 + slack && offset.xz().length() <= CREATURE_RADIUS + slack)
+}
 
 /// The chunks the server holds for its players, and those of them it's generating itself.
 #[derive(Resource, Default)]
@@ -24,8 +34,8 @@ pub struct ServerChunks {
     generating: HashMap<ChunkCoordinate, Task<ChunkData>>,
 }
 
-/// Keeps the chunks near every player loaded, for checking edits and, later, movement against,
-/// and lets go of those no player is near. Nothing is meshed. A chunk already loaded, or on its
+/// Keeps the chunks near every player loaded, for checking edits and movement against and for
+/// creatures to walk on, and lets go of those no player is near. Nothing is meshed. A chunk already loaded, or on its
 /// way for the client, isn't generated again, so in singleplayer, where the client loads far
 /// more, this almost never generates anything.
 pub fn keep_chunks_near_players(
@@ -51,12 +61,10 @@ pub fn keep_chunks_near_players(
             ChunkCoordinate::containing(eye.floor().as_i64vec3())
         })
         .collect();
-    let near = |coord: ChunkCoordinate, radius| {
-        eyes.iter()
-            .any(|eye| (coord.0 - eye.0).as_vec3().length() <= radius)
-    };
     chunks.held.retain(|&coord| {
-        let keep = near(coord, RELEASE_RADIUS);
+        let keep = eyes
+            .iter()
+            .any(|eye| held_for(coord.0 - eye.0, RELEASE_SLACK));
         if !keep {
             // dropping a task cancels it
             chunks.generating.remove(&coord);
@@ -66,14 +74,14 @@ pub fn keep_chunks_near_players(
     });
 
     let layers = World::layers(world.height);
-    let r = LOAD_RADIUS as i64;
+    let (across, up) = (CREATURE_RADIUS as i64, LOAD_RADIUS as i64);
     for eye in &eyes {
-        for x in -r..=r {
-            for y in -r..=r {
-                for z in -r..=r {
+        for x in -across..=across {
+            for y in -up..=up {
+                for z in -across..=across {
                     let offset = I64Vec3::new(x, y, z);
                     let coord = ChunkCoordinate(eye.0 + offset);
-                    if offset.as_vec3().length() > LOAD_RADIUS
+                    if !held_for(offset, 0.0)
                         || !layers.contains(&coord.0.y)
                         || !chunks.held.insert(coord)
                     {

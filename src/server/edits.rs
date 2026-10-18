@@ -27,7 +27,7 @@ use crate::world::World;
 // two for the server's copy of a client's player trailing the client by up to a pose's
 // interval and the trip here, a tenth of a second together, flying at the usual 20 blocks a
 // second. Building while sprinting through the air at 80 is too fast to be worth covering.
-const REACH_SLACK: f32 = 3.0;
+pub(super) const REACH_SLACK: f32 = 3.0;
 // Clicking as fast as anyone can is about 15 a second, so creative building at full speed never
 // meets this, and a burst of a second's worth lets a quick flurry of clicks through whole. It only
 // stops a client flooding the server with edits.

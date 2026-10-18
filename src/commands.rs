@@ -3,12 +3,13 @@
 
 use bevy::math::Vec3;
 
+use crate::creatures::CreatureKind;
 use crate::game_mode::GameMode;
 
 // Each way to type a command as `/help` lists it, what it does, and whether only operators may
 // run it: those that change the world or other players. The clock's keys are listed too, as
 // they wind everyone's.
-const USAGES: [(&str, &str, bool); 17] = [
+const USAGES: [(&str, &str, bool); 18] = [
     (
         "/tp <x> <y> <z>",
         "teleport there; ~ means where you are, ~10 ten blocks on from it",
@@ -43,6 +44,11 @@ const USAGES: [(&str, &str, bool); 17] = [
     (
         "/structure list",
         "list the structures there are to place",
+        true,
+    ),
+    (
+        "/summon <creature> [<x> <y> <z>]",
+        "bring a creature, such as a sheep, where you are or there",
         true,
     ),
     (
@@ -125,6 +131,11 @@ pub(crate) enum Command {
         rotation: u8,
     },
     ListStructures,
+    /// Brings a creature of `kind` to `at`.
+    Summon {
+        kind: CreatureKind,
+        at: Vec3,
+    },
 }
 
 /// Where `/tp` goes.
@@ -210,6 +221,32 @@ pub(crate) fn parse(line: &str, from: Vec3, op: bool) -> Result<Command, String>
             [player] => Ok(Command::Deop(player.into())),
             _ => Err("Usage: /deop <player>".into()),
         },
+        "summon" => {
+            let kind = args.first().map(|name| {
+                CreatureKind::from_name(name).ok_or_else(|| {
+                    let kinds: Vec<_> = CreatureKind::ALL.iter().map(|kind| kind.name()).collect();
+                    format!(
+                        "There's no creature called {name}, only {}",
+                        kinds.join(", ")
+                    )
+                })
+            });
+            match (kind, &args[..]) {
+                (Some(kind), [_]) => Ok(Command::Summon {
+                    kind: kind?,
+                    at: from,
+                }),
+                (Some(kind), [_, x, y, z]) => Ok(Command::Summon {
+                    kind: kind?,
+                    at: Vec3::new(
+                        coordinate(x, from.x)?,
+                        coordinate(y, from.y)?,
+                        coordinate(z, from.z)?,
+                    ),
+                }),
+                _ => Err("Usage: /summon <creature> [<x> <y> <z>]".into()),
+            }
+        }
         "list" => Ok(Command::List),
         "msg" => {
             // the text as typed, spaces and all
@@ -479,6 +516,29 @@ mod tests {
     }
 
     #[test]
+    fn test_summon_brings_a_creature_by_name_here_or_there() {
+        let sheep = CreatureKind::Sheep;
+        assert_eq!(
+            Ok(Command::Summon {
+                kind: sheep,
+                at: HERE
+            }),
+            parse("/summon sheep", HERE)
+        );
+        assert_eq!(
+            Ok(Command::Summon {
+                kind: sheep,
+                at: Vec3::new(1.0, 65.0, 3.0)
+            }),
+            parse("/summon sheep 1 ~1 3", HERE)
+        );
+        let unknown = parse("/summon dragon", HERE).unwrap_err();
+        assert!(unknown.contains("only sheep"), "{unknown}");
+        assert!(parse("/summon", HERE).is_err());
+        assert!(parse("/summon sheep 1 2", HERE).is_err());
+    }
+
+    #[test]
     fn test_only_operators_may_change_things_and_are_told_of_them() {
         let refused = super::parse("/gamemode", HERE, false).unwrap_err();
         assert!(refused.contains("permission to use /gamemode"), "{refused}");
@@ -489,6 +549,7 @@ mod tests {
             "/deop sam",
             "/pos1",
             "/structure list",
+            "/summon sheep",
         ] {
             assert!(super::parse(line, HERE, false).is_err(), "{line}");
         }

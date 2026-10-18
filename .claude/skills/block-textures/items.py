@@ -120,6 +120,21 @@ def bread():
     return out
 
 
+def mutton(colours):
+    """A leg of meat on the diagonal, fat along its top, with the bone sticking out of its narrow end."""
+    def make():
+        out = np.zeros((16, 16, 4))
+        joint = ((U - 13.0) / 6.2) ** 2 + (V / (3.0 + (U - 7.0) * 0.25)) ** 2 < 1.0
+        bone = (np.abs(V) < 0.8) & (U > 2.5) & (U < 8.0)
+        knob = ((U - 3.0) ** 2 + V ** 2 < 2.2)
+        lit((bone | knob) & ~joint, np.array([(178, 170, 150), (224, 218, 200), (246, 242, 230)], float), out)
+        lit(joint, colours, out)
+        out[joint & (V < -1.6) & (V > -3.4) & ~shift(joint, 1, -1)] = (*colours[2] * 0.5 + 120, 255)  # the fat on its back
+        outline(out)
+        return out
+    return make
+
+
 def shift(a, dy, dx):
     """`a` moved by (dy, dx), filling in with zeros: sprites don't wrap round, as tiles do."""
     out = np.zeros_like(a)
@@ -192,6 +207,8 @@ SPRITES["apple"] = apple
 for material in ["wooden", "stone", "copper", "iron"]:
     SPRITES[f"{material}_hoe"] = lambda material=material: tool(hoe, MATERIALS[material])
 SPRITES.update(seeds=seeds, wheat=sheaf, bread=bread)
+SPRITES.update(mutton=mutton(np.array([(150, 40, 46), (200, 66, 70), (232, 118, 112)], float)),
+               cooked_mutton=mutton(np.array([(92, 48, 26), (138, 78, 42), (180, 116, 66)], float)))
 
 
 def table_order():

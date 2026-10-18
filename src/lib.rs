@@ -11,6 +11,7 @@ pub mod collision;
 pub mod commands;
 pub mod containers;
 pub mod crafting;
+pub mod creatures;
 #[cfg(feature = "client")]
 pub mod curvature;
 #[cfg(feature = "client")]

@@ -29,7 +29,19 @@ impl Region {
     }
 
     pub fn file_name(self) -> String {
-        format!("r.{}.{}.{EXTENSION}", self.x, self.z)
+        self.file_name_for(EXTENSION)
+    }
+
+    /// Its file's name among those with `extension`, `r.<x>.<z>.<extension>`.
+    pub fn file_name_for(self, extension: &str) -> String {
+        format!("r.{}.{}.{extension}", self.x, self.z)
+    }
+
+    /// The region a file's for by its name, if it's a region's.
+    pub fn from_file_name(name: &str) -> Option<Self> {
+        let mut parts = name.strip_prefix("r.")?.split('.');
+        let (x, z) = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+        Some(Self { x, z })
     }
 }
 

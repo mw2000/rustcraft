@@ -41,16 +41,18 @@ pub struct Poses {
     shown: Option<f64>,
 }
 
+/// Where something seen was, which way it faced and looked, at `at` milliseconds by its clock.
 #[derive(Clone, Copy, Debug)]
-struct Pose {
-    at: f64,
-    position: Vec3,
-    yaw: f32,
-    pitch: f32,
+pub(super) struct Pose {
+    pub at: f64,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 impl Poses {
-    fn add(&mut self, pose: Pose) {
+    /// Keeps `pose`, unless a newer one's come already.
+    pub(super) fn add(&mut self, pose: Pose) {
         // what's overtaken a pose sent after it on the way is out of date
         if self.poses.back().is_some_and(|newest| newest.at >= pose.at) {
             return;
@@ -138,8 +140,8 @@ pub(super) fn receive_poses(
     }
 }
 
-/// Puts each player seen where their poses say they are now, facing the way they look, and shows
-/// them once they've had one.
+/// Puts each player seen, and each creature (`client::creatures`), where their poses say they
+/// are now, facing the way they look, and shows them once they've had one.
 pub(super) fn move_seen(
     time: Res<Time>,
     mut seen: Query<(&mut Poses, &mut Transform, &mut PlayerLook, &mut Visibility)>,

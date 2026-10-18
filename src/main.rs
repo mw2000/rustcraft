@@ -21,6 +21,7 @@ use rustcraft::client::authoring::AuthoringPlugin;
 use rustcraft::client::clock::{follow_clock, wind_clock};
 use rustcraft::client::command_bar::{command_bar_closed, CommandPlugin};
 use rustcraft::client::cracks::DrawCracksPlugin;
+use rustcraft::client::creatures::DrawCreaturesPlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::join::{join, server_address};
 use rustcraft::client::models::DrawPlayersPlugin;
@@ -241,6 +242,7 @@ fn main() {
         InventoryScreenPlugin,
         DrawDropsPlugin,
         DrawPlayersPlugin,
+        DrawCreaturesPlugin,
         DrawCracksPlugin,
         MapPlugin,
         AuthoringPlugin,

@@ -25,12 +25,14 @@ use rustcraft::chunks::chunk_loader::ChunkLoader;
 use rustcraft::chunks::generate::checksum::world_checksum;
 use rustcraft::chunks::generate::generator::generate_chunk;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
+use rustcraft::client::creatures::SeenCreature;
 use rustcraft::client::join::{connect, GenerationChecksum};
 use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clock::TimeOfDay;
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
+use rustcraft::creatures::{Creature, CreatureKind, CreaturePose, Flinches};
 use rustcraft::farming::Crops;
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
@@ -39,10 +41,11 @@ use rustcraft::player::name::PlayerName;
 use rustcraft::player::{Movement, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{
     BlockChanged, Chat, ChatLine, ChunkEdits, CommandOutput, ContainerChanged, EditRejected,
-    EditSummary, PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn, RunCommand,
-    StartBreaking, Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
+    EditSummary, HitCreature, PlayerMoved, PlayerPose, ProtocolPlugin, RequestEdit, Respawn,
+    RunCommand, StartBreaking, Teleport, UseBlock, WindClock, MAX_CHAT_LENGTH,
 };
 use rustcraft::save::{SavePlugin, WorldFile, WorldSave};
+use rustcraft::server::creatures::{creature, Health, SpawnRate};
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, Console, DedicatedServerPlugins, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
@@ -1679,5 +1682,99 @@ fn test_a_dedicated_server_has_no_player_of_its_own_and_takes_commands_from_its_
     let coord = ChunkCoordinate::containing(below);
     let local = ChunkCoordinate::local_block(below);
     assert!(edits.in_chunk(coord).eq([(local, BlockType::Bricks)]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// The creatures a client has been shown, as the server's entities are to it.
+fn creatures_shown(client: &mut App) -> Vec<(Entity, CreaturePose)> {
+    let mut creatures = client
+        .world_mut()
+        .query_filtered::<(Entity, &CreaturePose), With<Creature>>();
+    creatures
+        .iter(client.world())
+        .map(|(creature, pose)| (creature, *pose))
+        .collect()
+}
+
+#[test]
+fn test_a_joiner_sees_the_creatures_near_it_moving_smoothly_and_hits_them() {
+    let dir = temp_dir("creatures");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    server.insert_resource(SpawnRate(None));
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let guest = guests_player(&mut server);
+    let spawn = server.world().get::<Transform>(guest).unwrap().translation;
+    // the host far off, with a sheep beside them, and the guest stood on the ground with one
+    // dropped beside them
+    let host = player_of(&mut server, ClientId::Server);
+    let far = spawn + Vec3::X * 300.0;
+    move_player(&mut server, host, far);
+    let generated = |server: &mut App, at: Vec3| {
+        let world = server.world().resource::<World>();
+        world.is_chunk_generated(ChunkCoordinate::containing(at.floor().as_i64vec3()))
+    };
+    let ground = |server: &mut App, at: Vec3| {
+        let world = server.world().resource::<World>();
+        let mut block = at.floor().as_i64vec3() + I64Vec3::Y * 12;
+        while !world.get_block_at(block).is_solid() {
+            block.y -= 1;
+        }
+        block.as_vec3() + Vec3::new(0.5, 1.0, 0.5)
+    };
+    update_until(&mut server, &mut client, |server, _| {
+        generated(server, far) && generated(server, spawn - Vec3::Y * 16.0)
+    });
+    let feet = ground(&mut server, spawn);
+    teleport(&mut client, feet);
+    update_until(&mut server, &mut client, |server, _| {
+        let at = server.world().get::<Transform>(guest).unwrap().translation;
+        at.distance(feet) < 1e-3
+    });
+    let sheep = |at| creature(CreatureKind::Sheep, at, 8, 0.0);
+    server.world_mut().spawn(sheep(far + Vec3::X * 2.0));
+    let below = ground(&mut server, feet + Vec3::X * 2.0);
+    let near = server.world_mut().spawn(sheep(below + Vec3::Y * 3.0)).id();
+    update_until(&mut server, &mut client, |_, client| {
+        !creatures_shown(client).is_empty()
+    });
+    let (shown_sheep, _) = creatures_shown(&mut client)[0];
+    let mut seen = client
+        .world_mut()
+        .query::<(&SeenCreature, &Transform, &Visibility)>();
+    // shown falling between the poses it's sent, not jumping from one to the next
+    let (mut sent, mut shown) = (Vec::new(), Vec::new());
+    update_until(&mut server, &mut client, |_, client| {
+        let pose = creatures_shown(client)[0].1;
+        if sent.last() != Some(&pose.position.y) {
+            sent.push(pose.position.y);
+        }
+        let (_, body, visibility) = seen.single(client.world()).unwrap();
+        if *visibility != Visibility::Hidden {
+            shown.push(body.translation.y);
+        }
+        // a 3-block fall takes under half a second, and it's shown a tenth of one behind
+        shown.len() * FRAME.as_millis() as usize > 1000
+    });
+    // only the fall, as once it's landed it may wander off and hop up a block
+    let falling = sent.windows(2).take_while(|pair| pair[1] < pair[0]).count();
+    let (sent, landed) = (&sent[..=falling], sent[falling]);
+    let shown = &shown[..=shown.iter().position(|&y| y <= landed + 1e-3).unwrap()];
+    let between = shown.iter().filter(|&&y| {
+        let (above, below) = (sent.iter().any(|&s| s > y), sent.iter().any(|&s| s < y));
+        above && below && !sent.iter().any(|&s| (s - y).abs() < 1e-4)
+    });
+    assert!(between.count() > 3, "{shown:?} from {sent:?}");
+    assert!(shown.windows(2).all(|pair| pair[1] <= pair[0]), "{shown:?}");
+    // and only the one near it, not the host's far off
+    assert_eq!(1, creatures_shown(&mut client).len());
+
+    // a hit in its reach hurts it, and the client's told it flinched
+    client.world_mut().write_message(HitCreature {
+        creature: shown_sheep,
+    });
+    update_until(&mut server, &mut client, |server, client| {
+        let hurt = server.world().get::<Health>(near).unwrap().points == 7;
+        hurt && client.world().get::<Flinches>(shown_sheep) == Some(&Flinches(1))
+    });
     std::fs::remove_dir_all(&dir).unwrap();
 }

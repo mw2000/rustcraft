@@ -39,7 +39,7 @@ pub fn player_move(
             Movement::Walk => Movement::Fly,
             Movement::Fly => Movement::Walk,
         };
-        player.velocity = Vec3::ZERO;
+        player.stop();
         info!("{:?}ing", player.movement);
     }
     let block = |at| {

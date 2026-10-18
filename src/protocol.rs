@@ -9,6 +9,10 @@
 //!
 //! Players are replicated to everyone but their owner, who moves its own (M0.6d): their name,
 //! game mode and what they hold, with where they are and look relayed as `PlayerMoved`.
+//!
+//! Creatures are replicated to the clients whose players are near them (M3.1): their kind,
+//! their pose, which the server sets 20 times a second as they move, and how many times
+//! they've been hurt. Clients hit them with `HitCreature`.
 
 use std::time::Duration;
 
@@ -26,6 +30,7 @@ use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::chunks::lod::CellEdits;
 use crate::containers::Container;
 use crate::crafting::Recipe;
+use crate::creatures::{Creature, CreaturePose, Flinches};
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
 use crate::items::Item;
@@ -33,6 +38,7 @@ use crate::player::name::PlayerName;
 use crate::player::{Movement, PlayerOwner};
 use crate::save::region::{local_block, local_index};
 use crate::save::PlayerState;
+use crate::server::creatures::Whereabouts;
 use crate::server::drops::DroppedItem;
 use crate::server::HeldItem;
 use crate::survival::Vitals;
@@ -42,7 +48,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -109,7 +115,13 @@ impl Plugin for ProtocolPlugin {
             .add_client_message::<Chat>(Channel::Ordered)
             .add_server_message::<ChatLine>(Channel::Ordered)
             // in the order the commands changing it are run
-            .add_server_message::<SelectionChanged>(Channel::Ordered);
+            .add_server_message::<SelectionChanged>(Channel::Ordered)
+            // to the clients near them, which draw them between their poses (§5.8)
+            .replicate::<Creature>()
+            .replicate::<CreaturePose>()
+            .replicate::<Flinches>()
+            .add_visibility_filter::<Whereabouts>()
+            .add_mapped_client_message::<HitCreature>(Channel::Ordered);
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -502,6 +514,14 @@ pub struct Respawn;
 pub struct VitalsChanged {
     pub vitals: Vitals,
     pub asleep: bool,
+}
+
+/// A player hitting the creature `creature` with what they hold, which the server checks is in
+/// their reach.
+#[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitCreature {
+    #[entities]
+    pub creature: Entity,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself

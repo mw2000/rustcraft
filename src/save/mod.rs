@@ -1,3 +1,4 @@
+mod creatures;
 pub(crate) mod region;
 mod world_file;
 
@@ -20,8 +21,10 @@ use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use bevy_replicon::prelude::ClientId;
 
+use crate::chunks::chunk::ChunkCoordinate;
 use crate::clock::{TimeOfDay, START_TIME};
 use crate::containers::Containers;
+use crate::creatures::{Creature, SavedCreature};
 use crate::edits::Edits;
 use crate::farming::Crops;
 use crate::game_mode::GameMode;
@@ -29,6 +32,7 @@ use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
+use crate::server::creatures::{Dormant, Health};
 use crate::server::Operators;
 use crate::survival::{SpawnBed, Vitals};
 use crate::world::World;
@@ -40,9 +44,10 @@ const WORLD_FILE: &str = "world.toml";
 const EDITS_DIR: &str = "edits";
 const PLAYERS_DIR: &str = "players";
 
-/// Saves the world (§4.3): its edits, containers and crops, `world.toml` with the host's player, and
-/// each player who's joined from elsewhere as `players/<name>.toml`, every so often if they've
-/// changed, as such a player leaves, and as the game quits.
+/// Saves the world (§4.3): its edits, containers and crops, `world.toml` with the host's player,
+/// each player who's joined from elsewhere as `players/<name>.toml`, and its creatures by region
+/// in `creatures/`, every so often if they've changed, as such a player leaves, and as the game
+/// quits.
 pub struct SavePlugin;
 
 impl Plugin for SavePlugin {
@@ -82,6 +87,12 @@ pub struct WorldSave {
     players: HashMap<String, PlayerState>,
     // those of them changed since they were last written
     unsaved_players: HashSet<String>,
+    // the creatures read as the world opened, until the server takes them
+    opened_creatures: Vec<SavedCreature>,
+    // each region's creatures as they were last written, and the regions to write whatever
+    // they hold, as writing them failed
+    written_creatures: HashMap<Region, Vec<SavedCreature>>,
+    unsaved_creatures: HashSet<Region>,
     writing: Option<Writing>,
     next_autosave: Duration,
 }
@@ -90,9 +101,11 @@ pub struct WorldSave {
 // it fails.
 struct Writing {
     task: Task<io::Result<()>>,
-    regions: Vec<Region>,
-    players: Vec<String>,
+    contents: Contents,
 }
+
+// What a save writes: the regions of edits, the players and the regions of creatures.
+type Contents = (Vec<Region>, Vec<String>, Vec<Region>);
 
 /// What's changed since the last save, copied from the game to be written apart from it.
 struct Snapshot {
@@ -100,6 +113,8 @@ struct Snapshot {
     world_file: Option<WorldFile>,
     regions: HashMap<Region, Vec<ChunkEdits>>,
     players: Vec<(String, PlayerState)>,
+    // each region's creatures, none to remove its file
+    creatures: Vec<(Region, Vec<SavedCreature>)>,
 }
 
 impl WorldSave {
@@ -183,6 +198,31 @@ impl WorldSave {
             Err(error) => return Err(error),
         }
 
+        let mut written_creatures: HashMap<Region, Vec<SavedCreature>> = HashMap::new();
+        match fs::read_dir(dir.join(creatures::DIR)) {
+            Ok(entries) => {
+                for entry in entries {
+                    let path = entry?.path();
+                    let region = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .and_then(Region::from_file_name);
+                    if path.extension() != Some(creatures::EXTENSION.as_ref()) {
+                        continue;
+                    }
+                    let Some(region) = region else {
+                        continue;
+                    };
+                    let saved = creatures::decode(&fs::read(&path)?).map_err(|error| {
+                        io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+                    })?;
+                    written_creatures.insert(region, saved);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
         let save = Self {
             dir,
             unsaved: HashSet::new(),
@@ -190,10 +230,18 @@ impl WorldSave {
             host: file.player.clone(),
             players,
             unsaved_players: HashSet::new(),
+            opened_creatures: written_creatures.values().flatten().copied().collect(),
+            written_creatures,
+            unsaved_creatures: HashSet::new(),
             writing: None,
             next_autosave: AUTOSAVE_INTERVAL,
         };
         Ok((save, file, edits, containers, crops))
+    }
+
+    /// The creatures saved in the world, once, as it opens.
+    pub fn take_creatures(&mut self) -> Vec<SavedCreature> {
+        std::mem::take(&mut self.opened_creatures)
     }
 
     /// The saved state of the player from elsewhere called `name`, if they've played here.
@@ -279,15 +327,60 @@ impl WorldSave {
             world_file,
             regions,
             players,
+            creatures: Vec::new(),
         }
     }
 
+    // The regions whose creatures aren't as they were last written, each with all of its own,
+    // in an order of their own so the same creatures are always written the same.
+    fn changed_creatures(
+        &mut self,
+        creatures: impl IntoIterator<Item = SavedCreature>,
+    ) -> Vec<(Region, Vec<SavedCreature>)> {
+        let mut now: HashMap<Region, Vec<SavedCreature>> = HashMap::new();
+        for creature in creatures {
+            let at = creature.position.floor().as_i64vec3();
+            let region = Region::containing(ChunkCoordinate::containing(at));
+            now.entry(region).or_default().push(creature);
+        }
+        for creatures in now.values_mut() {
+            creatures.sort_unstable_by_key(|creature| {
+                let [x, y, z] = creature.position.to_array().map(f32::to_bits);
+                (creature.kind.name(), x, y, z, creature.health)
+            });
+        }
+        let gone: Vec<Region> = self
+            .written_creatures
+            .keys()
+            .filter(|&region| !now.contains_key(region))
+            .copied()
+            .collect();
+        let mut changed = Vec::new();
+        for region in gone {
+            self.written_creatures.remove(&region);
+            changed.push((region, Vec::new()));
+        }
+        for (region, creatures) in now {
+            let unsaved = self.unsaved_creatures.remove(&region);
+            if unsaved || self.written_creatures.get(&region) != Some(&creatures) {
+                self.written_creatures.insert(region, creatures.clone());
+                changed.push((region, creatures));
+            }
+        }
+        // those that failed and have none now, to remove
+        for region in self.unsaved_creatures.drain() {
+            changed.push((region, Vec::new()));
+        }
+        changed
+    }
+
     // A failed save leaves what it was writing to be written next time.
-    fn finished(&mut self, result: io::Result<()>, regions: Vec<Region>, players: Vec<String>) {
+    fn finished(&mut self, result: io::Result<()>, (regions, players, creatures): Contents) {
         if let Err(error) = result {
             error!("couldn't save the world in {}: {error}", self.dir.display());
             self.unsaved.extend(regions);
             self.unsaved_players.extend(players);
+            self.unsaved_creatures.extend(creatures);
             self.written = None;
         }
     }
@@ -295,14 +388,18 @@ impl WorldSave {
 
 impl Snapshot {
     fn is_empty(&self) -> bool {
-        self.world_file.is_none() && self.regions.is_empty() && self.players.is_empty()
+        self.world_file.is_none()
+            && self.regions.is_empty()
+            && self.players.is_empty()
+            && self.creatures.is_empty()
     }
 
     // What to write again if writing it fails.
-    fn contents(&self) -> (Vec<Region>, Vec<String>) {
+    fn contents(&self) -> Contents {
         let regions = self.regions.keys().copied().collect();
         let players = self.players.iter().map(|(name, _)| name.clone()).collect();
-        (regions, players)
+        let creatures = self.creatures.iter().map(|(region, _)| *region).collect();
+        (regions, players, creatures)
     }
 
     fn write(self) -> io::Result<()> {
@@ -322,6 +419,21 @@ impl Snapshot {
             for (name, state) in self.players {
                 let text = toml::to_string(&state).expect("players always encode");
                 write_atomically(&players_dir.join(name + ".toml"), text.as_bytes())?;
+            }
+        }
+        if !self.creatures.is_empty() {
+            let creatures_dir = self.dir.join(creatures::DIR);
+            fs::create_dir_all(&creatures_dir)?;
+            for (region, saved) in self.creatures {
+                let path = creatures_dir.join(region.file_name_for(creatures::EXTENSION));
+                if saved.is_empty() {
+                    match fs::remove_file(&path) {
+                        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                        _ => {}
+                    }
+                } else {
+                    write_atomically(&path, &creatures::encode(&saved))?;
+                }
             }
         }
         Ok(())
@@ -347,6 +459,8 @@ struct Savable<'w, 's> {
     crops: ResMut<'w, Crops>,
     clock: Res<'w, TimeOfDay>,
     operators: Res<'w, Operators>,
+    dormant: Option<Res<'w, Dormant>>,
+    creatures: Query<'w, 's, (&'static Creature, &'static Transform, &'static Health)>,
     players: Query<
         'w,
         's,
@@ -380,12 +494,28 @@ impl Savable<'_, '_> {
                 _ => {}
             }
         }
-        save.snapshot(
+        // those near players as they are, and those asleep
+        let awake = self
+            .creatures
+            .iter()
+            .map(|(creature, body, health)| SavedCreature {
+                kind: creature.0,
+                position: body.translation,
+                health: health.points,
+            });
+        let asleep = self
+            .dormant
+            .iter()
+            .flat_map(|dormant| dormant.0.values().flatten());
+        let creatures = awake.chain(asleep.copied());
+        let mut snapshot = save.snapshot(
             self.world.edits_mut(),
             &mut self.containers,
             &mut self.crops,
             file,
-        )
+        );
+        snapshot.creatures = save.changed_creatures(creatures);
+        snapshot
     }
 }
 
@@ -395,10 +525,8 @@ fn autosave(time: Res<Time<Real>>, mut save: ResMut<WorldSave>, mut savable: Sav
         let Some(result) = futures::check_ready(&mut writing.task) else {
             return;
         };
-        let Writing {
-            regions, players, ..
-        } = save.writing.take().unwrap();
-        save.finished(result, regions, players);
+        let contents = save.writing.take().unwrap().contents;
+        save.finished(result, contents);
     }
     if time.elapsed() < save.next_autosave {
         return;
@@ -408,13 +536,9 @@ fn autosave(time: Res<Time<Real>>, mut save: ResMut<WorldSave>, mut savable: Sav
     if snapshot.is_empty() {
         return;
     }
-    let (regions, players) = snapshot.contents();
+    let contents = snapshot.contents();
     let task = IoTaskPool::get().spawn(async move { snapshot.write() });
-    save.writing = Some(Writing {
-        task,
-        regions,
-        players,
-    });
+    save.writing = Some(Writing { task, contents });
 }
 
 // The last save is written here on the main thread, after any still being written, rather than
@@ -428,15 +552,15 @@ fn save_on_exit(
         return;
     }
     if let Some(writing) = save.writing.take() {
-        save.finished(block_on(writing.task), writing.regions, writing.players);
+        save.finished(block_on(writing.task), writing.contents);
     }
     let snapshot = savable.snapshot(&mut save);
-    let (regions, players) = snapshot.contents();
+    let contents = snapshot.contents();
     let result = snapshot.write();
     if result.is_ok() {
         info!("saved the world in {}", save.dir.display());
     }
-    save.finished(result, regions, players);
+    save.finished(result, contents);
 }
 
 #[cfg(test)]
@@ -452,12 +576,15 @@ mod tests {
     use bevy_replicon::prelude::*;
 
     use super::world_file::FORMAT_VERSION;
-    use super::{region, Region, SavePlugin, WorldFile, WorldSave, EDITS_DIR, WORLD_FILE};
+    use super::{
+        creatures, region, Region, SavePlugin, WorldFile, WorldSave, EDITS_DIR, WORLD_FILE,
+    };
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
     use crate::clock::TimeOfDay;
     use crate::containers::{Containers, FUEL, INPUT};
     use crate::crafting::SMELT_TIME;
+    use crate::creatures::{CreatureKind, SavedCreature};
     use crate::edits::Edits;
     use crate::farming::Crops;
     use crate::game_mode::GameMode;
@@ -467,6 +594,7 @@ mod tests {
     use crate::player::name::PlayerName;
     use crate::player::{Movement, Player, PlayerLook};
     use crate::protocol::ProtocolPlugin;
+    use crate::server::creatures::{creature, Dormant, SpawnRate};
     use crate::server::{ServerPlugin, WorldToOpen};
 
     // A directory of its own under the system's temporary one, removed afterwards.
@@ -778,6 +906,57 @@ mod tests {
         world.insert_chunk(ChunkCoordinate::containing(built), ChunkData::default());
         assert_eq!(BlockType::Furnace, world.get_block_at(built));
         assert_eq!(BlockType::Air, world.get_block_at(built + I64Vec3::Y));
+    }
+
+    #[test]
+    fn test_creatures_are_there_after_a_restart_and_gone_once_theyve_gone() {
+        let dir = TempDir::new("creatures");
+        let mut app = play(&dir);
+        app.insert_resource(SpawnRate(None));
+        let near = Vec3::new(3.5, 470.0, -2.5);
+        let far = SavedCreature {
+            kind: CreatureKind::Sheep,
+            position: Vec3::new(5000.5, 466.0, 20.25),
+            health: 3,
+        };
+        app.world_mut()
+            .spawn(creature(CreatureKind::Sheep, near, 6, 0.0));
+        app.world_mut().resource_mut::<Dormant>().0.insert(
+            Region::containing(ChunkCoordinate::containing(far.position.as_i64vec3())),
+            vec![far],
+        );
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        drop(app);
+        assert_eq!(
+            2,
+            fs::read_dir(dir.world().join(creatures::DIR))
+                .unwrap()
+                .count()
+        );
+
+        let mut app = play(&dir);
+        app.insert_resource(SpawnRate(None));
+        let mut saved: Vec<_> = app
+            .world()
+            .resource::<Dormant>()
+            .0
+            .values()
+            .flatten()
+            .map(|creature| (creature.position.x, creature.health))
+            .collect();
+        saved.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(vec![(near.x, 6), (far.position.x, 3)], saved);
+        // and gone from the save once they're gone from the world
+        app.world_mut().resource_mut::<Dormant>().0.clear();
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        assert_eq!(
+            0,
+            fs::read_dir(dir.world().join(creatures::DIR))
+                .unwrap()
+                .count()
+        );
     }
 
     #[test]

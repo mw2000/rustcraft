@@ -211,6 +211,10 @@ recipes! {
         name: "stone", station: Furnace,
         ingredients: [(COBBLESTONE, 1)], output: (Item::Block(BlockType::Stone), 1),
     },
+    CookedMutton {
+        name: "cooked_mutton", station: Furnace,
+        ingredients: [(Item::Mutton, 1)], output: (Item::CookedMutton, 1),
+    },
 }
 
 /// Seconds a furnace takes to smelt one item.

@@ -122,7 +122,8 @@ pub const CELLS: usize = (CHUNK_SIZE as usize).pow(3);
 pub const MESH_OFFSET: Vec3 = Vec3::splat(0.5);
 
 // x outer, z middle, y inner - matches generate_chunk's loop order, so terrain bands form long runs.
-fn linear_index(coord: U16Vec3) -> usize {
+/// Where the block at `coord` is in a chunk's cells, as `ChunkData::decode_into` lays them out.
+pub(crate) fn linear_index(coord: U16Vec3) -> usize {
     assert!(
         coord.max_element() < CHUNK_SIZE,
         "block {coord:?} not in chunk"

@@ -5,10 +5,12 @@ use bevy::prelude::*;
 use crate::block::BlockType;
 use crate::breaking::{break_time, crack_stage};
 use crate::client::command_bar::command_bar_closed;
+use crate::client::creatures::{creature_hit, SeenCreature};
 use crate::client::player::LocalPlayer;
-use crate::collision::{looked_at, Hit};
+use crate::collision::{looked_at, ray_distance, Aabb, Hit};
 use crate::containers::Container;
 use crate::crafting::Station;
+use crate::creatures::Creature;
 use crate::farming::tilled;
 use crate::game_mode::GameMode;
 use crate::inventory::furnace::ContainerView;
@@ -18,8 +20,8 @@ use crate::inventory::Inventory;
 use crate::items::{Item, ToolKind};
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
-use crate::player::PlayerLook;
-use crate::protocol::{PickBlock, RequestEdit, StartBreaking, UseBlock};
+use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
+use crate::protocol::{HitCreature, PickBlock, RequestEdit, StartBreaking, UseBlock};
 use crate::world::World;
 
 // Just over a block wide, so the outline isn't hidden in the block's own faces.
@@ -45,6 +47,7 @@ pub struct InteractionPlugin;
 impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Target>()
+            .init_resource::<TargetCreature>()
             .init_resource::<CraftingStation>()
             .init_resource::<ContainerView>()
             .init_resource::<Breaking>()
@@ -178,13 +181,38 @@ impl EditRequests<'_> {
     }
 }
 
+/// The creature looked at, if there's one in reach nearer than any block, which a left click
+/// hits rather than the block behind it.
+#[derive(Resource, Default, Debug)]
+pub struct TargetCreature(pub Option<Entity>);
+
+// The block looked at, or the creature in front of it.
 fn target_block(
     world: Res<World>,
     mut target: ResMut<Target>,
+    mut creature: ResMut<TargetCreature>,
     player: Query<(&Transform, &PlayerLook), With<LocalPlayer>>,
+    seen: Query<(&SeenCreature, &Transform)>,
+    creatures: Query<&Creature>,
 ) {
     let (feet, look) = player.single().expect("player does not exist");
-    target.0 = looked_at(&world, feet.translation, *look);
+    let block = looked_at(&world, feet.translation, *look);
+    let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
+    let block_distance = block.map_or(REACH, |hit| {
+        let cube = Aabb {
+            min: Vec3::ZERO,
+            max: Vec3::ONE,
+        };
+        ray_distance(eye, look.forward(), hit.block.as_vec3(), cube).unwrap_or(0.0)
+    });
+    let seen = seen.iter().filter_map(|(seen, body)| {
+        creatures
+            .get(seen.0)
+            .ok()
+            .map(|creature| (seen, body, creature.0))
+    });
+    creature.0 = creature_hit(eye, look.forward(), block_distance, seen).map(|(hit, _)| hit);
+    target.0 = block.filter(|_| creature.0.is_none());
 }
 
 fn outline_target(target: Res<Target>, mut gizmos: Gizmos<OutlineGizmos>) {
@@ -199,10 +227,13 @@ fn outline_target(target: Res<Target>, mut gizmos: Gizmos<OutlineGizmos>) {
 
 // Left click breaks the block looked at in creative. In survival the mouse is held on it, the
 // server told when it starts, and it breaks once it's been held as long as it takes with the
-// tool in the selected slot, which the server checks.
+// tool in the selected slot, which the server checks. On a creature, it hits it.
+#[allow(clippy::too_many_arguments)]
 fn break_target(
     world: Res<World>,
     target: Res<Target>,
+    creature: Res<TargetCreature>,
+    mut hits: MessageWriter<HitCreature>,
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
@@ -211,6 +242,9 @@ fn break_target(
 ) {
     let (mode, hotbar, inventory) = player.single().expect("player does not exist");
     let slot = hotbar.selected as u8;
+    if let Some(creature) = creature.0.filter(|_| mouse.just_pressed(MouseButton::Left)) {
+        hits.write(HitCreature { creature });
+    }
     if mode.breaks_at_once() {
         if let Some(hit) = target.0.filter(|_| mouse.just_pressed(MouseButton::Left)) {
             requests.edit(hit.block, BlockType::Air, slot);
@@ -509,7 +543,9 @@ mod tests {
         use bevy_replicon::prelude::ClientId;
         use bevy_replicon::RepliconPlugins;
 
-        use super::super::{break_target, use_station, use_target, Breaking, EditSeq, Hit, Target};
+        use super::super::{
+            break_target, use_station, use_target, Breaking, EditSeq, Hit, Target, TargetCreature,
+        };
         use crate::block::BlockType;
         use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
         use crate::chunks::chunk_loader::ChunkLoader;
@@ -527,7 +563,8 @@ mod tests {
         use crate::menu::GameState;
         use crate::player::{Player, PlayerOwner};
         use crate::protocol::{
-            EditRejected, PickBlock, ProtocolPlugin, RequestEdit, StartBreaking, UseBlock,
+            EditRejected, HitCreature, PickBlock, ProtocolPlugin, RequestEdit, StartBreaking,
+            UseBlock,
         };
         use crate::server::ServerPlugin;
 
@@ -543,6 +580,8 @@ mod tests {
                 .add_message::<PickBlock>()
                 .add_message::<UseBlock>()
                 .add_message::<StartBreaking>()
+                .add_message::<HitCreature>()
+                .init_resource::<TargetCreature>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .init_resource::<CraftingStation>()
                 .init_resource::<ContainerView>()

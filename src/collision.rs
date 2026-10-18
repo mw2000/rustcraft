@@ -157,9 +157,61 @@ pub fn overlaps(body: Aabb, position: Vec3, block: I64Vec3) -> bool {
     (min + SLACK).cmplt(block + 1.0).all() && (max - SLACK).cmpgt(block).all()
 }
 
+/// How far along the ray from `origin` along `direction` it first meets `aabb` at `position`,
+/// if it does ahead of `origin`, or 0 if `origin`'s inside it.
+pub fn ray_distance(origin: Vec3, direction: Vec3, position: Vec3, aabb: Aabb) -> Option<f32> {
+    let direction = direction.normalize_or_zero();
+    let inverse = direction.recip();
+    let to_min = (position + aabb.min - origin) * inverse;
+    let to_max = (position + aabb.max - origin) * inverse;
+    // a ray along a face's plane makes 0 * inf, which is no limit on that axis
+    let near = to_min
+        .min(to_max)
+        .to_array()
+        .map(|t| if t.is_nan() { f32::NEG_INFINITY } else { t });
+    let far = to_min
+        .max(to_max)
+        .to_array()
+        .map(|t| if t.is_nan() { f32::INFINITY } else { t });
+    let (enter, leave) = (
+        near.into_iter().fold(0.0, f32::max),
+        far.into_iter().fold(f32::INFINITY, f32::min),
+    );
+    (enter <= leave).then_some(enter)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_ray_meets_a_box_at_its_near_face() {
+        let at = Vec3::new(5.0, 0.0, 0.0);
+        assert_eq!(
+            Some(4.7),
+            ray_distance(Vec3::new(0.0, 1.0, 0.0), Vec3::X, at, BOX)
+        );
+        // passing over it, and pointing away
+        assert_eq!(
+            None,
+            ray_distance(Vec3::new(0.0, 2.5, 0.0), Vec3::X, at, BOX)
+        );
+        assert_eq!(
+            None,
+            ray_distance(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_X, at, BOX)
+        );
+        // from above at a slant onto its top
+        let distance = ray_distance(
+            Vec3::new(5.0, 3.8, -2.0),
+            Vec3::new(0.0, -1.0, 1.0),
+            at,
+            BOX,
+        );
+        assert!(
+            (distance.unwrap() - 2.0 * 2f32.sqrt()).abs() < 1e-4,
+            "{distance:?}"
+        );
+    }
 
     const BOX: Aabb = Aabb {
         min: Vec3::new(-0.3, 0.0, -0.3),

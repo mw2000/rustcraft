@@ -30,10 +30,7 @@ use crate::{
 )]
 pub struct Player {
     pub movement: Movement,
-    velocity: Vec3,
-    grounded: bool,
-    // whether it walked into a wall last step, so swimming against a bank climbs out
-    against_wall: bool,
+    momentum: physics::Momentum,
 }
 
 /// A player as `state` has them, to spawn: on the server, and on a client for its own player.
@@ -57,7 +54,7 @@ pub fn arriving(state: &PlayerState) -> impl Bundle {
 impl Player {
     /// Stops it where it is, as being put somewhere else does.
     pub fn stop(&mut self) {
-        self.velocity = Vec3::ZERO;
+        self.momentum.velocity = Vec3::ZERO;
     }
 }
 

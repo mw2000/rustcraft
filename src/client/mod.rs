@@ -5,6 +5,7 @@ pub mod authoring;
 pub mod clock;
 pub mod command_bar;
 pub mod cracks;
+pub mod creatures;
 pub mod drops;
 pub mod edits;
 pub mod join;
@@ -88,7 +89,9 @@ impl Plugin for ClientPlugin {
                     join::report_connection,
                     (
                         others::see_players,
+                        creatures::see_creatures,
                         others::receive_poses,
+                        creatures::follow_creatures,
                         others::move_seen,
                     )
                         .chain(),

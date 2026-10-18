@@ -76,6 +76,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
+| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; so far sheep, which give mutton (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures` and `structures` skills | `examples/`, `.claude/skills/` |
 
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
@@ -88,7 +89,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits, containers, crops and the player (`src/save/`).
 
-Not there yet: mobs.
+Not there yet: hostile mobs and combat (M3.3).
 
 ---
 
@@ -286,6 +287,13 @@ The world's state beyond the seed (INV-1).
     exits. A killed process loses up to 30 s of play.
   - At startup every region file is loaded into `Edits` before chunks generate, which is fine
     while worlds are small. A big world would load regions lazily, as chunks near them load.
+  - **Since M3.1** creatures are saved by region in `creatures/r.<x>.<z>.creatures`, apart from
+    the edits, as they move and are written far more often: a format byte (1), then postcard of
+    each creature's kind by name, the position of its feet and its health (§5.8). Each autosave
+    gathers those near players and those asleep, and rewrites only the regions whose creatures
+    aren't as they were last written, removing a region's file once it has none. A kind the game
+    doesn't know fails the load, as items do. Older games ignore the directory, so the format
+    isn't raised; one that opens the world finds no creatures, and leaves the files as they are.
 
 ### 4.4 Multiplayer (decided: client/server with an integrated server, on `bevy_replicon`, D-1)
 
@@ -764,11 +772,40 @@ The world's state beyond the seed (INV-1).
     the player; and `stop` saves the operators and edits with no `[player]`. `src/save/` checks
     a host's `[player]` survives a server, and `server::clock` that the clock runs on at 2,000
     days.
+- **Built (M3.1):** creatures (§5.8).
+  - **Replication:** each is spawned `Replicated` with `Creature` (its kind, by name),
+    `CreaturePose { at, position, yaw }` and `Flinches` (how many times it's been hurt). The
+    server sets the pose every `POSE_INTERVAL` while it moves or turns, stamped with its own clock
+    in milliseconds, so it's sent 20 times a second at most and not at all while it stands still;
+    a client keeps each pose in the same `Poses` buffer as other players' and draws a
+    `SeenCreature` of its own from it, 100 ms behind, on the host as on a joiner. Its health,
+    brain and way stay on the server.
+  - **Visibility:** a creature has an immutable `Whereabouts`, its 32-block cell of the world,
+    inserted again as it crosses into another, and each client's entity a `Viewpoint`, its
+    player's cell, likewise; replicon's filter shows a client the creatures within 3 cells across
+    of its player (96 to 128 blocks), and despawns them on it as they go further. Crossing a cell
+    re-evaluates one creature against every client, or one client against every creature, which
+    is cheap for hundreds.
+  - **Hitting:** `HitCreature { creature }`, mapped from the client's entity to the server's, as
+    the player left-clicks a creature nearer than any block (`interaction::TargetCreature`). The
+    server checks the player's alive and the creature's box within `REACH` and its slack of their
+    eye, and that it isn't still hurt from the last hit (0.5 s), which also holds a flurry of
+    clicks to one.
+  - **Residency:** besides the chunks within 2 of a player's eye, the server holds those within
+    4 across in the eye's layer and the one above and below (149 chunks a player, not 33), so
+    creatures have ground to walk on out past the 48 blocks they spawn within, on a dedicated
+    server too. They're let go a chunk further out, as before. Generation is on the compute pool;
+    in singleplayer the client holds all of these already.
+  - `/summon <creature> [<x> <y> <z>]`, for operators, brings one. `PROTOCOL_VERSION` is 14.
+  - `tests/multiplayer.rs` adds: a joiner sees a sheep dropped beside it fall smoothly between
+    its poses, isn't shown one beside the host 300 blocks off, and hurts it with a hit, its
+    flinch reaching it.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin`,
   `DedicatedServerPlugins` and `is_authority`, `edits.rs`, `chunks.rs`, `commands.rs`,
-  `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`);
-  `src/save/` under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene
-  setup, `edits.rs`, `player.rs`, `join.rs`, `others.rs`, `models.rs`, `command_bar.rs`), all
+  `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`,
+  `creatures/`); `src/save/` under the server; `src/client/` (`mod.rs` with `ClientPlugin` and
+  today's scene setup, `edits.rs`, `player.rs`, `join.rs`, `others.rs`, `models.rs`,
+  `creatures.rs`, `command_bar.rs`), all
   behind the `client` feature with the rest of what draws. `src/bin/server.rs` is the dedicated
   server. Shared modules stay where they are.
 
@@ -1175,7 +1212,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
     `assets/textures/hud.png`, drawn by the block-textures skill's `hud.py`.
   - `PROTOCOL_VERSION` is 7.
-  - **Later:** a two-block bed lain in, with a Leave Bed button; meat (M3.2);
+  - **Later:** a two-block bed lain in, with a Leave Bed button; meat from more animals (M3.2;
+    sheep's mutton came with M3.1);
     damage from mobs and lava; leaves dropping apples as they decay, once they do.
 - Day and night already exist; night brings hostile mobs (§5.8).
 - **Block light (built, M1.7).** Blocks that `emit` light (the torch, 14) light the blocks round
@@ -1465,12 +1503,87 @@ dragging pans. Edits don't show: it's the land as generated. Not yet: a minimap,
 player's bed set after joining (its `SpawnBed` isn't sent to the client), and revealing further
 from high places.
 
-### 5.8 Mobs and entities (later)
+### 5.8 Mobs and entities
 
 - Passive animals (food, materials) and hostile mobs at night and in dark caves.
 - Needs an entity system on the server, pathfinding over voxels, simple models and animation, and
   replication (§4.4). This is the biggest single system in the plan, so it comes after the core.
 - Villagers come with villages.
+- **Built (M3.1):** the entity system and pathfinding, shown with sheep.
+  - **Kinds are data (INV-6):** each a row of the `creatures!` table (`src/creatures/mod.rs`):
+    its stable name, its width and height (the box collision and pathfinding take), health,
+    walking and running speeds, its model (boxes in sRGB colours, facing -z, each a leg that
+    swings from its top or not), what it drops (items and how many, chosen evenly), where it
+    spawns (`Spawns`: on which blocks, under the sky or not, by day, night or always, in groups
+    of how many, and the cap round a player), its behaviours in order, and whether it keeps out
+    of water. Biomes aren't a column yet: grass stands in for where grazing animals live, and a
+    biome list can join the row when new biomes land (M2.6).
+  - **Brains:** the behaviours are `Flee` (from what hurt it, for 5 s, at its running speed),
+    `FollowLure(item)` (a living player within 8 blocks holding it, to within 2) and `Wander`
+    (standing about 2 to 8 s, then walking somewhere within 8). Each frame the first in the row
+    with something to do wins, as `Mind`'s `Doing`: `Idle`, `Wander`, `Flee { from }` or
+    `Follow(player)`. `Follow` is what M3.3's chasing needs, with another way of choosing whom.
+  - **Bodies:** a creature walks with the player's own step, `player::physics::walk`, which
+    takes a body's box and the speed it wants across, so it falls under gravity, collides with
+    blocks, swims slower, and jumps a block: where its way climbs, or it's walked into a wall.
+    In water it always swims up, so it floats with its middle at the surface. A fall hurts it
+    as one hurts a player (`fall_damage`, a point a block beyond 3), from the highest it's been
+    since it stood or swam. A hit knocks it back 6 blocks a second, and up if it's standing,
+    dying away to a fifth in a quarter of a second.
+  - **Pathfinding** (`creatures::path::find_path`, for M3.3 and M3.4 to use): A* over the cells
+    a body's feet can be in, standing on a solid block under some of its footprint (a body
+    `ceil(width)` rounded up to odd across, `ceil(height)` tall) with nothing solid in it, or
+    in water if it swims. Steps go a block each way on the level or down as far as it drops (3,
+    which hurts nothing), up one where there's headroom to jump, and diagonally only where both
+    sides are open, so it never cuts a corner. Water costs 2 more blocks' walk, so a swimmer goes
+    round where it can; a kind that keeps out of water never paths into it. It looks through
+    1,500 cells at most, 24 blocks across or up and down from where it starts, and gives back the
+    way to wherever it got nearest if it can't arrive. Each search reads a `Blocks`, the chunks
+    round it shared from `World` as `Arc`s and unpacked into a grid as it first reads them, so it
+    runs on the compute pool (INV-7); taking the copy costs the main thread 2 µs. A creature
+    walks its way's cells' middles in turn, finds another way if it gets no nearer for 1.5 s,
+    and asks for at most one every half a second; following finds another as the player moves 2
+    cells from where it was going.
+  - **Spawning:** every 2 s (`SpawnRate`, none to turn it off, as tests do), round each player,
+    a kind under its cap within 64 blocks across tries a column 24 to 48 blocks off, never within
+    a radian of where they look, and appears in a group on its surface if the row allows it:
+    the highest solid block within 16 of their feet, one of its blocks, with room for its body,
+    open to the sky if it must be, by the right time of day. Sheep come in twos to fours, on
+    grass by day, eight at most round a player.
+  - **Sleeping and saving:** a creature more than 128 blocks from every player, or whose chunk
+    the world no longer holds, goes to sleep: it's taken out of the world into `Dormant`, by
+    region, and saved (§4.3), and woken where it was once a player comes within 96 and its
+    ground is loaded. So creatures are simulated only near players and in chunks the server
+    holds, cost nothing far off, and persist, as Minecraft's animals do; a sheep penned in stays
+    penned. Nothing despawns by itself yet: M3.3's hostile mobs will want a row saying they go
+    when nobody's near, and aren't saved.
+  - **Hitting:** a left click on a creature in reach, nearer than the block behind it, hits it
+    (§4.4) for what's held does, `Item::damage`: a hand or anything not a tool 1, a tool 1 more
+    than its tier (5 for iron), wearing it a use. A creature at no health dies, dropping its
+    drops scattered as a dead player's are, and despawns. Sheep run when they're hit.
+  - **Drawing** (`client::creatures`, `DrawCreaturesPlugin`): each part's box a mesh made once
+    per kind, with a material for each colour and a redder one it flashes to for 0.3 s when
+    `Flinches` goes up; the legs swing with the distance walked, as players' do. Health isn't
+    shown. Targeting is a ray through each seen creature's box (`collision::ray_distance`).
+  - **Sheep:** 0.9 wide and 1.3 tall, 8 health, walking 1.4 blocks a second and running 3.4,
+    following wheat, a body of wool on four legs with a face, a cap of wool and eyes. They drop 1
+    or 2 mutton (food, 2), which a furnace cooks into cooked mutton (6). Wool waits for M3.2.
+  - **Cost:** 100 sheep wandering round a player on seed 3's spawn cost the server's creature
+    systems 0.16 ms a frame on the main thread (p99 0.31), against 0.04 ms for the same schedule
+    with none, which is the schedule running empty systems; a world with no creatures near anyone
+    pays a check of an empty map and empty queries. A way 20 blocks across that terrain takes
+    0.04 ms (median; mean 0.13, the slowest, which look through all 1,500 cells and fail, 1 ms),
+    on the compute pool. (Measured on a machine with a load average of 20.)
+  - **Tests:** `creatures::path` (straight across, round a wall by its gap, up steps a block at a
+    time but not two, down only as far as it drops, headroom and width, water, limits and the
+    nearest way); `server::creatures` on a field (a fall that lands and hurts only past 3 blocks,
+    following wheat up a step, floating, a hit that hurts once, knocks back and frightens, out of
+    reach, a kill that drops mutton and wears the axe, sleeping and waking, spawning on grass out
+    of sight up to the cap, and none at night or on sand); saving and restoring them; the
+    multiplayer test (§4.4); `/summon`'s parsing; and `ray_distance`.
+  - **Later:** wool and shearing, more animals and breeding (M3.2), hostile mobs, despawning and
+    weapons (M3.3), villagers (M3.4); a creature's head turning to look, grazing, and a death
+    that tips over rather than vanishing; creatures pushing each other and players apart.
 
 ### 5.9 Distribution
 
@@ -1584,8 +1697,9 @@ start.**
 
 Done when: **the world feels inhabited, and night is dangerous.**
 
-- ☐ **M3.1 Entity system and pathfinding.** (§5.8)
-- ☐ **M3.2 Passive animals.**
+- ☑ **M3.1 Entity system and pathfinding.** (§5.8)
+- ☐ **M3.2 Passive animals.** Sheep, with mutton, came with M3.1 as its proof; wool, more
+  animals and breeding are left.
 - ☐ **M3.3 Hostile mobs and combat.**
 - ☐ **M3.4 Villages and villagers.**
 - ☐ **M3.5 Weather.**

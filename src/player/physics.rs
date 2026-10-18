@@ -1,7 +1,8 @@
-use bevy::math::{I64Vec3, Quat, Vec3};
+use bevy::math::{I64Vec3, Quat, Vec2, Vec3, Vec3Swizzles};
 
 use super::{Movement, Player, PlayerLook, BODY};
-use crate::{block::BlockType, collision::move_and_collide};
+use crate::block::BlockType;
+use crate::collision::{move_and_collide, Aabb};
 
 // Flying, blocks a second, and how much faster sprinting.
 const FLY_SPEED: f32 = 20.0;
@@ -57,7 +58,7 @@ pub fn step(
             let speed = FLY_SPEED * dt * sprint;
             position + (look.rotation() * input.across + Vec3::Y * input.rise) * speed
         }
-        Movement::Walk => walk(position, player, look, input, dt, block),
+        Movement::Walk => walk_player(position, player, look, input, dt, block),
     }
 }
 
@@ -77,7 +78,7 @@ pub fn top_speed(movement: Movement) -> (f32, f32, f32) {
     }
 }
 
-fn walk(
+fn walk_player(
     position: Vec3,
     player: &mut Player,
     look: PlayerLook,
@@ -85,43 +86,79 @@ fn walk(
     dt: f32,
     block: impl Fn(I64Vec3) -> Option<BlockType>,
 ) -> Vec3 {
-    let middle = position + Vec3::Y * BODY.max.y / 2.0;
-    let swimming = block(middle.floor().as_i64vec3()) == Some(BlockType::Water);
-
     let mut speed = WALK_SPEED;
     if input.sprint {
         speed *= WALK_SPRINT_MULTIPLIER;
     }
-    if swimming {
-        speed *= SWIM_MULTIPLIER;
-    }
     // where the body faces, not the eyes, so looking down doesn't slow it
     let wanted = Quat::from_rotation_y(look.yaw) * input.across.normalize_or_zero() * speed;
-    player.velocity.x = wanted.x;
-    player.velocity.z = wanted.z;
+    walk(
+        position,
+        &mut player.momentum,
+        BODY,
+        wanted,
+        input.jump,
+        dt,
+        block,
+    )
+}
+
+/// How a body walking under gravity is moving: how fast, and whether it stood on the ground
+/// and walked into a wall at the last step.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Momentum {
+    pub velocity: Vec3,
+    pub grounded: bool,
+    // whether it walked into a wall, so swimming against a bank climbs out
+    pub against_wall: bool,
+}
+
+/// Moves a body of size `body` with its feet at `position` through `dt` seconds of walking
+/// under gravity at `wanted` across, slower in water, and jumping, or swimming up, if `jump`,
+/// and returns where it gets to. It's a player's walking, and a creature's (§5.8). As in `step`,
+/// `block` is `None` where the world isn't generated, which is taken to be solid.
+pub fn walk(
+    position: Vec3,
+    momentum: &mut Momentum,
+    body: Aabb,
+    wanted: Vec3,
+    jump: bool,
+    dt: f32,
+    block: impl Fn(I64Vec3) -> Option<BlockType>,
+) -> Vec3 {
+    let dt = dt.min(MAX_STEP);
+    let middle = position + Vec3::Y * body.max.y / 2.0;
+    let swimming = block(middle.floor().as_i64vec3()) == Some(BlockType::Water);
+    let wanted = if swimming {
+        wanted * SWIM_MULTIPLIER
+    } else {
+        wanted
+    };
+    momentum.velocity.x = wanted.x;
+    momentum.velocity.z = wanted.z;
 
     if swimming {
-        player.velocity.y = if input.jump && player.against_wall {
+        momentum.velocity.y = if jump && momentum.against_wall {
             JUMP_SPEED
-        } else if input.jump {
+        } else if jump {
             SWIM_UP_SPEED
         } else {
-            (player.velocity.y - WATER_GRAVITY * dt).max(-SINK_SPEED)
+            (momentum.velocity.y - WATER_GRAVITY * dt).max(-SINK_SPEED)
         };
     } else {
-        if input.jump && player.grounded {
-            player.velocity.y = JUMP_SPEED;
+        if jump && momentum.grounded {
+            momentum.velocity.y = JUMP_SPEED;
         }
-        player.velocity.y = (player.velocity.y - GRAVITY * dt).max(-TERMINAL_SPEED);
+        momentum.velocity.y = (momentum.velocity.y - GRAVITY * dt).max(-TERMINAL_SPEED);
     }
 
     let solid = |at: I64Vec3| block(at).is_none_or(|block| block.is_solid());
-    let (position, hit) = move_and_collide(position, player.velocity * dt, BODY, solid);
-    player.grounded = hit.y && player.velocity.y < 0.0;
+    let (position, hit) = move_and_collide(position, momentum.velocity * dt, body, solid);
+    momentum.grounded = hit.y && momentum.velocity.y < 0.0;
     if hit.y {
-        player.velocity.y = 0.0;
+        momentum.velocity.y = 0.0;
     }
-    player.against_wall = (hit.x || hit.z) && input.across != Vec3::ZERO;
+    momentum.against_wall = (hit.x || hit.z) && wanted.xz() != Vec2::ZERO;
     position
 }
 
@@ -185,7 +222,7 @@ mod tests {
             (end - start - Vec3::NEG_X * WALK_SPEED).length() < 1e-3,
             "{end}"
         );
-        assert!(player.grounded);
+        assert!(player.momentum.grounded);
     }
 
     #[test]
@@ -208,7 +245,7 @@ mod tests {
             0.25,
         );
         assert!(fallen(later) - fallen(at) > fallen(at) * 2.0);
-        assert!(!player.grounded);
+        assert!(!player.momentum.grounded);
         let landed = run(
             later,
             &mut player,
@@ -217,7 +254,7 @@ mod tests {
             1.0,
         );
         assert_eq!(0.0, landed.y);
-        assert!(player.grounded);
+        assert!(player.momentum.grounded);
     }
 
     #[test]
@@ -279,7 +316,7 @@ mod tests {
             2.0,
         );
         assert!((end.x - (3.0 - BODY.max.x)).abs() < 1e-5, "{end}");
-        assert!(player.against_wall);
+        assert!(player.momentum.against_wall);
     }
 
     #[test]

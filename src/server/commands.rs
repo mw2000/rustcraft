@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::chat::{tidy, ChatAllowances, TOO_QUICK};
+use super::creatures::creature;
 use super::players::PoseCheck;
 use super::structures::{list, Authoring};
 use crate::chunks::generate::WATER_LEVEL;
@@ -75,6 +76,7 @@ pub(super) struct Running<'w, 's> {
     output: MessageWriter<'w, ToClients<CommandOutput>>,
     teleports: MessageWriter<'w, ToClients<Teleport>>,
     authoring: Authoring<'w, 's>,
+    commands: Commands<'w, 's>,
 }
 
 /// A player here, as a command finds them.
@@ -147,6 +149,11 @@ impl Running<'_, '_> {
                 Ok(format!("Teleported {} to {at}", target.name.as_str()))
             }
             Command::Seed => Ok(format!("Seed: {}", self.world.seed())),
+            Command::Summon { kind, at } => {
+                let health = kind.properties().health;
+                self.commands.spawn(creature(kind, at, health, 0.0));
+                Ok(format!("Summoned a {} at {at}", kind.name()))
+            }
             Command::GameMode { mode, who } => {
                 let target = match who {
                     Some(who) => self.find(&who)?,
