@@ -7,15 +7,19 @@ use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
+use bevy_replicon::prelude::RepliconChannels;
 use bevy_replicon::RepliconPlugins;
+use bevy_replicon_renet2::RepliconRenetPlugins;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
+    generate::WORLD_HEIGHT,
     insert_terrain_resources,
     material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::client::clock::{follow_clock, wind_clock};
 use rustcraft::client::drops::DrawDropsPlugin;
+use rustcraft::client::join::{join, server_address};
 use rustcraft::client::ClientPlugin;
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
@@ -30,9 +34,9 @@ use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::picker::PickerPlugin;
 use rustcraft::player::input::{follow_look, player_look, player_move};
 use rustcraft::player::underwater::{murk, update_underwater_effects, MurkMaterial};
-use rustcraft::protocol::ProtocolPlugin;
+use rustcraft::protocol::{ProtocolPlugin, DEFAULT_PORT};
 use rustcraft::save::{world_name, worlds_dir, SavePlugin};
-use rustcraft::server::{open_world, run_clock, ServerPlugin, WorldToOpen};
+use rustcraft::server::{host, run_clock, ServerPlugin, WorldToOpen};
 use rustcraft::sky::{
     atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, FOG_MAX_OPACITY,
 };
@@ -51,7 +55,6 @@ fn setup_scene(
     clouds: Res<CloudLayer>,
     curvature: Res<Curvature>,
     settings: Res<Settings>,
-    world: Res<World>,
 ) {
     let renderer = settings.renderer;
     let layout = renderer.lod_layout();
@@ -61,8 +64,6 @@ fn setup_scene(
         layout.max_level
     );
 
-    let world_height = world.height;
-
     let fog_distance = render_distance as f32 * 16.0;
     // hung from the local player's eyes once it's spawned, see `ClientPlugin`
     let camera = commands
@@ -70,7 +71,7 @@ fn setup_scene(
             Camera3d { ..default() },
             atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
-                far: fog_distance + world_height as f32,
+                far: fog_distance + WORLD_HEIGHT as f32,
                 ..default()
             }),
             // Depth of field, bloom and sunlight brighter than white all need HDR.
@@ -143,7 +144,7 @@ fn setup_scene(
         &mut commands,
         &renderer,
         &settings.debug,
-        world_height,
+        WORLD_HEIGHT,
         TerrainMaterials {
             chunk: chunk_material_handle,
             water: water_material_handle,
@@ -174,61 +175,88 @@ fn start_time() -> Option<f32> {
         .and_then(|time| time.parse().ok())
 }
 
+// RC_HOST opens the world to friends on that port, or the default one if it's not one
+fn host_from_env(mut commands: Commands, channels: Res<RepliconChannels>) {
+    let Ok(port) = std::env::var("RC_HOST") else {
+        return;
+    };
+    let port = port.parse().unwrap_or(DEFAULT_PORT);
+    match host(&mut commands, &channels, port) {
+        Ok(address) => info!("open to friends at {address}"),
+        Err(error) => error!("couldn't open the world to friends on port {port}: {error}"),
+    }
+}
+
+// RC_JOIN joins the server at that address, `host:port` or just `host`, rather than playing a
+// world of this game's own
+fn join_from_env(address: String) -> impl FnMut(Commands, Res<RepliconChannels>) {
+    move |mut commands, channels| match server_address(&address) {
+        Ok(server) => match join(&mut commands, &channels, server) {
+            Ok(()) => info!("joining {server}"),
+            Err(error) => error!("couldn't join {server}: {error}"),
+        },
+        Err(error) => error!("couldn't find the server {address}: {error}"),
+    }
+}
+
 fn main() {
     let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
-    let world = WorldToOpen {
-        dir: worlds_dir().join(world_name()),
-        seed: World::requested_seed(),
-        time_of_day: start_time(),
-        region_distance: settings.renderer.lod_layout().region_reach() as u32,
-    };
-    App::new()
-        .add_plugins((
-            DefaultPlugins
-                .set(ImagePlugin::default_nearest())
-                .set(task_pool_plugin())
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        present_mode: bevy::window::PresentMode::AutoNoVsync,
-                        ..default()
-                    }),
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins
+            .set(ImagePlugin::default_nearest())
+            .set(task_pool_plugin())
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    present_mode: bevy::window::PresentMode::AutoNoVsync,
                     ..default()
                 }),
-            MaterialPlugin::<ChunkMaterial>::default(),
-            MaterialPlugin::<WaterMaterial>::default(),
-            MaterialPlugin::<MurkMaterial>::default(),
-            TerrainPlugin,
-            CloudPlugin,
-            CurvaturePlugin,
-            SunGlarePlugin,
-            NightSkyPlugin,
-            DebugOverlayPlugin,
-            MenuPlugin,
-            CommandPlugin,
-            InteractionPlugin,
-            SavePlugin,
-        ))
-        .add_plugins((
-            GameModePlugin,
-            HotbarPlugin,
-            PickerPlugin,
-            InventoryScreenPlugin,
-            DrawDropsPlugin,
-        ))
-        // singleplayer: the server and client in one App, with no transport between them, so
-        // replicon passes their messages straight across (§4.4)
-        .add_plugins((RepliconPlugins, ProtocolPlugin, ServerPlugin, ClientPlugin))
-        .insert_resource(settings)
-        .insert_resource(world)
+                ..default()
+            }),
+        MaterialPlugin::<ChunkMaterial>::default(),
+        MaterialPlugin::<WaterMaterial>::default(),
+        MaterialPlugin::<MurkMaterial>::default(),
+        TerrainPlugin,
+        CloudPlugin,
+        CurvaturePlugin,
+        SunGlarePlugin,
+        NightSkyPlugin,
+        DebugOverlayPlugin,
+        MenuPlugin,
+        CommandPlugin,
+        InteractionPlugin,
+    ))
+    .add_plugins((
+        GameModePlugin,
+        HotbarPlugin,
+        PickerPlugin,
+        InventoryScreenPlugin,
+        DrawDropsPlugin,
+    ))
+    // the client, and the server unless joining one elsewhere: in singleplayer they're in one
+    // App with no transport running, so replicon passes their messages straight across (§4.4)
+    .add_plugins((
+        RepliconPlugins,
+        RepliconRenetPlugins,
+        ProtocolPlugin,
+        ClientPlugin,
+    ));
+    if let Ok(address) = std::env::var("RC_JOIN") {
+        app.add_systems(Startup, join_from_env(address));
+    } else {
+        app.add_plugins((ServerPlugin, SavePlugin))
+            .insert_resource(WorldToOpen {
+                dir: worlds_dir().join(world_name()),
+                seed: World::requested_seed(),
+                time_of_day: start_time(),
+                region_distance: settings.renderer.lod_layout().region_reach() as u32,
+            })
+            .add_systems(Startup, host_from_env);
+    }
+    app.insert_resource(settings)
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
-        .add_systems(
-            Startup,
-            (
-                spawn_atmosphere,
-                setup_scene.after(spawn_clouds).after(open_world),
-            ),
-        )
+        .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
         // once the camera's moved, see `TransformSystems::Propagate`
         .add_systems(
             PostUpdate,
@@ -244,7 +272,9 @@ fn main() {
                 update_horizon,
                 update_underwater_effects,
             )
-                .chain(),
+                .chain()
+                // a client joining a server has no world or player until it's welcomed
+                .run_if(resource_exists::<World>),
         )
         .add_systems(
             Update,

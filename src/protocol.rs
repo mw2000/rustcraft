@@ -11,7 +11,19 @@ use bevy_replicon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
-use crate::inventory::Click;
+use crate::inventory::{Click, Inventory};
+use crate::save::PlayerState;
+use crate::server::drops::DroppedItem;
+
+/// The port a world is hosted on unless another's asked for.
+pub const DEFAULT_PORT: u16 = 25600;
+
+/// The version of what's sent, raised whenever a change to a message would mislead an older
+/// game. A client joins only a server with the same one and the same game version.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// What netcode tells rustcraft's connections apart from other games' by.
+pub const NETCODE_PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustcraf");
 
 /// Registers the messages, on the server and clients alike. Replicon tells messages apart by the
 /// order they're registered in, so it's all done here, in one order. Needs `RepliconPlugins`.
@@ -33,7 +45,19 @@ impl Plugin for ProtocolPlugin {
             .add_client_message::<InventoryClick>(Channel::Ordered)
             .add_client_message::<CloseInventory>(Channel::Ordered)
             .add_client_message::<DropItem>(Channel::Ordered)
-            .add_client_message::<PickBlock>(Channel::Ordered);
+            .add_client_message::<PickBlock>(Channel::Ordered)
+            .add_server_message::<Welcome>(Channel::Ordered)
+            // unreliable, as a pose is soon out of date and the next one follows it
+            .add_client_message::<PlayerPose>(Channel::Unreliable)
+            .add_server_message::<InventoryChanged>(Channel::Ordered)
+            // to every client, which draw them where the server has them
+            .replicate::<DroppedItem>()
+            .replicate_filtered_as::<Transform, Position, With<DroppedItem>>();
+        // A client whose versions differ is refused as it connects, in replicon's check that
+        // both sides registered the same messages, and told so with a `ProtocolMismatch`.
+        app.world_mut()
+            .resource_mut::<ProtocolHasher>()
+            .add_custom((env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION));
     }
 }
 
@@ -114,6 +138,45 @@ pub struct DropItem {
 pub struct PickBlock {
     pub slot: u8,
     pub block: BlockType,
+}
+
+/// What a client joining is told as the server lets it in: the world's seed, to generate its
+/// terrain from (INV-1), and where its player is.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Welcome {
+    pub seed: u32,
+    pub player: PlayerState,
+}
+
+/// A client's player's inventory, as the server has changed it. The host's needs no telling,
+/// as it's the server's own.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct InventoryChanged(pub Inventory);
+
+/// Where a client has moved its player to, by its feet, and which way they look, which the
+/// client decides (§4.4).
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct PlayerPose {
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+// A dropped item's `Transform`, which has no serde of its own, as only its translation: the
+// spin is the client's.
+#[derive(Serialize, Deserialize)]
+struct Position(Vec3);
+
+impl From<Transform> for Position {
+    fn from(transform: Transform) -> Self {
+        Self(transform.translation)
+    }
+}
+
+impl From<Position> for Transform {
+    fn from(Position(at): Position) -> Self {
+        Transform::from_translation(at)
+    }
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself

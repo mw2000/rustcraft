@@ -44,7 +44,10 @@ pub(super) fn receive_inventory_requests(
         if let Some((body, look, _, mut inventory)) = player_of(&mut players, client_id) {
             // what there's no room for is dropped, as Minecraft does
             if let Some(left) = inventory.put_back_cursor() {
-                commands.spawn(DroppedItem::thrown(left, body.translation, look.forward()));
+                commands.spawn((
+                    DroppedItem::thrown(left, body.translation, look.forward()),
+                    Replicated,
+                ));
             }
         }
     }
@@ -55,7 +58,10 @@ pub(super) fn receive_inventory_requests(
     {
         if let Some((body, look, _, mut inventory)) = player_of(&mut players, client_id) {
             if let Some(stack) = inventory.drop_from(slot.into(), all) {
-                commands.spawn(DroppedItem::thrown(stack, body.translation, look.forward()));
+                commands.spawn((
+                    DroppedItem::thrown(stack, body.translation, look.forward()),
+                    Replicated,
+                ));
             }
         }
     }

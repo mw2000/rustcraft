@@ -5,13 +5,15 @@ pub mod underwater;
 use std::f32::consts::TAU;
 
 use bevy::{
-    ecs::component::Component,
+    ecs::{bundle::Bundle, component::Component},
     math::{Quat, Vec3},
     transform::components::Transform,
 };
 use bevy_replicon::prelude::ClientId;
 
-use crate::{collision::Aabb, game_mode::GameMode, hotbar::Hotbar, inventory::Inventory};
+use crate::{
+    collision::Aabb, game_mode::GameMode, hotbar::Hotbar, inventory::Inventory, save::PlayerState,
+};
 
 /// The player's body, at its feet, and how it's moving.
 #[derive(Component, Default)]
@@ -22,6 +24,22 @@ pub struct Player {
     grounded: bool,
     // whether it walked into a wall last step, so swimming against a bank climbs out
     against_wall: bool,
+}
+
+/// A player as `state` has them, to spawn: on the server, and on a client for its own player.
+pub fn arriving(state: &PlayerState) -> impl Bundle {
+    let body = Player {
+        movement: state.movement,
+        ..Player::default()
+    };
+    (
+        body,
+        state.look(),
+        state.game_mode,
+        state.hotbar,
+        state.inventory(),
+        state.body(),
+    )
 }
 
 /// The client a player belongs to: `ClientId::Server` for the host's own, the one player in

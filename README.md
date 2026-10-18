@@ -42,6 +42,12 @@ Press T, or / to start with the slash typed, to open the command bar. Enter runs
 
 Worlds are saved every 30 seconds and when you quit, in a directory each under your data directory: `~/.local/share/rustcraft/worlds` on Linux, `~/Library/Application Support/rustcraft/worlds` on macOS and `%APPDATA%\rustcraft\worlds` on Windows. Run with `RC_WORLD=<name>` to play another world, which is made if it doesn't exist yet; the one played otherwise is called `world`.
 
+## Playing together
+
+To let friends join the world you're playing, choose Open to Friends in the menu (Escape), which shows the address to give them, or run with `RC_HOST=<port>` to open it as the game starts (`RC_HOST=` for the default port, 25600). Friends join with `RC_JOIN=<address>`, such as `RC_JOIN=192.168.1.20:25600`; the port can be left off if it's the default. Everyone needs the same version of rustcraft. Over the internet, the host forwards UDP port 25600 on their router.
+
+It's early days: friends don't see each other yet, nor edits made before they joined, and nothing they do is saved. Connections aren't encrypted, so play with people you trust.
+
 ## License
 
 Licensed under either of

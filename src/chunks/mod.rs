@@ -11,9 +11,11 @@ use bevy::{
     app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
     asset::Assets,
     ecs::{schedule::IntoScheduleConfigs, system::Commands},
+    prelude::resource_exists,
 };
 
 use crate::settings::{DebugSettings, RendererSettings};
+use crate::world::World;
 use chunk_loader::{
     gather_chunks, generate_chunks, load_chunks, mark_chunks, mesh_nearing_sealed_chunks,
     unload_chunks, ChunkLoader,
@@ -60,7 +62,9 @@ impl Plugin for TerrainPlugin {
                     .after(gather_chunks)
                     .before(unload_chunks),
                 unload_chunks,
-            ),
+            )
+                // a client joining a server has nothing to draw until it's welcomed
+                .run_if(resource_exists::<World>),
         );
     }
 }

@@ -8,7 +8,7 @@ pub mod screen;
 use std::ops::Range;
 
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::block::BlockType;
 use crate::game_mode::GameMode;
@@ -23,8 +23,7 @@ const MAIN: Range<usize> = HOTBAR_SLOTS..SLOTS;
 
 /// The items a player carries, in slots 0 to 8 for the hotbar and 9 to 35 for the rest, and
 /// the stack they've picked up in the inventory screen, which follows the mouse.
-#[derive(Component, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(into = "SavedInventory", try_from = "SavedInventory")]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Inventory {
     pub slots: [Option<ItemStack>; SLOTS],
     pub cursor: Option<ItemStack>,
@@ -158,6 +157,33 @@ impl Inventory {
     pub fn put_back_cursor(&mut self) -> Option<ItemStack> {
         let stack = self.cursor.take()?;
         self.add(stack)
+    }
+}
+
+// Saved as the stacks in it with their slots, to be read in `world.toml`, and sent to clients
+// (`InventoryChanged`, `Welcome`) as every slot in order, as postcard has no way to write the
+// saved form's flattened stacks.
+impl Serialize for Inventory {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            SavedInventory::from(self.clone()).serialize(serializer)
+        } else {
+            (&self.slots[..], self.cursor).serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Inventory {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            let saved = SavedInventory::deserialize(deserializer)?;
+            return saved.try_into().map_err(D::Error::custom);
+        }
+        let (slots, cursor) = <(Vec<Option<ItemStack>>, _)>::deserialize(deserializer)?;
+        let slots = slots
+            .try_into()
+            .map_err(|_| D::Error::custom("an inventory has the wrong number of slots"))?;
+        Ok(Self { slots, cursor })
     }
 }
 
@@ -417,5 +443,9 @@ mod tests {
         assert!(toml::from_str::<Inventory>(&off_the_end).is_err());
         let twice = text.replace("slot = 35", "slot = 1");
         assert!(toml::from_str::<Inventory>(&twice).is_err());
+
+        // and as they're sent to clients
+        let bytes = postcard::to_stdvec(&inventory).unwrap();
+        assert_eq!(inventory, postcard::from_bytes(&bytes).unwrap());
     }
 }

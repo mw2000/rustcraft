@@ -23,10 +23,14 @@ bevy = { version = "0.20", default-features = false, features = [
 ] }
 # client/server messages and replication (D-1), with no transport until M0.6
 bevy_replicon = { version = "=0.45.2", default-features = false, features = ["client", "server"] }
+# replicon's transport over UDP, with renet2's netcode (D-1)
+bevy_replicon_renet2 = { version = "=1.0.0", default-features = false, features = ["client", "server", "native_transport"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+# a server and clients in one process, for tests
+bevy_replicon_renet2 = { version = "=1.0.0", default-features = false, features = ["memory_transport"] }
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

@@ -52,6 +52,11 @@ impl EditAllowances {
         }
         allowed
     }
+
+    /// Forgets a client that's left.
+    pub(super) fn forget(&mut self, client: ClientId) {
+        self.0.remove(&client);
+    }
 }
 
 type Players<'w, 's> = Query<
@@ -126,7 +131,10 @@ pub(super) fn receive_edits(
         let drops = mode.drops_broken_blocks();
         let mut leave = |broken: BlockType, at: I64Vec3| {
             if let Some(item) = broken.drops().filter(|_| drops) {
-                commands.spawn(DroppedItem::from_block(ItemStack::new(item, 1), at));
+                commands.spawn((
+                    DroppedItem::from_block(ItemStack::new(item, 1), at),
+                    Replicated,
+                ));
             }
         };
         if to == BlockType::Air {

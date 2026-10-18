@@ -41,16 +41,17 @@ pub(super) fn wind_clock(
     }
 }
 
-/// Tells every client the time and how fast it runs, every `SYNC_INTERVAL` and as soon as the
-/// rate changes, so the clock's wound for everyone at once.
+/// Tells every client the time and how fast it runs, every `SYNC_INTERVAL`, as soon as the
+/// rate changes, so the clock's wound for everyone at once, and as soon as a client joins.
 pub(super) fn sync_clock(
     time: Res<Time>,
     clock: Res<TimeOfDay>,
     rate: Res<ClockRate>,
+    joined: Query<(), Added<AuthorizedClient>>,
     mut next: Local<Duration>,
     mut syncs: MessageWriter<ToClients<TimeSync>>,
 ) {
-    if time.elapsed() < *next && !rate.is_changed() {
+    if time.elapsed() < *next && !rate.is_changed() && joined.is_empty() {
         return;
     }
     *next = time.elapsed() + SYNC_INTERVAL;

@@ -2,6 +2,10 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
+use bevy_replicon::prelude::{ClientState, RepliconChannels, ServerState};
+
+use crate::protocol::DEFAULT_PORT;
+use crate::server::host;
 
 const TOGGLE_KEY: KeyCode = KeyCode::Escape;
 const INVENTORY_KEY: KeyCode = KeyCode::KeyE;
@@ -82,12 +86,46 @@ fn spawn_menu(mut commands: Commands) {
                 .observe(|_: On<Activate>, mut state: ResMut<NextState<GameState>>| {
                     state.set(GameState::Playing);
                 });
+            menu.spawn(button())
+                .with_child(label("Open to Friends"))
+                .observe(open_to_friends);
             menu.spawn(button()).with_child(label("Quit Game")).observe(
                 |_: On<Activate>, mut exit: MessageWriter<AppExit>| {
                     exit.write(AppExit::Success);
                 },
             );
         });
+}
+
+// Hosts the world on the default port, unless it's hosted already or another's, and puts the
+// address to give friends on the button.
+fn open_to_friends(
+    activate: On<Activate>,
+    mut commands: Commands,
+    channels: Res<RepliconChannels>,
+    server: Res<State<ServerState>>,
+    client: Res<State<ClientState>>,
+    children: Query<&Children>,
+    mut labels: Query<&mut Text>,
+) {
+    if *server.get() == ServerState::Running || *client.get() != ClientState::Disconnected {
+        return;
+    }
+    let text = match host(&mut commands, &channels, DEFAULT_PORT) {
+        Ok(address) => {
+            info!("open to friends at {address}");
+            format!("Open to Friends at {address}")
+        }
+        Err(error) => {
+            error!("couldn't open the world to friends: {error}");
+            format!("Couldn't Open to Friends: {error}")
+        }
+    };
+    for child in children.iter_descendants(activate.entity) {
+        if let Ok(mut label) = labels.get_mut(child) {
+            label.0.clone_from(&text);
+        }
+    }
 }
 
 pub(crate) fn font(size: f32) -> TextFont {

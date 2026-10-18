@@ -37,7 +37,9 @@ impl Plugin for InteractionPlugin {
                 .after(player_move)
                 .after(player_look)
                 .run_if(in_state(GameState::Playing))
-                .run_if(command_bar_closed),
+                .run_if(command_bar_closed)
+                // a client joining a server has nothing to reach for until it's welcomed
+                .run_if(resource_exists::<World>),
         );
     }
 }

@@ -6,10 +6,13 @@ mod clock;
 mod commands;
 pub mod drops;
 mod edits;
+mod host;
 mod inventory;
+mod players;
 
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
+pub use host::{host, serve};
 
 use std::path::PathBuf;
 
@@ -17,7 +20,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientId, ClientState, ClientSystems, ServerSystems};
 
 use crate::clock::TimeOfDay;
-use crate::player::{Player, PlayerOwner};
+use crate::player::{arriving, PlayerOwner};
 use crate::save::{PlayerState, WorldSave};
 use crate::world::World;
 
@@ -30,6 +33,8 @@ impl Plugin for ServerPlugin {
             .init_resource::<TimeOfDay>()
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
+            .add_observer(players::welcome)
+            .add_observer(players::see_off)
             .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
             .add_systems(
                 Update,
@@ -43,8 +48,9 @@ impl Plugin for ServerPlugin {
                 PostUpdate,
                 // after the client's loader has taken the chunks it wants this frame, so in
                 // singleplayer the server finds those near the player on their way already, and
-                // before the edits checked against them
-                keep_chunks_near_players
+                // before the edits checked against them, with every player where they've moved
+                (players::move_players, keep_chunks_near_players)
+                    .chain()
                     .before(edits::receive_edits)
                     .run_if(is_authority),
             )
@@ -61,6 +67,15 @@ impl Plugin for ServerPlugin {
                     (clock::wind_clock, clock::sync_clock).chain(),
                 )
                     .after(ClientSystems::Send)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
+                // once this frame's requests have changed them
+                players::send_inventories
+                    .after(edits::receive_edits)
+                    .after(inventory::receive_inventory_requests)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
             );
@@ -104,17 +119,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
         .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
     let [x, y, z] = arrival.position;
     info!("spawned at {x:?}, {y:?}, {z:?}");
-    let mut body = Player::default();
-    body.movement = arrival.movement;
-    commands.spawn((
-        body,
-        PlayerOwner(ClientId::Server),
-        arrival.look(),
-        arrival.game_mode,
-        arrival.hotbar,
-        arrival.inventory(),
-        arrival.body(),
-    ));
+    commands.spawn((arriving(&arrival), PlayerOwner(ClientId::Server)));
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
     commands.insert_resource(world);
     commands.insert_resource(save);

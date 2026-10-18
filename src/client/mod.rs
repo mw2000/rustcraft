@@ -4,15 +4,18 @@
 pub mod clock;
 pub mod drops;
 pub mod edits;
+pub mod join;
 pub mod player;
 
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use bevy_replicon::prelude::ServerSystems;
+use bevy_replicon::prelude::{ClientState, ServerSystems};
 
 use crate::chunks::group::rebuild_groups;
 use crate::clock::TimeOfDay;
+use crate::protocol::Welcome;
 use crate::server::is_authority;
+use crate::world::World;
 
 /// The client's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
 pub struct ClientPlugin;
@@ -27,6 +30,19 @@ impl Plugin for ClientPlugin {
                 // place before anything looks through it
                 player::attach_camera.before(TransformSystems::Propagate),
             )
+            .add_observer(join::refused)
+            .add_systems(
+                PostUpdate,
+                // a client joining a server has its world and player once it's welcomed, with
+                // the camera on them before transforms propagate, so the next frame finds it
+                // where the player is
+                (
+                    join::arrive.run_if(on_message::<Welcome>),
+                    (player::attach_camera, join::follow_inventory),
+                )
+                    .chain()
+                    .before(TransformSystems::Propagate),
+            )
             .add_systems(
                 PostUpdate,
                 // after replicon hands over what the server sent, which in singleplayer it does
@@ -35,11 +51,20 @@ impl Plugin for ClientPlugin {
                 // server
                 (edits::apply_block_changes, rebuild_groups)
                     .chain()
-                    .after(ServerSystems::Send),
+                    .after(ServerSystems::Send)
+                    .after(join::arrive)
+                    .run_if(resource_exists::<World>),
             )
             // after replicon hands over the server's syncs, which over a network it does in
             // `PreUpdate`
-            .add_systems(Update, clock::follow_clock.run_if(not(is_authority)));
+            .add_systems(
+                Update,
+                (
+                    clock::follow_clock.run_if(not(is_authority)),
+                    join::send_pose.run_if(in_state(ClientState::Connected)),
+                    join::report_connection,
+                ),
+            );
     }
 }
 

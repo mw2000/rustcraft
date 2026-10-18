@@ -253,8 +253,8 @@ The world's state beyond the seed (INV-1).
   `PlayerState` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
   time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
-  `CommandOutput`, `ChatLine`. Players are replicated entities, their `Inventory` to their owner
-  alone, and so are dropped items; poses go out as unreliable messages
+  `CommandOutput`, `ChatLine`. Players are replicated entities, and so are dropped items; a
+  player's `Inventory` goes to their owner alone (as `InventoryChanged` since M0.6a); poses go out as unreliable messages
   to everyone but their owner, so the server never overwrites a player's own movement.
 - **Edits** become request, validate, broadcast: `use_target` sends `RequestEdit`; the server
   checks the block's in the world and loaded, within reach of the requester's eye, not placed into
@@ -366,9 +366,72 @@ The world's state beyond the seed (INV-1).
   The server draining it instead would, in one App, take it from the client.
   `tests/headless.rs` checks a server on its own loads the chunks round its player and none far
   off, lets go of them as it leaves, checks edits against them, and records no reroofs.
+- **Built (M0.6a):** `bevy_replicon_renet2 =1.0.0` (with `bevy_renet2`, `renet2`,
+  `renet2_netcode` and `renetcode2`, all 1.0.0) and its `native_transport`, netcode over UDP,
+  plus `memory_transport` for tests only. `RepliconRenetPlugins` runs beside `RepliconPlugins`;
+  a server is started by inserting a `RenetServer` and `NetcodeServerTransport`, a client by a
+  `RenetClient` and `NetcodeClientTransport` (`server::serve`, `client::join::connect`), and
+  in `PreUpdate` the plugins move `ServerState` to `Running` and `ClientState` through
+  `Connecting` to `Connected`, and back to `Disconnected` when the connection goes.
+  - **Hosting:** `RC_HOST=<port>` (or empty for the default, 25600, `protocol::DEFAULT_PORT`),
+    or Open to Friends in the pause menu, which shows the address to give, binds UDP on every
+    interface (`server::host`) for up to 16 players. Singleplayer goes on as before: the host's
+    client is still `Disconnected`, so it's the authority and replicon still passes its
+    messages across locally. **Joining:** `RC_JOIN=<host[:port]>` adds no `ServerPlugin` or
+    `SavePlugin`, so a client opens no world and saves nothing. The renderer's systems, the
+    interaction systems and movement run once there's a `World` (`resource_exists`), and
+    `gather_chunks` once the camera hangs from the player, so nothing runs ahead of the welcome.
+  - **Versions:** `ProtocolPlugin` adds the game's version and `PROTOCOL_VERSION` to replicon's
+    protocol hash, which a client sends as it connects; the server refuses one whose hash
+    differs with a `ProtocolMismatch` and disconnects it, before anything else is sent, and the
+    client says so in the command bar and the log (`client::join::refused`). So `Welcome`
+    carries neither version. Failing to connect or losing the connection is said the same way.
+  - **Joining a world:** once a client is authorised (`AuthorizedClient` added), the server's
+    `players::welcome` spawns its player at the world's spawn with `PlayerOwner(client)` (the
+    same `player::arriving` bundle as the host's) and sends it `Welcome { seed, player }`, the
+    `PlayerState` it spawned. `sync_clock` syncs everyone as anyone joins, so the time comes
+    with it as a `TimeSync`, rate and all. The client's `join::arrive` (in `PostUpdate`, before
+    transforms propagate) builds its own `World` from the seed with no edits, spawns its
+    `LocalPlayer` from the state, and hangs the camera from it; the loaders then generate
+    terrain around it as in singleplayer. M0.6b's checksums go in `Welcome` and are checked in
+    `arrive`. When a client disconnects, `players::see_off` despawns its player and forgets its
+    `EditAllowances`.
+  - **Playing:** a client sends `PlayerPose { position, yaw, pitch }`, unreliable, every 50 ms
+    while connected, and the server's `move_players` puts its player there before keeping
+    chunks near players and checking edits, so reach and residency go by where it is. Edits
+    are `RequestEdit` and `BlockChanged` as before; a client applies every `BlockChanged`,
+    its own and others', to its own `World`, which records it in its edit layer if the chunk
+    isn't loaded yet, so the chunk generates with it.
+  - **Inventories and drops:** the server sends a client's player's `Inventory` to that client
+    alone as `InventoryChanged` whenever it changes it (`players::send_inventories`), and the
+    client puts it on its `LocalPlayer`; the host's is the server's own, so it's never sent.
+    An `Inventory` is written slot by slot to postcard and as its saved form to TOML
+    (`is_human_readable`), as postcard can't write the saved form's flattened stacks. Dropped
+    items are spawned `Replicated`, the first thing replicated: `DroppedItem` with only its
+    stack, and its `Transform` as only its translation (`Transform` has no serde without
+    Bevy's `serialize` feature), to every client, which draws them with `client::drops` as
+    the host does. Falling bypasses change detection on `DroppedItem` and leaves a resting
+    item's `Transform` alone, so only moving items and changed stacks are sent again.
+  - **Known gaps:** netcode runs unsecure: clients aren't authenticated (they pick their own
+    random id) and nothing's encrypted, fine among friends until connect tokens are handed out.
+    Not synced yet: edits made before a client joined, or in chunks it hadn't loaded when they
+    were broadcast if they arrive before its `Welcome` (M0.6c's `ChunkEdits`); other players,
+    whom nobody sees (M0.6d); `/tp`, which moves only the server's copy of a client's player,
+    and `/gamemode`, which the client's own movement doesn't follow (M0.6d's `Teleport`, and
+    the mode to come with it); a client's player is never saved and always arrives at the
+    spawn (M0.6d); a client leaving while winding leaves the clock wound. Poses aren't checked
+    for plausibility (M0.6d), and `REACH_SLACK` hasn't been raised for a pose's delay, so a
+    client flying fast can have an edit at the edge of reach refused.
+  - `tests/multiplayer.rs` runs a listen server and a client as two Apps over the memory
+    transport: the client is authorised and welcomed with the server's seed and its player,
+    its edit is made by the server and comes back as `BlockChanged`, the host's edit reaches
+    it, its inventory follows the server's, the item a block it breaks in survival drops
+    reaches it, leaving despawns its player, and a client of another version is refused and
+    told so.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
-  `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
-  `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
+  `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, `host.rs`, `players.rs`); `src/save/`
+  under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup,
+  `edits.rs`, `player.rs`, `join.rs`).
   Shared modules stay where they are. Later a default-on `client` cargo feature keeps wgpu and
   winit out of the dedicated server binary.
 
@@ -462,8 +525,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     picker or middle click. A request for a slot there isn't changes nothing. `RequestEdit`
     names the hotbar slot it places from, and in survival the server refuses a place unless
     that slot holds the block, and takes one from it when it's made; creative never uses
-    blocks up. From M0.6 the server replicates each player's `Inventory` to its owner; nothing
-    needs predicting, as clicks are answered within a round trip.
+    blocks up. Since M0.6a the server sends each client its player's `Inventory` as it changes
+    (`InventoryChanged`, §4.4); nothing needs predicting, as clicks are answered within a round trip.
   - **Dropped items** (`src/server/drops.rs`) are `DroppedItem { stack, .. }` entities the
     server moves: a broken block's item hops out of where it was, a thrown one leaves the eye
     the way the player looks, and both fall under gravity, colliding with blocks through
@@ -679,9 +742,9 @@ and loads.**
   - ☑ **M0.5d Commands and game modes on the server.**
   - ☑ **M0.5e Time on the server**, with `TimeSync`.
   - ☑ **M0.5f Server chunk residency**, headless, with shared holders in `World`.
-- ☐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
+- ◐ **M0.6 Networked multiplayer.** Join by address, determinism handshake, players and edits
   replicated, simple player models, chat (§4.4). In steps:
-  - ☐ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
+  - ☑ **M0.6a Transport.** `bevy_replicon_renet2`, hosting and joining (`RC_HOST`, `RC_JOIN`),
     two-App tests over the memory transport. `EditAllowances` forgets a client when it
     disconnects.
   - ☐ **M0.6b Determinism handshake**, with golden checksums and a CI matrix of Windows, macOS

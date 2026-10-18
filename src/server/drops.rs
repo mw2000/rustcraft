@@ -6,6 +6,7 @@
 
 use bevy::math::I64Vec3;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::collision::{move_and_collide, Aabb};
@@ -45,15 +46,19 @@ const LIFETIME: f32 = 300.0;
 const PICKUP_REACH: f32 = 1.5;
 const MERGE_REACH: f32 = 1.0;
 
-/// Some items lying in the world, at the middle bottom of its `Transform`.
-#[derive(Component, Debug)]
+/// Some items lying in the world, at the middle bottom of its `Transform`. Replicated to
+/// clients, which draw it, with only its stack: the rest is for the server moving it.
+#[derive(Component, Debug, Serialize, Deserialize)]
 #[require(Transform)]
 pub struct DroppedItem {
     pub stack: ItemStack,
+    #[serde(skip)]
     velocity: Vec3,
     /// How long it's lain there, in seconds.
+    #[serde(skip)]
     age: f32,
     // how old it must be to be picked up
+    #[serde(skip)]
     pickup_after: f32,
 }
 
@@ -100,6 +105,9 @@ pub(super) fn fall(
             || world.get_block_at(at).is_solid()
     };
     for (entity, mut item, mut transform) in &mut items {
+        // Falling changes nothing clients are sent, and one lying still isn't moved, so items
+        // are only replicated again as they move or their stacks change.
+        let item = item.bypass_change_detection();
         item.age += time.delta_secs();
         if item.age >= LIFETIME {
             commands.entity(entity).despawn();
@@ -114,7 +122,9 @@ pub(super) fn fall(
         }
         item.velocity.y = (item.velocity.y - GRAVITY * dt).max(-TERMINAL_SPEED);
         let (moved, hit) = move_and_collide(transform.translation, item.velocity * dt, ITEM, solid);
-        transform.translation = moved;
+        if transform.translation != moved {
+            transform.translation = moved;
+        }
         if hit.y {
             item.velocity.y = 0.0;
             let slowed = (1.0 - GROUND_FRICTION).powf(dt);
