@@ -2,15 +2,23 @@ mod desert;
 mod foothills;
 mod forest;
 mod glacier;
+mod jungle;
+mod savanna;
+mod taiga;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::Vec3;
 
+use super::plants::Plants;
+use super::trees::TreeKind;
 use crate::block::BlockType;
 pub use desert::Desert;
 pub use foothills::Foothills;
 pub use forest::Forest;
 pub use glacier::Glacier;
+pub use jungle::Jungle;
+pub use savanna::Savanna;
+pub use taiga::Taiga;
 
 // How hot and how wet a column is, each 0..1. See `NoiseGenerator::climate`.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -49,9 +57,19 @@ pub struct BaseColumn {
 pub trait Biome: Send + Sync {
     fn name(&self) -> &'static str;
 
-    // How strongly this biome holds on a column, 0..1. The ground it shapes blends in
-    // with this strength, and it owns the column's blocks where it's over 0.5.
-    fn strength(&self, column: &BaseColumn) -> f64;
+    // The most this biome can hold on a column in this climate, 0..1, from the climate alone:
+    // its strength wherever the climate alone decides it, and 1 where the climate can't rule it
+    // out. What follows the climate rather than the ground (grass, plants) blends in with this.
+    fn niche(&self, _climate: Climate) -> f64 {
+        1.0
+    }
+
+    // How strongly this biome holds on a column, 0..1, never more than its niche. The ground it
+    // shapes and its trees blend in with this strength, and it owns the column's blocks where
+    // it's over 0.5.
+    fn strength(&self, column: &BaseColumn) -> f64 {
+        self.niche(column.climate)
+    }
 
     // The column's height, given the base terrain's.
     fn height(&self, column: &BaseColumn) -> f64 {
@@ -64,11 +82,25 @@ pub trait Biome: Send + Sync {
         None
     }
 
-    // The most this biome can raise a column's tree density in this climate, over the base
-    // terrain's, before strength: all of its density, unless it knows its strength from the climate.
-    fn tree_gain(&self, _climate: Climate) -> f64 {
-        self.tree_density()
-            .map_or(0.0, |density| (density - BASE_TREE_DENSITY).max(0.0))
+    // The kind of tree that grows where it owns the ground, given the tree's own roll 0..1, or
+    // None for the base terrain's, which goes by the temperature.
+    fn tree_kind(&self, _pick: f64) -> Option<TreeKind> {
+        None
+    }
+
+    // Whether trees take root on `ground`, `above_sea` blocks up, where it owns the ground.
+    fn roots(&self, ground: BlockType, _above_sea: i64) -> bool {
+        ground == BlockType::Grass
+    }
+
+    // The colour of its grass, in sRGB, or None to leave the climate's.
+    fn grass(&self) -> Option<[f32; 3]> {
+        None
+    }
+
+    // The plants its grass grows, or None to leave the climate's.
+    fn plants(&self) -> Option<Plants> {
+        None
     }
 
     // The block to use where the base terrain would put `base`, `above_sea` blocks up, on
@@ -96,10 +128,14 @@ pub struct Biomes {
 
 impl Biomes {
     pub fn new(seed: u32) -> Self {
-        // earlier biomes win ties for a column
+        // the more particular first: where two hold equally, the earlier owns the column, and
+        // its trees, grass and plants blend in over the later's
         Self::with(vec![
             Box::new(Glacier),
             Box::new(Desert::new(seed)),
+            Box::new(Jungle),
+            Box::new(Savanna),
+            Box::new(Taiga),
             Box::new(Forest),
             Box::new(Foothills::new(seed)),
         ])
@@ -115,16 +151,17 @@ impl Biomes {
         let mut height = column.height;
         let mut trees = BASE_TREE_DENSITY;
         let (mut owner, mut strongest) = (BiomeId::BASE, 0.5);
-        for (i, biome) in self.biomes.iter().enumerate() {
+        // the last first, so the first listed blend their trees in over the rest's
+        for (i, biome) in self.biomes.iter().enumerate().rev() {
             let strength = biome.strength(column);
             if strength <= 0.0 {
                 continue;
             }
             height += (biome.height(column) - column.height) * strength;
             if let Some(density) = biome.tree_density() {
-                trees += (density - BASE_TREE_DENSITY) * strength;
+                trees += (density - trees) * strength;
             }
-            if strength > strongest {
+            if strength > 0.5 && strength >= strongest {
                 (owner, strongest) = (BiomeId(i as u8 + 1), strength);
             }
         }
@@ -132,17 +169,85 @@ impl Biomes {
     }
 
     /// The most tree density a column in this climate can have, without sampling its terrain.
+    /// Blending towards each biome's density by its strength raises it by no more than the sum
+    /// of what each could add at full strength, and strength is never more than niche.
     pub fn tree_bound(&self, climate: Climate) -> f64 {
-        let gain: f64 = self.biomes.iter().map(|b| b.tree_gain(climate)).sum();
+        let gain: f64 = self
+            .biomes
+            .iter()
+            .filter_map(|b| {
+                let density = b.tree_density()?;
+                Some((density - BASE_TREE_DENSITY).max(0.0) * b.niche(climate))
+            })
+            .sum();
         (BASE_TREE_DENSITY + gain).min(1.0)
+    }
+
+    /// The kind of tree `biome` grows, given the tree's own roll 0..1, or None for the base
+    /// terrain's.
+    pub fn tree_kind(&self, biome: BiomeId, pick: f64) -> Option<TreeKind> {
+        self.owner(biome)?.tree_kind(pick)
+    }
+
+    /// Whether trees take root on `ground`, `above_sea` blocks up, in `biome`.
+    pub fn roots(&self, biome: BiomeId, ground: BlockType, above_sea: i64) -> bool {
+        match self.owner(biome) {
+            Some(owner) => owner.roots(ground, above_sea),
+            None => ground == BlockType::Grass,
+        }
+    }
+
+    /// The linear colour of grass in this climate: the climate's own, drawn towards each
+    /// biome's by how well the climate suits it, so it changes as smoothly as the climate does.
+    pub fn grass_colour(&self, climate: Climate) -> Vec3 {
+        let mut colour = climate_grass(climate);
+        for biome in self.biomes.iter().rev() {
+            if let Some(grass) = biome.grass() {
+                let niche = biome.niche(climate);
+                if niche > 0.0 {
+                    colour = colour.lerp(Vec3::from(grass) / 255.0, niche as f32);
+                }
+            }
+        }
+        LinearRgba::from(Srgba::rgb(colour.x, colour.y, colour.z)).to_vec3()
+    }
+
+    /// The linear colour of leaves in this climate.
+    pub fn leaf_colour(&self, climate: Climate) -> Vec3 {
+        self.grass_tint(climate) * LEAF_TEXTURE_MEAN
+    }
+
+    /// What to multiply the grass texture by to draw `grass_colour`.
+    pub fn grass_tint(&self, climate: Climate) -> Vec3 {
+        self.grass_colour(climate) / GRASS_TEXTURE_MEAN
+    }
+
+    /// The plants grass grows in this climate, blended between biomes as `grass_colour` is.
+    pub fn plants(&self, climate: Climate) -> Plants {
+        let mut plants = Plants::of_climate(climate);
+        for biome in self.biomes.iter().rev() {
+            if let Some(theirs) = biome.plants() {
+                let niche = biome.niche(climate);
+                if niche > 0.0 {
+                    plants = plants.lerp(theirs, niche);
+                }
+            }
+        }
+        plants
+    }
+
+    /// Every biome's name, which structures' placements choose from.
+    pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.biomes.iter().map(|b| b.name())
+    }
+
+    fn owner(&self, biome: BiomeId) -> Option<&dyn Biome> {
+        biome.0.checked_sub(1).map(|i| &*self.biomes[i as usize])
     }
 
     // The biome's name, or None for the base terrain.
     pub fn name(&self, biome: BiomeId) -> Option<&'static str> {
-        biome
-            .0
-            .checked_sub(1)
-            .map(|i| self.biomes[i as usize].name())
+        self.owner(biome).map(|b| b.name())
     }
 
     // The block `biome` uses in place of the base terrain's `base`.
@@ -153,9 +258,9 @@ impl Biomes {
         above_sea: i64,
         gradient: f64,
     ) -> BlockType {
-        match biome.0 {
-            0 => base,
-            i => self.biomes[i as usize - 1].block(base, above_sea, gradient),
+        match self.owner(biome) {
+            Some(owner) => owner.block(base, above_sea, gradient),
+            None => base,
         }
     }
 }
@@ -179,8 +284,8 @@ const GRASS_COLD_WET: [f32; 3] = [30.0, 96.0, 24.0];
 const GRASS_TEXTURE_MEAN: f32 = 0.5;
 const LEAF_TEXTURE_MEAN: f32 = 0.25;
 
-// Linear colour of grass in this climate.
-pub fn grass_colour(climate: Climate) -> Vec3 {
+// The sRGB colour, 0..1, of the base terrain's grass in this climate.
+fn climate_grass(climate: Climate) -> Vec3 {
     let srgb = |c: [f32; 3]| Vec3::from(c) / 255.0;
     let (t, h) = (
         climate.temperature.clamp(0.0, 1.0),
@@ -188,18 +293,7 @@ pub fn grass_colour(climate: Climate) -> Vec3 {
     );
     let dry = srgb(GRASS_COLD_DRY).lerp(srgb(GRASS_HOT_DRY), t);
     let wet = srgb(GRASS_COLD_WET).lerp(srgb(GRASS_HOT_WET), t);
-    let colour = dry.lerp(wet, h);
-    LinearRgba::from(Srgba::rgb(colour.x, colour.y, colour.z)).to_vec3()
-}
-
-// Linear colour of leaves in this climate.
-pub fn leaf_colour(climate: Climate) -> Vec3 {
-    grass_tint(climate) * LEAF_TEXTURE_MEAN
-}
-
-// What to multiply the grass texture by to draw `grass_colour`.
-pub fn grass_tint(climate: Climate) -> Vec3 {
-    grass_colour(climate) / GRASS_TEXTURE_MEAN
+    dry.lerp(wet, h)
 }
 
 #[cfg(test)]
@@ -295,6 +389,10 @@ mod tests {
         colour.x / colour.y
     }
 
+    fn grass_colour(climate: Climate) -> Vec3 {
+        Biomes::new(1).grass_colour(climate)
+    }
+
     #[test]
     fn test_hot_dry_grass_is_yellower_than_wet() {
         let dry = grass_colour(climate(1.0, 0.0));
@@ -327,7 +425,102 @@ mod tests {
 
     #[test]
     fn test_tint_draws_grass_colour_from_texture() {
+        let biomes = Biomes::new(1);
         let c = climate(0.3, 0.8);
-        assert!((grass_tint(c) * GRASS_TEXTURE_MEAN - grass_colour(c)).length() < 1e-6);
+        assert!(
+            (biomes.grass_tint(c) * GRASS_TEXTURE_MEAN - biomes.grass_colour(c)).length() < 1e-6
+        );
+    }
+
+    #[test]
+    fn test_new_biomes_grass_stands_out_from_their_neighbours() {
+        let brightness = |c: Vec3| c.x + c.y + c.z;
+        // jungle is darker than the forest beside it, savanna yellower than the grass beside it,
+        // and taiga darker than the open country beside it
+        let (jungle, forest) = (
+            grass_colour(climate(0.9, 0.9)),
+            grass_colour(climate(0.5, 0.9)),
+        );
+        assert!(
+            brightness(jungle) < brightness(forest) * 0.8,
+            "{jungle} {forest}"
+        );
+        let (savanna, open) = (
+            grass_colour(climate(0.8, 0.5)),
+            grass_colour(climate(0.5, 0.5)),
+        );
+        assert!(
+            yellowness(savanna) > yellowness(open) * 1.5,
+            "{savanna} {open}"
+        );
+        let (taiga, open) = (
+            grass_colour(climate(0.3, 0.5)),
+            grass_colour(climate(0.5, 0.5)),
+        );
+        assert!(brightness(taiga) < brightness(open) * 0.6, "{taiga} {open}");
+    }
+
+    #[test]
+    fn test_grass_colour_changes_smoothly_across_the_climate() {
+        // a step a hundredth of the climate across, about fifty blocks, never changes it much:
+        // biomes' ramps are a tenth of the climate wide or more, rising by up to 0.15 a step, and
+        // move it most where savanna's gold gives way to jungle's green, so a change of grass
+        // takes several hundred blocks
+        let biomes = Biomes::new(1);
+        for t in 0..100 {
+            for h in 0..100 {
+                let at = |t: i32, h: i32| {
+                    biomes.grass_colour(climate(t as f32 / 100.0, h as f32 / 100.0))
+                };
+                let here = at(t, h);
+                for next in [at(t + 1, h), at(t, h + 1)] {
+                    assert!(
+                        (here - next).length() < 0.075,
+                        "{here} to {next} at {t}, {h}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_tree_bound_still_rules_out_most_spots_in_open_country_and_savanna() {
+        // so coarse LODs skip sampling the terrain for most cells there, see `rules_out`
+        let biomes = Biomes::new(1);
+        for (t, h) in [(0.5, 0.5), (0.8, 0.5), (0.9, 0.1)] {
+            let bound = biomes.tree_bound(climate(t, h));
+            assert!(bound < 0.1, "{bound} at {t}, {h}");
+        }
+        for (t, h) in [(0.9, 0.9), (0.3, 0.6), (0.5, 0.9), (0.8, 0.5)] {
+            let column = BaseColumn {
+                climate: climate(t, h),
+                ..column(0.0)
+            };
+            let (_, _, trees) = biomes.shape(&column);
+            assert!(trees <= biomes.tree_bound(column.climate) + 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_tree_density_blends_between_biomes_without_jumps() {
+        let biomes = Biomes::new(1);
+        let trees = |t: f32, h: f32| {
+            biomes
+                .shape(&BaseColumn {
+                    climate: climate(t, h),
+                    ..column(0.0)
+                })
+                .2
+        };
+        for t in 0..100 {
+            for h in 0..100 {
+                let (t, h) = (t as f32 / 100.0, h as f32 / 100.0);
+                let here = trees(t, h);
+                for next in [trees(t + 0.01, h), trees(t, h + 0.01)] {
+                    assert!((here - next).abs() < 0.15, "{here} to {next} at {t}, {h}");
+                }
+                assert!(here <= biomes.tree_bound(climate(t, h)) + 1e-9);
+            }
+        }
     }
 }

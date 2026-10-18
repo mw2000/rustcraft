@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 use super::furnace::{container_stack, ContainerView};
 use super::Inventory;
-use crate::chunks::generate::biome::{grass_tint, Climate};
+use crate::chunks::generate::biome::{Biomes, Climate};
 use crate::chunks::material::block_atlas;
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
@@ -91,8 +91,8 @@ pub(crate) fn load_icons(
     };
     let (atlas, layout) = strip("assets/textures/blocks.png");
     let (items, items_layout) = strip("assets/textures/items.png");
-    // as it is in a mild climate
-    let grass = grass_tint(Climate::default());
+    // as it is in a mild climate, which no biome's grass changes, whatever the seed
+    let grass = Biomes::new(0).grass_tint(Climate::default());
     commands.insert_resource(ItemIcons {
         atlas,
         layout,

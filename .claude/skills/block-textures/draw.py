@@ -262,6 +262,28 @@ def tall_grass(rng):
     return out
 
 
+def fern(rng):
+    """Greyscale fronds fanning out from the ground, tinted like tall grass: each a darker midrib with
+    a leaflet off it at every step, alternately either side, the outer fronds lower and drooping."""
+    grey = shades("GrassTop", 1.5)
+    out = clear()
+    for x0, lean, length in [(6, -1.0, 9), (7, -0.45, 12), (8, 0.05, 14), (9, 0.5, 12), (9, 1.05, 9)]:
+        length += rng.integers(-1, 2)
+        points = [(x0 + 0.5 + lean * 7 * t, 15.5 - 14 * t + abs(lean) * 8 * t * t) for t in np.linspace(0, 1, length + 1)]
+        for i, ((x, y), (nx, ny)) in enumerate(zip(points, points[1:])):
+            tx, ty = nx - x, ny - y
+            norm = (tx * tx + ty * ty) ** 0.5
+            if not (0 <= x < 16 and 0 <= y < 16):
+                break
+            paint(out, int(y), int(x), grey[0] if i < 3 else grey[1])
+            if 2 <= i < length - 1:
+                side = 1 if i % 2 else -1
+                lx, ly = int(x - side * ty / norm * 1.2 + tx / norm * 0.5), int(y + side * tx / norm * 1.2 + ty / norm * 0.5)
+                if 0 <= lx < 16 and 0 <= ly < 16 and out[ly, lx, 3] == 0:
+                    paint(out, ly, lx, grey[-1] if i % 4 < 2 else grey[2])
+    return out
+
+
 STEM = [(58, 98, 30), (76, 124, 40), (98, 148, 52)]  # untinted green, darkest first
 
 
@@ -399,7 +421,7 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
             BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
             RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side, StructureVoid=structure_void,
-            LootMarker=loot_marker)
+            LootMarker=loot_marker, Fern=fern)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

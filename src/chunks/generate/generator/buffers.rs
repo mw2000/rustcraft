@@ -1,7 +1,6 @@
 use crate::block::Tile;
 use crate::block::TILE_COUNT;
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::biome::grass_tint;
 use crate::chunks::generate::noise::NoiseGenerator;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec3;
@@ -283,7 +282,9 @@ impl GrassTint {
         let size = CHUNK_SIZE as f32;
         let corners = [(0.0, 0.0), (size, 0.0), (0.0, size), (size, size)].map(|(x, z)| {
             let world = origin + Vec3::new(x - 0.5, 0.0, z - 0.5) * scale;
-            grass_tint(noise.climate(world.x as f64, world.z as f64))
+            noise
+                .biomes()
+                .grass_tint(noise.climate(world.x as f64, world.z as f64))
         });
         Self { corners }
     }

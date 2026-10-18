@@ -11,6 +11,8 @@ const MAX_GRADIENT: f64 = 1.5;
 // least lush: dense where it's wet and warm, sparse where it's dry or cold.
 const MOST_GRASS: f64 = 0.4;
 const LEAST_GRASS: f64 = 0.04;
+// The most of the grass any biome covers with tall grass and ferns, before tufts.
+const MOST_PLANTS: f64 = 0.6;
 // Tall grass grows in tufts and thins in clearings, this many blocks across.
 const TUFT_SPACING: i64 = 5;
 // Flowers grow in patches about this far apart, each of one kind, where the patch noise is
@@ -25,6 +27,38 @@ const FLOWERS: [BlockType; 3] = [
     BlockType::Dandelion,
     BlockType::Cornflower,
 ];
+
+/// What grows on a climate's grass: the shares of it with tall grass and with ferns, before
+/// tufts, and how much of each patch of flowers blooms. Biomes have their own, see
+/// `Biomes::plants`.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct Plants {
+    pub grass: f64,
+    pub ferns: f64,
+    pub flowers: f64,
+}
+
+impl Plants {
+    /// The base terrain's, lusher the wetter and warmer it is. Flowers want some lushness, but
+    /// less than grass does.
+    pub fn of_climate(climate: Climate) -> Self {
+        let lushness = lushness(climate);
+        Self {
+            grass: LEAST_GRASS + (MOST_GRASS - LEAST_GRASS) * lushness,
+            ferns: 0.0,
+            flowers: lushness.sqrt(),
+        }
+    }
+
+    pub fn lerp(self, other: Plants, t: f64) -> Self {
+        let mix = |a: f64, b: f64| a + (b - a) * t;
+        Self {
+            grass: mix(self.grass, other.grass),
+            ferns: mix(self.ferns, other.ferns),
+            flowers: mix(self.flowers, other.flowers),
+        }
+    }
+}
 
 /// The plant on the grass of column `x`, `z`, if one grows there: decided from the column
 /// alone (INV-3), by its hash and the climate. `ground` is the column's top block and
@@ -45,19 +79,22 @@ pub fn plant_on(
         MOST_FLOWERS * smoothstep(PATCH_EDGE, 1.0, value_noise(seed + 1, x, z, PATCH_SPACING));
     let tufts = 0.4 + 1.2 * value_noise(seed + 2, x, z, TUFT_SPACING);
     // most columns have nothing, and leave before sampling the climate
-    if chance >= flowers.max(MOST_GRASS * tufts) {
+    if chance >= flowers.max(MOST_PLANTS * tufts) {
         return None;
     }
-    let lushness = lushness(noise.climate(x as f64, z as f64));
-    // flowers want some lushness, but less than grass does
-    if chance < flowers * lushness.sqrt() {
+    let plants = noise.biomes().plants(noise.climate(x as f64, z as f64));
+    if chance < flowers * plants.flowers {
         let kind = value_noise(seed + 3, x, z, KIND_SPACING);
         // the noise gathers round the middle, so this splits it into thirds
         let i = (kind > 0.43) as usize + (kind > 0.57) as usize;
         return Some(FLOWERS[i]);
     }
-    let cover = LEAST_GRASS + (MOST_GRASS - LEAST_GRASS) * lushness;
-    (chance < cover * tufts).then_some(BlockType::TallGrass)
+    let grass = plants.grass * tufts;
+    if chance < grass {
+        Some(BlockType::TallGrass)
+    } else {
+        (chance < grass + plants.ferns * tufts).then_some(BlockType::Fern)
+    }
 }
 
 // How lush a climate is, 0..1: wet and warm.
@@ -146,6 +183,31 @@ mod tests {
             .filter(|&(x, z)| patch(x, z))
             .count();
         assert!(patched < 256 * 256 / 5, "{patched}");
+    }
+
+    #[test]
+    fn test_biomes_grow_their_own_plants_within_the_bound() {
+        let biomes = crate::chunks::generate::biome::Biomes::new(1);
+        let climate = |temperature, humidity| Climate {
+            temperature,
+            humidity,
+        };
+        let jungle = biomes.plants(climate(0.9, 0.9));
+        let savanna = biomes.plants(climate(0.8, 0.5));
+        let taiga = biomes.plants(climate(0.3, 0.6));
+        let open = biomes.plants(climate(0.5, 0.5));
+        assert!(jungle.ferns > 0.1 && taiga.ferns > 0.1);
+        assert_eq!(0.0, savanna.ferns + open.ferns);
+        assert!(savanna.flowers > Plants::of_climate(climate(0.8, 0.5)).flowers);
+        assert!(savanna.grass > open.grass && taiga.grass < open.grass);
+        // `plant_on` leaves early where no climate could grow anything
+        for t in 0..=20 {
+            for h in 0..=20 {
+                let plants = biomes.plants(climate(t as f32 / 20.0, h as f32 / 20.0));
+                assert!(plants.grass + plants.ferns <= MOST_PLANTS);
+                assert!(plants.flowers <= 1.0);
+            }
+        }
     }
 
     #[test]

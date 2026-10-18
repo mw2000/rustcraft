@@ -90,7 +90,7 @@ out = [
     "[placement]",
     "cell = 640",
     "chance = 0.6",
-    'biomes = ["forest", "foothills"]',
+    'biomes = ["forest", "foothills", "taiga", "savanna"]',
     "min_above_sea = 12",
     "max_rise = 4",
     "hilltop = true",

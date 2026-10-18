@@ -1,7 +1,7 @@
 use noise::{NoiseFn, Perlin};
 
 use super::super::fractal::resolved;
-use super::{smoothstep, BaseColumn, Biome};
+use super::{smoothstep, BaseColumn, Biome, Climate};
 use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
 
@@ -61,8 +61,7 @@ impl Biome for Desert {
         "desert"
     }
 
-    fn strength(&self, column: &BaseColumn) -> f64 {
-        let climate = column.climate;
+    fn niche(&self, climate: Climate) -> f64 {
         smoothstep(HOT.0, HOT.1, climate.temperature as f64)
             * smoothstep(DRY.0, DRY.1, climate.humidity as f64)
     }
@@ -108,7 +107,6 @@ impl Biome for Desert {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunks::generate::biome::Climate;
 
     fn climate(temperature: f32, humidity: f32) -> Climate {
         Climate {

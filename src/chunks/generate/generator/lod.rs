@@ -185,7 +185,11 @@ impl LodBlocks {
                     temperature,
                 );
                 tops[Self::column(size, cx, cz)] = ground_top(height);
-                if !real_trees && ground == BlockType::Grass {
+                if !real_trees
+                    && noise
+                        .biomes()
+                        .roots(biome, ground, height - 1 - WATER_LEVEL)
+                {
                     forest[Self::column(size, cx, cz)] =
                         (grid.trees(cx, cz) * FOREST_COVER).min(1.0) as f32;
                 }

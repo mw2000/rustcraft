@@ -3,16 +3,17 @@
 //! map (§5.7) and the `world_map` example both draw with it.
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
-use bevy::math::{DVec2, DVec3};
+use bevy::math::{DVec2, DVec3, Vec3};
 
-use crate::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
-use crate::chunks::generate::generator::FREEZE_TEMPERATURE;
+use crate::chunks::generate::biome::{Biomes, Climate};
+use crate::chunks::generate::generator::{FREEZE_TEMPERATURE, SNOWY_GRASS_TEMPERATURE};
 use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::WATER_LEVEL;
 
 const SAND: [f64; 3] = [222.0, 196.0, 132.0];
 const SEA_ICE: [f64; 3] = [190.0, 222.0, 240.0];
 const GLACIER: [f64; 3] = [226.0, 238.0, 248.0];
+const SNOW: [f32; 3] = [236.0, 242.0, 248.0];
 
 /// A square grid of the terrain and its climate, sampled `scale` blocks apart, x across and z
 /// down, so north is up.
@@ -83,7 +84,7 @@ impl Relief {
                 let ground = match biomes.name(sample.biome) {
                     Some("desert") => SAND,
                     Some("glacier") => GLACIER,
-                    _ => grass_map_colour(climate, sample.trees),
+                    _ => grass_map_colour(biomes, climate, sample.trees),
                 };
                 let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
                 colour = lerp_rgb(ground, colour, rock);
@@ -141,10 +142,17 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
     STOPS[STOPS.len() - 1].1
 }
 
-// Grass in this climate under trees this dense, as an sRGB map colour.
-fn grass_map_colour(climate: Climate, trees: f64) -> [f64; 3] {
+// Grass in this climate, or the snow over it in the cold, under trees this dense, as an sRGB
+// map colour. Biomes tint their grass and leaves, see `Biomes::grass_colour`.
+fn grass_map_colour(biomes: &Biomes, climate: Climate, trees: f64) -> [f64; 3] {
     let canopy = (trees * 1.6).min(1.0) as f32;
-    let linear = grass_colour(climate).lerp(leaf_colour(climate), canopy);
+    let ground = if climate.temperature < SNOWY_GRASS_TEMPERATURE {
+        let snow = Vec3::from(SNOW) / 255.0;
+        LinearRgba::from(Srgba::rgb(snow.x, snow.y, snow.z)).to_vec3()
+    } else {
+        biomes.grass_colour(climate)
+    };
+    let linear = ground.lerp(biomes.leaf_colour(climate), canopy);
     let srgb = Srgba::from(LinearRgba::rgb(linear.x, linear.y, linear.z)).to_vec3();
     (srgb.as_dvec3() * 255.0).into()
 }

@@ -316,7 +316,8 @@ pub(super) fn mesh_opaque_greedy(
                         };
                         let shade = match cell.block {
                             BlockType::Leaves => source.canopy_shade(position),
-                            BlockType::Grass => source.forest_shade(position),
+                            // what trees take root on, see `Biome::roots`
+                            BlockType::Grass | BlockType::Snow => source.forest_shade(position),
                             _ => 1.0,
                         };
                         (tint * ao.powf(AO_GAMMA) * shade)

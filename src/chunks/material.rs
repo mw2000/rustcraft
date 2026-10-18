@@ -381,6 +381,11 @@ mod tests {
     fn test_block_means_match_the_atlas() {
         let (shader, atlas) = (shader_means(), atlas_means());
         assert_eq!(atlas.len(), shader.len(), "one mean per atlas cell");
+        // and the shader says as much, or it fails to compile and draws nothing
+        let text = std::fs::read_to_string("assets/shaders/block_texture.wesl").unwrap();
+        let cells = atlas.len();
+        assert!(text.contains(&format!("const ATLAS_CELLS: f32 = {cells}.0;")));
+        assert!(text.contains(&format!("array<vec3<f32>, {cells}>(")));
         for (cell, (s, a)) in shader.iter().zip(&atlas).enumerate() {
             for i in 0..3 {
                 assert!(

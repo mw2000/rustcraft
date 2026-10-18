@@ -12,12 +12,13 @@ use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CELLS, CHUNK_SIZE};
 
 // Columns of chunks sampled besides the spawn's, in blocks: thousands of blocks out in each
-// direction, the last far enough north to be cold and in a wood, so floating point has had
-// room to drift.
-const FAR_COLUMNS: [I64Vec2; 3] = [
+// direction, so floating point has had room to drift, the third far enough north to be cold
+// and in taiga, and the last in jungle, as the spawn is in savanna.
+const FAR_COLUMNS: [I64Vec2; 4] = [
     I64Vec2::new(2_900, -1_700),
     I64Vec2::new(-7_400, 5_300),
     I64Vec2::new(11_976, 12_500),
+    I64Vec2::new(-2_112, -2_112),
 ];
 // The chunk layers sampled in each column besides those at, over and just under its ground: a
 // cavern's depth, near the bottom where ores are richest, and halfway between.
@@ -109,9 +110,10 @@ mod tests {
     // update it deliberately, knowing that worlds will generate differently from before, so a
     // game of the version before can't join one of this version, and saved edits sit on new
     // terrain. CI runs this on Linux, Windows and macOS to see whether they agree (D-3).
-    // Last changed by M2.3, which put a chest at the watchtower's loot marker, in the structure's
-    // chunks: the rest hash as before.
-    const GOLDEN: u64 = 0xcb74_db1f_d1c2_c243;
+    // Last changed by M2.6, which brought jungle, savanna and taiga, changing the trees, plants
+    // and grass of much of the world, the spawn's savanna and the cold column's taiga among it,
+    // and sampled a jungle column too.
+    const GOLDEN: u64 = 0xfe17_9ccc_4c93_e061;
 
     #[test]
     fn test_generation_matches_its_golden_checksum() {
@@ -139,6 +141,17 @@ mod tests {
             .flat_map(|column| &column[3..]);
         let caves = deep.filter(|chunk| chunk.iter_non_air().count() < CELLS);
         assert!(caves.count() >= 2);
+    }
+
+    #[test]
+    fn test_the_samples_reach_into_the_newest_biomes() {
+        let noise = super::NoiseGenerator::new(3);
+        let (x, z, _) = noise.find_spawn();
+        let biome = |x: i64, z: i64| noise.biomes().name(noise.sample(x as f64, z as f64).biome);
+        assert_eq!(Some("savanna"), biome(x, z));
+        let [.., taiga, jungle] = super::FAR_COLUMNS;
+        assert_eq!(Some("taiga"), biome(taiga.x, taiga.y));
+        assert_eq!(Some("jungle"), biome(jungle.x, jungle.y));
     }
 
     #[test]

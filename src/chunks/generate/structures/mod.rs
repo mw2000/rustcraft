@@ -425,6 +425,20 @@ mod tests {
     }
 
     #[test]
+    fn test_every_structure_stands_in_biomes_that_exist() {
+        let biomes = super::super::biome::Biomes::new(3);
+        for structure in STRUCTURES.iter() {
+            for name in &structure.placement.biomes {
+                assert!(
+                    biomes.names().any(|b| b == name),
+                    "{} stands in {name}, which isn't a biome",
+                    structure.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_placement_is_the_same_whatever_asks_and_in_whatever_order() {
         let noise = NoiseGenerator::new(3);
         let all = Placements::default().near(&noise, AREA.0, AREA.1);

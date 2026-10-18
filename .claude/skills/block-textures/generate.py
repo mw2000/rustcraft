@@ -60,6 +60,7 @@ TILES = [
     dict(name="ChestSide", drawn=True),
     dict(name="StructureVoid", drawn=True),  # for authoring structures: icons only, never drawn in the world
     dict(name="LootMarker", drawn=True),
+    dict(name="Fern", drawn=True),  # greyscale, tinted per climate like TallGrass
 ]
 
 

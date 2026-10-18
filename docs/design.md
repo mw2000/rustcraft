@@ -61,9 +61,9 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 |---|---|---|
 | World | 1024 blocks tall, sea level 448, 16³ chunks stored run-length encoded, seeded with `RC_SEED`; chunks held loaded by the client round the camera and by the server round each player | `src/world.rs`, `src/chunks/chunk.rs`, `src/chunks/generate/mod.rs`, `src/server/chunks.rs` |
 | Terrain | Heightmap terrain from noise, sampled per 256-block region, or per coarse cell for far LODs, with caves carved out of it and ores in its stone (§5.4) | `src/chunks/generate/` (`noise.rs`, `region*.rs`, `columns.rs`, `caves.rs`, `ores.rs`) |
-| Biomes | Climate-driven desert, forest, foothills, glacier; tinted grass and leaves | `src/chunks/generate/biome/` |
-| Trees | Placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
-| Plants | Tall grass and flowers on the grass, by climate, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
+| Biomes | Climate-driven desert, savanna, jungle, forest, taiga, glacier, and foothills round the mountains; grass and leaves tinted by climate and biome (§5.7) | `src/chunks/generate/biome/` |
+| Trees | Broadleaf, pine, jungle giants and acacias, by biome, placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
+| Plants | Tall grass, ferns and flowers on the grass, by climate and biome, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
 | Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); so far a ruined watchtower on hilltops | `src/chunks/generate/structures/`, `assets/structures/` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
@@ -83,7 +83,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own (stone, grass, sand,
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
 cobblestone, stone bricks, bricks, coal, copper and iron ore, crafting table, furnace, chest), plants
-(tall grass, poppy, dandelion, cornflower), the torch and the bed, and for farming farmland and
+(tall grass, poppy, dandelion, cornflower, fern), the torch and the bed, and for farming farmland and
 wheat's eight stages.
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
@@ -1418,8 +1418,9 @@ landmarks visible from far away (P1).
     7×7 and 20 layers, a cobblestone footing sunk a layer, cobblestone rising into stone brick,
     a doorway, arrow slits, a stair of single blocks climbing once round the inside to a floor
     under a crenellated parapet, and a corner fallen away from halfway up, with a `loot` marker
-    on the top floor. One cell in 640 blocks square in forest and foothills, on hilltops 12 or
-    more blocks over the sea, with ground under it rising no more than 4: about 3 per 10 km²
+    on the top floor. One cell in 640 blocks square in forest, foothills, taiga and savanna (the
+    last two since M2.6, which took them from the first two), on hilltops 12 or more blocks over
+    the sea, with ground under it rising no more than 4: about 3 per 10 km²
     round seed 3's spawn, the nearest 220 m from it.
   - **Cost** (INV-7): a chunk or node with no structure near pays a lookup of a few cells by
     hash, 0.2 µs. Building one into a chunk it touches costs about 5 µs (2–4% of generating
@@ -1492,6 +1493,63 @@ several angles, near and far, before it lands. It should have:
 - **Landmarks:** rare continent-scale features (a huge peak, a volcano, a giant tree, a fallen
   tower) placed far apart and visible from very far away.
 - A map: a top-down view of explored land, drawn from the same terrain sampling as `world_map`.
+
+Built (M2.6): jungle, savanna and taiga, chosen from where `world_map --biomes` showed lowland
+the climate gave no biome of its own: hot ground of middling humidity between desert and forest
+(about a sixth of all lowland, the biggest gap), and cold, damp ground between the glaciers and
+the forests, which had been bare grass or snow with a few pines. The jungle takes the hot end of
+the forests, for M2.4's jungle temples. Swamp and plains are left for later: a swamp's pools
+need the ground shaped low and wet, and plains were most of the gap savanna now fills.
+
+- **Climate niches.** `Biome::niche` is how well a climate suits a biome from the climate alone,
+  and its strength by default. Jungle is hot (0.62–0.72) and wet (0.6–0.7); savanna as hot as
+  desert, from where the desert gives way at the same humidity (0.35–0.45, so the two always sum
+  to one and there's no gap) to where forest begins (0.66–0.54); taiga from the glaciers' edge
+  (0.1–0.18) up to where pines give way (0.42–0.34), anywhere not dry (over 0.3–0.4). Biomes are
+  listed the more particular first: where two hold equally the earlier owns the column, so
+  jungle and taiga take over from forest, and the climate biomes from foothills. On seeds 3 and
+  42 savanna is 22% and 7% of land, jungle 5% and 11%, taiga 6% and 9%.
+- **Blending.** Heights blend as before. Tree density now moves towards each biome's own by its
+  strength, the last listed first, rather than each adding its own, so a jungle over a forest
+  is the jungle's density, not both piled up; `tree_bound` still bounds it for LODs ruling out
+  trees from the climate. Grass colour (`Biomes::grass_colour`) is the climate's, drawn towards
+  each biome's own by its niche, so it's as smooth as the climate and the same at every LOD,
+  sampled at mesh corners as before; leaves take after it. Plants blend the same way.
+- **Jungle:** deep green, 0.85 trees a cell: six in ten are jungle giants (`TreeKind::Jungle`,
+  trunks 15–20 logs and all 2 × 2, a wide flattened crown with lobes off branches from high up,
+  topping out at 24 blocks), the rest broadleaves under them. Thick tall grass with ferns, few
+  flowers.
+- **Savanna:** golden grass, 0.06 trees a cell, all acacias (`TreeKind::Acacia`: a 5–8 log
+  trunk with limbs reaching out to flat pads of leaves level with or over its flat crown). Long
+  grass all over, and flower patches in full bloom.
+- **Taiga:** dark, cool green, 0.6 pines a cell. Its colder half is under snow (the base
+  terrain's snow over grass below 0.25), and taiga trees take root in snow up to 140 blocks
+  over the sea (`Biome::roots`), so it's a snowy pine forest there; the far LODs' forest tint
+  darkens snow under it as it does grass. Ferns and thin grass.
+- **Blocks:** one, the fern, a plant tinted like tall grass with a tile drawn by the
+  `block-textures` skill. Jungle and acacia trees use the log and leaves, tinted by biome.
+- **LODs (INV-5):** a tree's kind comes from the biome owning its trunk's column, which every
+  level samples from the noise at that spot, so every level grows the same trees, as tests
+  check over each new biome; level 0 matches full detail there. Coarse cells colour the ground
+  by the same grass colour, and far forest tint follows tree density, so jungles read dark
+  green, savannas gold and taiga dark green over snow from kilometres off.
+- **Map:** `map::Relief` colours grass by `Biomes::grass_colour`, under leaves by tree density,
+  and draws snow where the grass is under it, so the in-game map and `world_map` both show the
+  new biomes.
+- **Structures** name biomes in their placement; a test checks every name is a biome's. The
+  watchtower stands in taiga and savanna too, as they took ground it had in forest and
+  foothills.
+- **Cost** (INV-7): a column's biomes cost three more climate ramps, and plants sample the
+  climate for half as many columns again (the most any biome covers rose from 0.4 to 0.6).
+  Counted in instructions, as the machine was too loaded to time, the bench is 7% (seed 1) and
+  5% (seed 3) dearer overall and its LOD meshing 14% and 8%, nearly all of it noise sampled for
+  the trees savanna, taiga and jungle grow where there was bare grass before, and in their
+  leaves; chunk generation and meshing together are about 2% dearer. `tree_bound` still rules out savanna's
+  empty cells from the climate alone, as a test checks.
+- **Determinism:** the golden checksum changed, as the spawn of seed 3 is now savanna and its
+  cold sample column taiga; a fourth column samples a jungle.
+- Later: swamp, plains, badlands, vines on jungle giants, and regional ores by biome (M2.5,
+  which can read `Biomes::name` the way structures do).
 
 Built (M2.9): M opens the map (`src/map/`), a `GameState` like the inventory's, which frees the
 cursor and stops the player but not the clock; M or Escape closes it. The client reveals 64-block
@@ -1759,7 +1817,7 @@ start.**
   temple, jungle temple, forest ruin, glacier outpost, mineshaft, dungeon, alongside the
   watchtower, each reworked with the new blocks (§5.6).
 - ☐ **M2.5 Regional ores and higher tiers.** (§5.3)
-- ☐ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
+- ☑ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☐ **M2.7 Landmarks.** (§5.7)
 - ☑ **M2.8 Edits in LODs.** Players' builds seen from far away (§4.2, §4.4).
   - ☐ Follow-up: draw builds as boxes in coarse LODs, as structures are, so towers and houses

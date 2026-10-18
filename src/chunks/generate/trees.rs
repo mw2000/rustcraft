@@ -4,6 +4,7 @@ use super::biome::BiomeId;
 use super::generator::column_block;
 use super::noise::NoiseGenerator;
 use super::region_store::{HeightSampler, SLOPE_SPAN};
+use super::WATER_LEVEL;
 use crate::block::BlockType;
 
 /// What trees need to know about the ground to take root, from the full-detail heightmap or
@@ -55,11 +56,11 @@ const CELL: i64 = 10;
 pub const TREE_REACH: i64 = 10;
 /// How far above its ground any tree reaches.
 pub const TREE_HEIGHT: i64 = 27;
-// Colder than this, trees are pines.
+// Colder than this, the base terrain's trees are pines.
 const PINE_TEMPERATURE: f32 = 0.38;
 // Ground steeper than this (see `terrain_block`) is too steep to take root on.
 const MAX_GRADIENT: f64 = 1.5;
-// Broadleaf crowns are a big round crown with smaller lobes hanging off it on branches.
+// Crowns other than pines' are a big crown with smaller lobes off it on branches.
 const LOBES: usize = 3;
 // Trunks this tall are two blocks thick.
 const THICK_TRUNK: i64 = 12;
@@ -83,6 +84,73 @@ pub enum TreeKind {
     Broadleaf,
     // tiers of leaves narrowing up a tall trunk
     Pine,
+    // a wide, flattened crown high on a tall, thick trunk, branching only near the top
+    Jungle,
+    // flat pads of leaves on limbs spreading from a short trunk
+    Acacia,
+}
+
+impl TreeKind {
+    // Its trunk's height in logs and its crown's spread, `growth` 0..1 of the way from the
+    // smallest it grows to the biggest. Jungle trees are all thick enough for 2 x 2 trunks.
+    fn size(self, growth: f64) -> (i64, f64) {
+        match self {
+            TreeKind::Broadleaf => (10 + (growth * 6.0) as i64, 5.0 + growth * 2.0),
+            TreeKind::Pine => (16 + (growth * 9.0) as i64, 4.5 + growth * 1.5),
+            TreeKind::Jungle => (15 + (growth * 6.0) as i64, 5.5 + growth * 1.5),
+            TreeKind::Acacia => (5 + (growth * 4.0) as i64, 4.5 + growth * 1.5),
+        }
+    }
+
+    // How its crown and lobes are shaped. Pines' tiers are drawn without them.
+    fn crown(self) -> Crown {
+        match self {
+            TreeKind::Broadleaf | TreeKind::Pine => Crown {
+                rise: -1.0,
+                squash: 0.7,
+                out: 0.75,
+                drop: (0.25, 0.5),
+                lobe: 0.6,
+                lobe_squash: 0.75,
+                fork: 0.6,
+            },
+            TreeKind::Jungle => Crown {
+                rise: -1.0,
+                squash: 0.5,
+                out: 0.75,
+                drop: (0.1, 0.35),
+                lobe: 0.6,
+                lobe_squash: 0.55,
+                fork: 0.75,
+            },
+            // pads level with the crown or a little over it, on limbs from low down
+            TreeKind::Acacia => Crown {
+                rise: 0.0,
+                squash: 0.3,
+                out: 0.8,
+                drop: (-0.25, 0.05),
+                lobe: 0.55,
+                lobe_squash: 0.35,
+                fork: 0.45,
+            },
+        }
+    }
+}
+
+// The shape of a crown of blobs, in proportion to its spread.
+struct Crown {
+    // the crown's centre, in blocks over the top of the trunk
+    rise: f64,
+    squash: f64,
+    // how far out the lobes' centres are, and how far below the crown's, from the first to the
+    // second, the last two in spreads
+    out: f64,
+    drop: (f64, f64),
+    // each lobe's radius, in spreads, and its squash
+    lobe: f64,
+    lobe_squash: f64,
+    // how far up the trunk the branches out to the lobes leave it, in trunks
+    fork: f64,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -96,7 +164,7 @@ pub struct Tree {
     spread: f64,
     // roughens the edge of the leaves
     seed: u64,
-    // the broadleaf crown, and smaller lobes around it each held up by a branch
+    // the crown, and smaller lobes around it each held up by a branch, but for pines
     crown: Blob,
     lobes: [Blob; LOBES],
 }
@@ -127,21 +195,23 @@ impl Tree {
     fn new(kind: TreeKind, base: I64Vec3, trunk: i64, spread: f64, seed: u64) -> Self {
         let width = if trunk >= THICK_TRUNK { 2 } else { 1 };
         let middle = (width - 1) as f64 / 2.0;
+        let shape = kind.crown();
         let crown = Blob {
-            centre: DVec3::new(middle, (trunk - 1) as f64, middle),
+            centre: DVec3::new(middle, trunk as f64 + shape.rise, middle),
             radius: spread,
-            squash: 0.7,
+            squash: shape.squash,
         };
         let lobes = std::array::from_fn(|i| {
             let h = hash(seed, i as i64, 17);
             let angle = (i as f64 + (h % 1000) as f64 / 1000.0 * 0.6) * std::f64::consts::TAU
                 / LOBES as f64;
-            let out = spread * 0.75;
-            let drop = spread * (0.25 + ((h >> 10) % 100) as f64 / 400.0);
+            let out = spread * shape.out;
+            let (least, most) = shape.drop;
+            let drop = spread * (least + (most - least) * ((h >> 10) % 100) as f64 / 100.0);
             Blob {
                 centre: crown.centre + DVec3::new(angle.cos() * out, -drop, angle.sin() * out),
-                radius: spread * 0.6,
-                squash: 0.75,
+                radius: spread * shape.lobe,
+                squash: shape.lobe_squash,
             }
         });
         Self {
@@ -175,19 +245,19 @@ impl Tree {
             (offset - blob.centre.with_y(0.0)).length_squared() <= blob.radius * blob.radius
         };
         match self.kind {
-            TreeKind::Broadleaf => under(&self.crown) || self.lobes.iter().any(under),
             // the lowest tier is the widest
             TreeKind::Pine => {
                 (offset - self.axis()).length_squared() <= (0.6 + self.spread).powi(2)
             }
+            _ => under(&self.crown) || self.lobes.iter().any(under),
         }
     }
 
     /// The top of the crown, in blocks.
     pub fn crown_top(&self) -> f64 {
         let top = match self.kind {
-            TreeKind::Broadleaf => self.crown.centre.y + self.crown.radius * self.crown.squash,
             TreeKind::Pine => (self.trunk + 1) as f64,
+            _ => self.crown.centre.y + self.crown.radius * self.crown.squash,
         };
         self.base.y as f64 + top + 1.0
     }
@@ -318,15 +388,6 @@ impl Tree {
     // Whole-block offsets from the trunk's base that every point `in_leaves` lies within.
     fn leaf_bounds(&self) -> (I64Vec3, I64Vec3) {
         let (low, high) = match self.kind {
-            TreeKind::Broadleaf => std::iter::once(&self.crown)
-                .chain(&self.lobes)
-                .map(|blob| {
-                    let reach = DVec3::new(blob.radius, blob.radius * blob.squash, blob.radius);
-                    (blob.centre - reach, blob.centre + reach)
-                })
-                .fold((DVec3::MAX, DVec3::MIN), |(low, high), (min, max)| {
-                    (low.min(min), high.max(max))
-                }),
             TreeKind::Pine => {
                 let wrap = self.width() as f64 / 2.0 + 1.0;
                 let reach = (0.6 + self.spread).max(wrap);
@@ -336,6 +397,15 @@ impl Tree {
                     DVec3::new(axis.x + reach, (self.trunk + 1) as f64, axis.z + reach),
                 )
             }
+            _ => std::iter::once(&self.crown)
+                .chain(&self.lobes)
+                .map(|blob| {
+                    let reach = DVec3::new(blob.radius, blob.radius * blob.squash, blob.radius);
+                    (blob.centre - reach, blob.centre + reach)
+                })
+                .fold((DVec3::MAX, DVec3::MIN), |(low, high), (min, max)| {
+                    (low.min(min), high.max(max))
+                }),
         };
         (low.floor().as_i64vec3(), high.ceil().as_i64vec3())
     }
@@ -352,10 +422,6 @@ impl Tree {
             }
         };
         match self.kind {
-            TreeKind::Broadleaf => {
-                self.crown.contains(offset, nibble)
-                    || self.lobes.iter().any(|lobe| lobe.contains(offset, nibble))
-            }
             TreeKind::Pine => {
                 let (bottom, top) = ((self.trunk / 4) as f64, (self.trunk + 1) as f64);
                 if !(bottom..=top).contains(&offset.y) {
@@ -370,15 +436,19 @@ impl Tree {
                 let across = offset - self.axis();
                 across.x * across.x + across.z * across.z <= radius * radius
             }
+            _ => {
+                self.crown.contains(offset, nibble)
+                    || self.lobes.iter().any(|lobe| lobe.contains(offset, nibble))
+            }
         }
     }
 
     // Whether the point `offset` from the trunk's base is on a branch out to a lobe.
     fn in_branch(&self, offset: DVec3) -> bool {
-        if self.kind != TreeKind::Broadleaf {
+        if self.kind == TreeKind::Pine {
             return false;
         }
-        let fork = self.axis() + DVec3::Y * (self.trunk as f64 * 0.6);
+        let fork = self.axis() + DVec3::Y * (self.trunk as f64 * self.kind.crown().fork);
         self.lobes.iter().any(|lobe| {
             let along = lobe.centre - fork;
             let t = ((offset - fork).dot(along) / along.length_squared()).clamp(0.0, 1.0);
@@ -506,33 +576,23 @@ fn tree_in_cell(
         return None;
     }
     let temperature = noise.temperature(x as f64, z as f64);
-    let ground = column_block(
-        noise.biomes(),
-        biome,
-        height - 1,
-        height,
-        gradient,
-        temperature,
-    );
-    if ground != BlockType::Grass {
+    let biomes = noise.biomes();
+    let ground = column_block(biomes, biome, height - 1, height, gradient, temperature);
+    if !biomes.roots(biome, ground, height - 1 - WATER_LEVEL) {
         return None;
     }
 
-    // 0..1, how big this one grew
+    // 0..1, which kind its biome grows, and how big this one grew
+    let pick = (hash(seed, 3, 5) % 1000) as f64 / 1000.0;
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
-    let (kind, trunk, spread) = if temperature < PINE_TEMPERATURE {
-        (
-            TreeKind::Pine,
-            16 + (growth * 9.0) as i64,
-            4.5 + growth * 1.5,
-        )
-    } else {
-        (
-            TreeKind::Broadleaf,
-            10 + (growth * 6.0) as i64,
-            5.0 + growth * 2.0,
-        )
-    };
+    let kind = biomes
+        .tree_kind(biome, pick)
+        .unwrap_or(if temperature < PINE_TEMPERATURE {
+            TreeKind::Pine
+        } else {
+            TreeKind::Broadleaf
+        });
+    let (trunk, spread) = kind.size(growth);
     Some(Tree::new(
         kind,
         I64Vec3::new(x, heights.base_height(x, z), z),
@@ -563,14 +623,24 @@ mod tests {
         Tree::new(kind, I64Vec3::new(100, 500, -40), trunk, spread, 7)
     }
 
+    const KINDS: [TreeKind; 4] = [
+        TreeKind::Broadleaf,
+        TreeKind::Pine,
+        TreeKind::Jungle,
+        TreeKind::Acacia,
+    ];
+
     // the smallest and largest each kind grows
-    fn extremes() -> [Tree; 4] {
-        [
-            tree(TreeKind::Broadleaf, 10, 5.0),
-            tree(TreeKind::Broadleaf, 15, 7.0),
-            tree(TreeKind::Pine, 16, 4.5),
-            tree(TreeKind::Pine, 24, 6.0),
-        ]
+    fn extremes() -> Vec<Tree> {
+        KINDS
+            .into_iter()
+            .flat_map(|kind| {
+                [0.0, 0.999].map(|growth| {
+                    let (trunk, spread) = kind.size(growth);
+                    tree(kind, trunk, spread)
+                })
+            })
+            .collect()
     }
 
     fn blocks(tree: &Tree) -> Vec<(I64Vec3, BlockType)> {
@@ -622,7 +692,7 @@ mod tests {
                 .filter(|(p, b)| *b == BlockType::Log && !in_trunk(*p))
                 .count();
             assert_eq!(
-                t.kind == TreeKind::Broadleaf,
+                t.kind != TreeKind::Pine,
                 branches > 0,
                 "{:?} has {branches} branch logs",
                 t.kind
@@ -631,8 +701,10 @@ mod tests {
                 .iter()
                 .filter(|(_, b)| *b == BlockType::Leaves)
                 .count();
-            assert!(leaves > 200, "{:?} has only {leaves} leaves", t.kind);
-            // the trunk's top is hidden in the leaves, all the way round
+            // an acacia's pads are thin
+            let least = if t.kind == TreeKind::Acacia { 100 } else { 200 };
+            assert!(leaves > least, "{:?} has only {leaves} leaves", t.kind);
+            // the trunk's top is hidden in the leaves, or the limbs leaving it, all the way round
             let top = t.base + I64Vec3::Y * (t.trunk - 1);
             assert_eq!(
                 Some(BlockType::Leaves),
@@ -644,9 +716,8 @@ mod tests {
                 I64Vec3::X * t.width(),
                 I64Vec3::Z * t.width(),
             ] {
-                assert_eq!(
-                    Some(BlockType::Leaves),
-                    t.block_in_cell(top + side, 1),
+                assert!(
+                    t.block_in_cell(top + side, 1).is_some(),
                     "{:?} trunk bare at {side}",
                     t.kind
                 );
@@ -763,8 +834,11 @@ mod tests {
     #[test]
     fn test_every_tree_leaves_a_crown_in_cells_four_and_eight_wide() {
         for t in extremes() {
-            // the thinnest pines are a spire a cell or two across at eight
-            for (size, least) in [(4, 2), (8, 1)] {
+            // the thinnest pines are a spire a cell or two across at eight, and an acacia's pads
+            // can fall between eight-wide cells' points, though LODs draw crowns as boxes from
+            // `BOX_CROWN_CELL` anyway
+            let at_eight = (t.kind != TreeKind::Acacia) as usize;
+            for (size, least) in [(4, 2), (8, at_eight)] {
                 let leaves = cells(&t, size)
                     .into_iter()
                     .filter(|(_, b)| *b == BlockType::Leaves)

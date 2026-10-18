@@ -284,8 +284,8 @@ blocks! {
         top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
     },
     // Plants, standing on the block below and gone with it. They're broken at a touch, let light
-    // and the player through and are built over, so their faces hide nothing. Flowers drop
-    // nothing, and tall grass itself, for beds' mattresses, and a seed one time in eight.
+    // and the player through and are built over, so their faces hide nothing. Flowers and ferns
+    // drop nothing, and tall grass itself, for beds' mattresses, and a seed one time in eight.
     TallGrass {
         name: "tall_grass", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
         style: RenderStyle::Cross, replaceable: true,
@@ -311,6 +311,13 @@ blocks! {
         hardness: 0.0, tool: None, tier: 0,
         top: Tile::Cornflower, side: Tile::Cornflower, bottom: Tile::Cornflower,
         lod: Tile::Cornflower,
+    },
+    // In the shade of jungles and taiga, tinted like tall grass.
+    Fern {
+        name: "fern", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Cross, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
+        top: Tile::Fern, side: Tile::Fern, bottom: Tile::Fern, lod: Tile::Fern,
     },
     // Stands on the floor of its cell; torches on walls need blocks to face a way.
     Torch {
@@ -571,9 +578,10 @@ pub enum Tile {
     ChestSide,
     StructureVoid,
     LootMarker,
+    Fern,
 }
 
-pub const TILE_COUNT: usize = 45;
+pub const TILE_COUNT: usize = 46;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -583,7 +591,10 @@ impl Tile {
 
     // Greyscale tiles that vertex colours tint to the climate's grass.
     pub fn tinted(self) -> bool {
-        matches!(self, Tile::GrassTop | Tile::Leaves | Tile::TallGrass)
+        matches!(
+            self,
+            Tile::GrassTop | Tile::Leaves | Tile::TallGrass | Tile::Fern
+        )
     }
 }
 
@@ -619,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::LootMarker as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Fern as usize + 1);
     }
 
     #[test]
@@ -668,7 +679,8 @@ mod tests {
                 BlockType::TallGrass,
                 BlockType::Poppy,
                 BlockType::Dandelion,
-                BlockType::Cornflower
+                BlockType::Cornflower,
+                BlockType::Fern
             ],
             plants
         );

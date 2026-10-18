@@ -77,7 +77,7 @@ fn print_stats(relief: &Relief, biomes: &Biomes) {
         .filter(|s| s.height >= WATER_LEVEL as f64)
         .count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
-    for name in ["desert", "forest", "foothills", "glacier"] {
+    for name in biomes.names() {
         let count = samples
             .iter()
             .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))

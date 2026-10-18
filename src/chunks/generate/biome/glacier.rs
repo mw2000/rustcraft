@@ -1,4 +1,4 @@
-use super::{smoothstep, BaseColumn, Biome};
+use super::{smoothstep, BaseColumn, Biome, Climate};
 use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
 
@@ -23,9 +23,12 @@ impl Biome for Glacier {
         "glacier"
     }
 
+    fn niche(&self, climate: Climate) -> f64 {
+        smoothstep(COLD.0, COLD.1, climate.temperature as f64)
+    }
+
     fn strength(&self, column: &BaseColumn) -> f64 {
-        smoothstep(COLD.0, COLD.1, column.climate.temperature as f64)
-            * smoothstep(SHORE.0, SHORE.1, column.continentalness)
+        self.niche(column.climate) * smoothstep(SHORE.0, SHORE.1, column.continentalness)
     }
 
     fn height(&self, column: &BaseColumn) -> f64 {
@@ -55,7 +58,6 @@ impl Biome for Glacier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunks::generate::biome::Climate;
 
     fn column(temperature: f32, above_sea: f64, continentalness: f64) -> BaseColumn {
         BaseColumn {

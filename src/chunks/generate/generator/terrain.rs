@@ -38,7 +38,7 @@ pub(super) const SNOW_LINE_PER_DEGREE: f64 = 800.0;
 pub(super) const SNOW_MAX_TEMPERATURE: f32 = 0.62;
 
 // Below this temperature even the grass is under a layer of snow.
-pub(super) const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
+pub const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
 
 // The lowest the snow line gets, so even the coldest lowlands are snow-covered.
 pub(super) const COLDEST_SNOW_LINE: i64 = 10;

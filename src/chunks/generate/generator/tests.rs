@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use bevy::math::Vec3;
 use bevy::math::{I64Vec3, IVec3, U16Vec3};
+use bevy::math::{Vec3, Vec3Swizzles};
 use bevy::mesh::{Indices, Mesh, VertexAttributeValues};
 use bevy::platform::collections::HashMap;
 
@@ -2708,6 +2708,14 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
                 .iter()
                 .filter(|b| matches!(b.block, BlockType::Cobblestone | BlockType::StoneBricks))
                 .map(|b| ((b.min + 0.5) * cell + base, (b.max + 0.5) * cell + base))
+                // a coarse node can hold another structure besides
+                .filter(|(min, max)| {
+                    let (low, high) = (placed.min.xz(), placed.min.xz() + placed.footprint());
+                    min.x < high.x as f32
+                        && max.x > low.x as f32
+                        && min.z < high.y as f32
+                        && max.z > low.y as f32
+                })
                 .collect();
             if key.cell_size() > STRUCTURE_MAX_CELL {
                 assert!(boxes.is_empty(), "level {level}");
@@ -2820,5 +2828,158 @@ fn test_lods_draw_edits_as_full_detail_has_them_within_their_cells() {
             }
         }
         assert!(drawn.0 > 0 && drawn.1 > 0, "level {level}: {drawn:?}");
+    }
+}
+
+// The spot on gentle lowland in `biome` nearest seed 3's centre, and the regions it's in.
+fn lowland_in(biome: &str) -> (Arc<RegionStore>, bevy::math::I64Vec2) {
+    use bevy::math::I64Vec2;
+    let regions = test_regions();
+    // out to the poles, where the taiga is
+    let mut spots: Vec<_> = (-120..120)
+        .flat_map(|z| (-120..120).map(move |x| I64Vec2::new(x, z) * 128))
+        .collect();
+    spots.sort_by_key(|p| p.length_squared());
+    let spot = spots
+        .into_iter()
+        .find(|p| {
+            // from the noise, as a region for every spot tried would take minutes
+            let height = |dx: i64, dz: i64| regions.noise().get(*p + I64Vec2::new(dx, dz) * 4);
+            let sample = regions.noise().sample(p.x as f64, p.y as f64);
+            let above_sea = sample.height - WATER_LEVEL as f64;
+            regions.noise().biomes().name(sample.biome) == Some(biome)
+                && (8.0..60.0).contains(&above_sea)
+                && (height(1, 0) - height(-1, 0)).abs() + (height(0, 1) - height(0, -1)).abs() < 4.0
+        })
+        .unwrap_or_else(|| panic!("no lowland {biome}"));
+    (regions, spot)
+}
+
+const NEW_BIOMES: [&str; 3] = ["jungle", "savanna", "taiga"];
+
+#[test]
+fn test_new_biomes_grow_their_own_trees_the_same_whatever_asks() {
+    use crate::chunks::generate::trees::{trees_near, TreeKind};
+    use bevy::math::I64Vec2;
+    for biome in NEW_BIOMES {
+        let (regions, spot) = lowland_in(biome);
+        let (min, max) = (spot - 200, spot + 200);
+        let mut heights = regions.sampler();
+        let all = trees_near(regions.noise(), &mut heights, min, max);
+        let owned: Vec<_> = all
+            .iter()
+            .filter(|t| {
+                let owner = regions
+                    .noise()
+                    .sample(t.base.x as f64, t.base.z as f64)
+                    .biome;
+                regions.noise().biomes().name(owner) == Some(biome)
+            })
+            .collect();
+        assert!(owned.len() > 10, "only {} trees in {biome}", owned.len());
+        let kinds: Vec<_> = owned.iter().map(|t| t.kind).collect();
+        match biome {
+            "jungle" => {
+                assert!(kinds.contains(&TreeKind::Jungle));
+                assert!(kinds
+                    .iter()
+                    .all(|k| matches!(k, TreeKind::Jungle | TreeKind::Broadleaf)));
+            }
+            "savanna" => assert!(kinds.iter().all(|&k| k == TreeKind::Acacia)),
+            _ => assert!(kinds.iter().all(|&k| k == TreeKind::Pine)),
+        }
+        // quarters asked for in reverse order find the same trees, the same size
+        let key =
+            |t: &crate::chunks::generate::trees::Tree| (t.base.x, t.base.z, t.base.y, t.trunk);
+        let mut quarters = Vec::new();
+        for (dx, dz) in [(1, 1), (1, 0), (0, 1), (0, 0)] {
+            let low = min + I64Vec2::new(dx, dz) * 200;
+            quarters.extend(
+                trees_near(regions.noise(), &mut regions.sampler(), low, low + 199)
+                    .into_iter()
+                    .filter(|t| t.base.x >= low.x && t.base.x < low.x + 200)
+                    .filter(|t| t.base.z >= low.y && t.base.z < low.y + 200)
+                    .map(|t| (key(&t), t.kind)),
+            );
+        }
+        let mut whole: Vec<_> = all
+            .iter()
+            .filter(|t| (min.x..max.x).contains(&t.base.x) && (min.y..max.y).contains(&t.base.z))
+            .map(|t| (key(t), t.kind))
+            .collect();
+        let order = |(k, _): &((i64, i64, i64, i64), TreeKind)| *k;
+        whole.sort_by_key(order);
+        quarters.sort_by_key(order);
+        assert_eq!(whole, quarters, "{biome}");
+    }
+}
+
+#[test]
+fn test_new_biomes_look_the_same_from_every_level() {
+    for biome in NEW_BIOMES {
+        let (regions, spot) = lowland_in(biome);
+        let height = regions.get_height(spot.x, spot.y) as i64;
+        let chunk = ChunkCoordinate::containing(I64Vec3::new(spot.x, height, spot.y));
+        // level 0 is full detail, but for plants, ores and caves
+        for coord in [chunk.0, chunk.0 + I64Vec3::Y] {
+            let full = generate_chunk(regions.clone(), ChunkCoordinate(coord));
+            let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord }, None);
+            let columns = regions.chunk_columns(&mut regions.sampler(), coord.x, coord.z);
+            for (x, y, z) in (0..16u16)
+                .flat_map(|x| (0..16u16).flat_map(move |y| (0..16u16).map(move |z| (x, y, z))))
+            {
+                let at = coord * 16 + I64Vec3::new(x as i64, y as i64, z as i64);
+                let carved = regions
+                    .noise()
+                    .caves()
+                    .carves(at, columns.cave_top(x as i64, z as i64));
+                // LODs draw no plants, and no ores, which are in the stone
+                let block = match full.get_block_at(U16Vec3::new(x, y, z)) {
+                    plant if plant.is_plant() => BlockType::Air,
+                    BlockType::CoalOre | BlockType::CopperOre | BlockType::IronOre => {
+                        BlockType::Stone
+                    }
+                    block => block,
+                };
+                let expected = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
+                if !carved {
+                    assert_eq!(expected, block, "{biome} at {at}");
+                }
+            }
+        }
+        // and every coarser level grows the same trees
+        let mut checked = 0;
+        for level in [2u8, 3, 4, 5] {
+            let (exact, coarse) = tree_spots(&regions, LodKey::containing(chunk, level));
+            assert_eq!(exact, coarse, "{biome} at level {level}");
+            checked += exact.len();
+        }
+        assert!(checked > 0, "no trees checked in {biome}");
+    }
+}
+
+#[test]
+fn test_ferns_grow_in_jungle_and_taiga_but_not_savanna() {
+    use crate::chunks::generate::plants::plant_on;
+    for biome in NEW_BIOMES {
+        let (regions, spot) = lowland_in(biome);
+        let plants: Vec<_> = (0..64)
+            .flat_map(|x| (0..64).map(move |z| (x, z)))
+            .filter_map(|(x, z)| {
+                plant_on(
+                    regions.noise(),
+                    spot.x + x,
+                    spot.y + z,
+                    BlockType::Grass,
+                    0.2,
+                )
+            })
+            .collect();
+        let ferns = plants.iter().filter(|&&p| p == BlockType::Fern).count();
+        assert_eq!(biome != "savanna", ferns > 0, "{ferns} ferns in {biome}");
+        assert!(
+            plants.contains(&BlockType::TallGrass),
+            "no grass in {biome}"
+        );
     }
 }

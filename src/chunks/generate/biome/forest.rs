@@ -1,12 +1,8 @@
-use super::{smoothstep, BaseColumn, Biome, Climate, BASE_TREE_DENSITY};
+use super::{smoothstep, Biome, Climate};
 
 // The wettest climates grow forest, whatever the temperature.
 const WET: (f64, f64) = (0.58, 0.7);
 const TREE_DENSITY: f64 = 0.55;
-
-fn wetness(climate: Climate) -> f64 {
-    smoothstep(WET.0, WET.1, climate.humidity as f64)
-}
 
 // Dense trees over the lush, wet lowlands.
 pub struct Forest;
@@ -16,23 +12,19 @@ impl Biome for Forest {
         "forest"
     }
 
-    fn strength(&self, column: &BaseColumn) -> f64 {
-        wetness(column.climate)
+    fn niche(&self, climate: Climate) -> f64 {
+        smoothstep(WET.0, WET.1, climate.humidity as f64)
     }
 
     fn tree_density(&self) -> Option<f64> {
         Some(TREE_DENSITY)
-    }
-
-    fn tree_gain(&self, climate: Climate) -> f64 {
-        (TREE_DENSITY - BASE_TREE_DENSITY) * wetness(climate)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunks::generate::biome::Biomes;
+    use crate::chunks::generate::biome::{BaseColumn, Biomes};
 
     fn column(humidity: f32) -> BaseColumn {
         BaseColumn {
@@ -43,7 +35,7 @@ mod tests {
             continentalness: 0.3,
             ruggedness: -1.0,
             climate: Climate {
-                temperature: 0.4,
+                temperature: 0.5,
                 humidity,
             },
         }
