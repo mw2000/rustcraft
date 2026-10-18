@@ -48,6 +48,7 @@ pub mod server;
 #[cfg(feature = "client")]
 pub mod session;
 pub mod settings;
+pub mod skin;
 #[cfg(feature = "client")]
 pub mod sky;
 #[cfg(feature = "client")]

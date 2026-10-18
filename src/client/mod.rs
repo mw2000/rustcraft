@@ -16,6 +16,7 @@ pub mod models;
 pub mod others;
 pub mod player;
 pub mod servers;
+pub mod skins;
 pub mod sound;
 
 use bevy::prelude::*;

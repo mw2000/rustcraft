@@ -4905,6 +4905,7 @@ dependencies = [
  "dirs",
  "image",
  "noise",
+ "png",
  "postcard",
  "rand 0.10.3",
  "serde",

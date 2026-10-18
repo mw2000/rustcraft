@@ -52,6 +52,14 @@ Items that aren't blocks (sticks, coal, ingots, tools, food, seeds) are pictures
 python items.py
 ```
 
+## Default skins
+
+The skins players wear until they choose their own are `assets/textures/skins/<name>.png`, in the 64×64 layout Minecraft's skins use (only the layout: these are our own characters, INV-8, never Steve or Alex), one per row of `DEFAULT_SKINS` in `src/skin.rs`. `skins.py` draws them: each character paints every face of each part's box by its row down the part (a sleeve's top rows, boots at a leg's bottom) from a few shades, with a little noise, and its overlay (a hood, a hard hat, a straw hat) only where it covers the base, clear elsewhere. The base layer is drawn opaque whatever its alpha, so only the overlay's clear pixels matter. Slim characters leave the column right of the right arm's back clear, which is how the game tells slim arms from a skin. It writes `out/skins_contact.png`: each sheet, and the model's front and back laid flat. Adding one: a function in `DRAW` and a row in `DEFAULT_SKINS`.
+
+```
+python skins.py
+```
+
 `ui.py` draws the furnace screen's flame and arrow, `assets/textures/furnace.png`: four tiles, the flame out and lit and the arrow empty and full, in the order of `FLAME_OUT`.. in `src/inventory/furnace.rs`. Each pair shares its shape, as the screen shows as much of the lit one over the other as the fire and smelting have got, and `out/furnace_contact.png` shows them on a slot's grey.
 
 ```

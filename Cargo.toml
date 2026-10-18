@@ -26,6 +26,8 @@ bevy = { version = "0.20", default-features = false, features = [
 bevy_replicon = { version = "=0.45.2", default-features = false, features = ["client", "server"] }
 # replicon's transport over UDP, with renet2's netcode (D-1)
 bevy_replicon_renet2 = { version = "=1.0.0", default-features = false, features = ["client", "server", "native_transport"] }
+# players' skins, checked by the server too (M-A4)
+png = "0.18"
 tracing = { version = "0.1.40", features = ["attributes"] }
 # Bevy's Ctrl-C handler, which saves as it stops, made to catch SIGTERM too, as a dedicated
 # server run as a service is stopped by it
