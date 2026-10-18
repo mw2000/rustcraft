@@ -6,11 +6,12 @@ use super::greedy::mesh_opaque_greedy;
 use super::shading::{
     vertex_shore_distance, vertex_shore_factor, vertex_water_depth, FACE_NORMAL_OFFSET, WATER_TOP,
 };
+use super::shapes::push_shape;
 use super::source::{grid_index, BlockSource, BoxFaces, GridView};
-use crate::block::BlockType;
 use crate::block::Face;
 use crate::block::RenderStyle;
 use crate::block::Tile;
+use crate::block::{Block, BlockType};
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
@@ -108,6 +109,7 @@ pub(super) fn mesh_blocks(
         if textured { cell_size as f32 } else { 1.0 },
         grass_tint,
         light,
+        cell_size > 1,
     );
     // plants and torches are too small to make out from afar, so coarse LODs leave them out
     if cell_size == 1 {
@@ -121,6 +123,20 @@ pub(super) fn mesh_blocks(
                 push_torch(&mut opaque, coord, block, light);
             }
         }
+        // shapes cut their holes out of their shadows too, as glass panes and ladders have them
+        let cutouts = opaque.vertices.len();
+        for &(coord, kind) in non_air.iter().filter(|(_, block)| block.style().is_shape()) {
+            let state = source.state(coord);
+            push_shape(
+                &mut opaque,
+                source,
+                coord,
+                Block { kind, state },
+                grass_tint,
+                light,
+            );
+        }
+        opaque.cutouts = cutouts..opaque.vertices.len();
     }
     opaque.tint_grass_sides(grass_tint);
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly

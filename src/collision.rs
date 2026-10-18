@@ -1,5 +1,7 @@
 use bevy::math::{BVec3, I64Vec3, Vec3};
 
+use crate::block::shape::{self, Boxes, Use};
+use crate::block::Block;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::player::{PlayerLook, EYE_HEIGHT, REACH};
 use crate::world::World;
@@ -8,12 +10,13 @@ use crate::world::World;
 // isn't taken to be inside the block under it and fall through.
 const EPSILON: f32 = 1e-3;
 
-/// A block a ray stopped at, and the face it came in through, as the direction out of that
-/// face. The face is zero if the ray started inside the block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A block a ray stopped at, the face it came in through, as the direction out of that face,
+/// and where on it the ray met it. The face is zero if the ray started inside the block.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
     pub block: I64Vec3,
     pub face: I64Vec3,
+    pub point: Vec3,
 }
 
 /// The first block that `stops` the ray from `origin` along `direction` within `reach` blocks,
@@ -27,6 +30,7 @@ pub fn raycast(
     let direction = direction.normalize_or_zero();
     let mut block = origin.floor().as_i64vec3();
     let mut face = I64Vec3::ZERO;
+    let mut entered = 0.0;
     let step = I64Vec3::from_array(direction.to_array().map(|d| {
         if d > 0.0 {
             1
@@ -48,12 +52,14 @@ pub fn raycast(
     }));
     loop {
         if stops(block) {
-            return Some(Hit { block, face });
+            let point = origin + direction * entered;
+            return Some(Hit { block, face, point });
         }
         let axis = next.min_position();
         if next[axis] > reach {
             return None;
         }
+        entered = next[axis];
         block[axis] += step[axis];
         face = I64Vec3::ZERO;
         face[axis] = -step[axis];
@@ -61,38 +67,98 @@ pub fn raycast(
     }
 }
 
-/// The block in reach that a player with their feet at `feet` looks at, if there's one.
+/// The block in reach that a player with their feet at `feet` looks at, if there's one, and
+/// the face and point of its shape the look meets, so a slab's top is looked at on its top.
 pub fn looked_at(world: &World, feet: Vec3, look: PlayerLook) -> Option<Hit> {
     let eye = feet + Vec3::Y * EYE_HEIGHT;
+    let forward = look.forward();
+    let get = |at| world.get(at);
+    // where the look first meets one of the block's boxes, and through which face
+    let meets = |block: I64Vec3| {
+        let corner = block.as_vec3();
+        boxes_at(block, Use::Outline, get)
+            .iter()
+            .filter_map(|b| ray_box(eye, forward, corner + b.min, corner + b.max))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    };
     // blocks not generated yet can't be reached, nor can air and water, which are looked through
     let stops = |block: I64Vec3| {
         world.is_chunk_generated(ChunkCoordinate::containing(block))
             && world.get_block_at(block).is_tangible()
+            && meets(block).is_some()
     };
-    raycast(eye, look.forward(), REACH, stops)
+    let hit = raycast(eye, forward, REACH, stops)?;
+    let (distance, face) = meets(hit.block)?;
+    (distance <= REACH).then(|| Hit {
+        face,
+        point: eye + forward.normalize_or_zero() * distance,
+        ..hit
+    })
+}
+
+// How far along the ray from `origin` along `direction` it first meets the box from `min` to
+// `max`, and the face it meets, as the direction out of it, zero if it starts inside.
+fn ray_box(origin: Vec3, direction: Vec3, min: Vec3, max: Vec3) -> Option<(f32, I64Vec3)> {
+    let enter = ray_distance(
+        origin,
+        direction,
+        min,
+        Aabb {
+            min: Vec3::ZERO,
+            max: max - min,
+        },
+    )?;
+    if enter == 0.0 {
+        return Some((0.0, I64Vec3::ZERO));
+    }
+    // the face is the one whose plane the ray crosses last on its way in
+    let direction = direction.normalize_or_zero();
+    let at = origin + direction * enter;
+    let axis = (0..3)
+        .min_by(|&a, &b| {
+            let off = |axis: usize| {
+                (at[axis] - min[axis])
+                    .abs()
+                    .min((at[axis] - max[axis]).abs())
+            };
+            off(a).total_cmp(&off(b))
+        })
+        .unwrap();
+    let mut face = I64Vec3::ZERO;
+    face[axis] = if direction[axis] > 0.0 { -1 } else { 1 };
+    Some((enter, face))
+}
+
+/// The boxes of the block at `at` for `purpose`, with `get` the block at a position, which
+/// fences, walls and panes join their neighbours by.
+pub fn boxes_at(at: I64Vec3, purpose: Use, get: impl Fn(I64Vec3) -> Block) -> Boxes {
+    let block = get(at);
+    shape::boxes(block, purpose, |side| {
+        shape::joins(block.kind, get(at + side.offset().as_i64vec3()).kind)
+    })
 }
 
 /// An axis-aligned box, as offsets from the position it's moved by.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Aabb {
     pub min: Vec3,
     pub max: Vec3,
 }
 
 /// Moves `aabb` at `position` by `delta` an axis at a time, up first, stopping each axis
-/// against the first block `solid` says it would move into. Returns where it ends up, and
-/// which axes were stopped. Blocks it already overlaps are ignored, so it can always get out
-/// of them.
+/// against the first of the boxes that `boxes` says each block is made of (`block::shape`)
+/// it would move into. Returns where it ends up, and which axes were stopped. Boxes it already
+/// overlaps are ignored, so it can always get out of them.
 pub fn move_and_collide(
     position: Vec3,
     delta: Vec3,
     aabb: Aabb,
-    solid: impl Fn(I64Vec3) -> bool,
+    boxes: impl Fn(I64Vec3) -> Boxes,
 ) -> (Vec3, BVec3) {
     let mut position = position;
     let mut hit = BVec3::FALSE;
     for axis in [1, 0, 2] {
-        let (moved, stopped) = sweep_axis(position, aabb, axis, delta[axis], &solid);
+        let (moved, stopped) = sweep_axis(position, aabb, axis, delta[axis], &boxes);
         position[axis] += moved;
         hit.set(axis, stopped);
     }
@@ -105,45 +171,52 @@ fn sweep_axis(
     aabb: Aabb,
     axis: usize,
     delta: f32,
-    solid: &impl Fn(I64Vec3) -> bool,
+    boxes: &impl Fn(I64Vec3) -> Boxes,
 ) -> (f32, bool) {
     if delta == 0.0 {
         return (0.0, false);
     }
     let min = position + aabb.min;
     let max = position + aabb.max;
-    // the cells the box covers across the other two axes
-    let [a, b] = [(axis + 1) % 3, (axis + 2) % 3];
-    let span = |i: usize| (min[i] + EPSILON).floor() as i64..=(max[i] - EPSILON).floor() as i64;
-    let blocked = |cell: i64| {
-        span(a).any(|x| {
-            span(b).any(|y| {
-                let mut coord = I64Vec3::ZERO;
-                coord[axis] = cell;
-                coord[a] = x;
-                coord[b] = y;
-                solid(coord)
-            })
-        })
-    };
-
+    // the cells the box passes through, and those under them, whose fences and walls stand up
+    // into them
+    let mut from = (min + EPSILON).floor().as_i64vec3();
+    let mut to = (max - EPSILON).floor().as_i64vec3();
     if delta > 0.0 {
-        // the cells past the leading face, up to where it ends up
-        let edge = max[axis];
-        let first = (edge - EPSILON).ceil() as i64;
-        let last = (edge + delta - EPSILON).ceil() as i64 - 1;
-        match (first..=last).find(|&cell| blocked(cell)) {
-            Some(cell) => (cell as f32 - edge, true),
-            None => (delta, false),
-        }
+        to[axis] = (max[axis] + delta - EPSILON).floor() as i64;
     } else {
-        let edge = min[axis];
-        let first = (edge + EPSILON).floor() as i64 - 1;
-        let last = (edge + delta + EPSILON).floor() as i64;
-        match (last..=first).rev().find(|&cell| blocked(cell)) {
-            Some(cell) => ((cell + 1) as f32 - edge, true),
-            None => (delta, false),
+        from[axis] = (min[axis] + delta + EPSILON).floor() as i64;
+    }
+    from.y -= 1;
+    let [a, b] = [(axis + 1) % 3, (axis + 2) % 3];
+    let mut allowed = delta.abs();
+    for x in from.x..=to.x {
+        for y in from.y..=to.y {
+            for z in from.z..=to.z {
+                let cell = I64Vec3::new(x, y, z);
+                for part in boxes(cell).iter() {
+                    let (low, high) = (cell.as_vec3() + part.min, cell.as_vec3() + part.max);
+                    let across = |i: usize| low[i] < max[i] - EPSILON && high[i] > min[i] + EPSILON;
+                    if !(across(a) && across(b)) {
+                        continue;
+                    }
+                    // only boxes ahead of the moving face, not those it's in already
+                    let gap = if delta > 0.0 {
+                        low[axis] - max[axis]
+                    } else {
+                        min[axis] - high[axis]
+                    };
+                    if gap > -EPSILON && gap < allowed {
+                        allowed = gap.max(0.0);
+                    }
+                }
+            }
         }
+    }
+    if allowed < delta.abs() {
+        (allowed * delta.signum(), true)
+    } else {
+        (delta, false)
     }
 }
 
@@ -219,8 +292,16 @@ mod tests {
     };
 
     // solid at and below y = 0
-    fn floor(cell: I64Vec3) -> bool {
-        cell.y < 0
+    fn floor(cell: I64Vec3) -> Boxes {
+        solid(cell.y < 0)
+    }
+
+    fn solid(solid: bool) -> Boxes {
+        if solid {
+            Boxes::cube()
+        } else {
+            Boxes::default()
+        }
     }
 
     #[test]
@@ -250,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_slides_along_a_wall() {
-        let wall = |cell: I64Vec3| floor(cell) || cell.x >= 2;
+        let wall = |cell: I64Vec3| solid(cell.y < 0 || cell.x >= 2);
         let (position, hit) = move_and_collide(
             Vec3::new(0.5, 0.0, 0.5),
             Vec3::new(5.0, 0.0, 3.0),
@@ -264,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_stops_under_a_ceiling() {
-        let ceiling = |cell: I64Vec3| cell.y >= 3;
+        let ceiling = |cell: I64Vec3| solid(cell.y >= 3);
         let (position, hit) =
             move_and_collide(Vec3::new(0.5, 0.0, 0.5), Vec3::Y * 5.0, BOX, ceiling);
         assert!((position.y - 1.2).abs() < 1e-5);
@@ -273,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_moves_out_of_a_block_it_starts_inside() {
-        let one_block = |cell: I64Vec3| cell == I64Vec3::new(0, 1, 0);
+        let one_block = |cell: I64Vec3| solid(cell == I64Vec3::new(0, 1, 0));
         let (position, hit) =
             move_and_collide(Vec3::new(0.5, 0.5, 0.5), Vec3::X * 2.0, BOX, one_block);
         assert_eq!(position, Vec3::new(2.5, 0.5, 0.5));
@@ -282,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_doesnt_tunnel_through_a_thin_wall_in_one_big_step() {
-        let wall = |cell: I64Vec3| cell.x == 10;
+        let wall = |cell: I64Vec3| solid(cell.x == 10);
         let (position, hit) =
             move_and_collide(Vec3::new(0.5, 0.0, 0.5), Vec3::X * 100.0, BOX, wall);
         assert!((position.x - 9.7).abs() < 1e-5);
@@ -292,7 +373,7 @@ mod tests {
     #[test]
     fn test_fits_through_a_gap_its_own_width() {
         // walls at x = -1 and x = 1, so the one-block gap at x = 0 is open
-        let walls = |cell: I64Vec3| cell.x != 0;
+        let walls = |cell: I64Vec3| solid(cell.x != 0);
         let (position, hit) = move_and_collide(Vec3::new(0.5, 0.0, 0.5), Vec3::Z * 4.0, BOX, walls);
         assert_eq!(position.z, 4.5);
         assert!(!hit.z);
@@ -304,7 +385,7 @@ mod tests {
             min: BOX.min,
             max: Vec3::new(0.3, 2.0, 0.3),
         };
-        let tunnel = |cell: I64Vec3| cell.y < 0 || cell.y >= 2;
+        let tunnel = |cell: I64Vec3| solid(cell.y < 0 || cell.y >= 2);
         let (position, hit) =
             move_and_collide(Vec3::new(0.5, 0.0, 0.5), Vec3::Z * 4.0, tall, tunnel);
         assert_eq!(position, Vec3::new(0.5, 0.0, 4.5));

@@ -2,7 +2,7 @@ use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
 use super::terrain::{column_block, ground_top, under_surface};
-use crate::block::BlockType;
+use crate::block::{BlockState, BlockType};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -85,6 +85,9 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
         |x, z| biomes.name(columns.biome(x, z)),
         &mut cells,
     );
+    // the few blocks of structures with states, such as stairs, which are put in once the
+    // chunk's runs are made, so the cells of everything else are its blocks alone
+    let mut states = Vec::new();
     for placed in &columns.structures {
         placed.build(
             origin,
@@ -92,12 +95,21 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             (IVec3::ZERO, IVec3::splat(size as i32 - 1)),
             |x, z| columns.height(x - origin.x, z - origin.z),
             |coord, block| {
-                let coord = coord.as_i64vec3();
-                cells[((coord.x * size + coord.z) * size + coord.y) as usize] = block;
+                let at = coord.as_i64vec3();
+                cells[((at.x * size + at.z) * size + at.y) as usize] = block.kind;
+                if block.state != BlockState::default() {
+                    states.push((coord.as_u16vec3(), block));
+                }
             },
         );
     }
     let mut chunk_data = ChunkData::from_cells(cells);
+    for (coord, block) in states {
+        // unless another structure's built over it since
+        if chunk_data.get_block_at(coord) == block.kind {
+            chunk_data.set_block_at(coord, block);
+        }
+    }
 
     // the sky's light is kept out of the chunks below wherever it can't reach down past this one
     for x in 0..size {
@@ -236,11 +248,18 @@ pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoord
     let size = CHUNK_SIZE as i32;
     let (min, span) = light_box();
     let mut opacity = Vec::with_capacity((span.x * span.y * span.z) as usize);
+    // the stairs and slabs among them, which keep light out without filling their cells
+    let mut shapes = Vec::new();
     // in `SkyLight::index` order
     for x in 0..span.x {
         for z in 0..span.z {
             for y in 0..span.y {
-                opacity.push(source.block(min + IVec3::new(x, y, z)).light_opacity());
+                let coord = min + IVec3::new(x, y, z);
+                let block = source.block(coord);
+                opacity.push(block.light_opacity());
+                if source.light_shapes && block.is_shape() && block.blocks_light() {
+                    shapes.push(coord);
+                }
             }
         }
     }
@@ -253,8 +272,8 @@ pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoord
             sky
         }
     };
-    let sky = SkyLight::with_sky(min, span, sky, opacity);
-    let block = if source.emitters.is_empty() {
+    let mut sky = SkyLight::with_sky(min, span, sky, opacity);
+    let mut block = if source.emitters.is_empty() {
         BlockLight::default()
     } else {
         let (min, span) = block_light_box();
@@ -262,5 +281,11 @@ pub(super) fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoord
             source.block(c).light_opacity()
         })
     };
+    if !shapes.is_empty() {
+        sky.light_shapes(&shapes);
+        if !source.emitters.is_empty() {
+            block.light_shapes(&shapes);
+        }
+    }
     Light { sky, block }
 }

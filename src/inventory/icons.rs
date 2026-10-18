@@ -1,10 +1,15 @@
 //! Pictures of items for the UI, and the stacks drawn with them in the hotbar and the inventory
 //! screen.
 
+use bevy::asset::RenderAssetUsages;
+use bevy::image::ImageSampler;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use super::furnace::{container_stack, ContainerView};
 use super::Inventory;
+use crate::block::{BlockType, Face, RenderStyle, Tile};
 use crate::chunks::generate::biome::{Biomes, Climate};
 use crate::chunks::material::block_atlas;
 use crate::client::player::LocalPlayer;
@@ -22,6 +27,10 @@ pub struct ItemIcons {
     layout: Handle<TextureAtlasLayout>,
     items: Handle<Image>,
     items_layout: Handle<TextureAtlasLayout>,
+    // pictures of the shapes from the front, drawn from their tiles, and which is whose
+    shapes: Handle<Image>,
+    shapes_layout: Handle<TextureAtlasLayout>,
+    shape_icons: HashMap<BlockType, usize>,
     // what the greyscale grass and leaves tiles are tinted with
     grass: Color,
 }
@@ -56,9 +65,17 @@ impl ItemIcons {
 
     // A block is drawn with the tile its coarse LODs draw it with, the one that best stands
     // for the whole of it: grass shows its top, since its side's tile is just a fringe of grass
-    // that's drawn over dirt. Other items have tiles of their own.
+    // that's drawn over dirt. Shapes are pictures of them cut from their tiles, and other items
+    // have tiles of their own.
     fn paint(&self, image: &mut ImageNode, item: Item) {
+        let shape = item.block().and_then(|block| self.shape_icons.get(&block));
         let (atlas, layout, index, tinted) = match (item.block(), item.sprite()) {
+            (Some(block), _) if shape.is_some() => (
+                &self.shapes,
+                &self.shapes_layout,
+                *shape.unwrap(),
+                block.lod_tile().tinted(),
+            ),
             (Some(block), _) => {
                 let tile = block.lod_tile();
                 (&self.atlas, &self.layout, tile as usize, tile.tinted())
@@ -82,15 +99,17 @@ pub(crate) fn load_icons(
     mut images: ResMut<Assets<Image>>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let mut strip = |path: &str| {
-        let atlas = block_atlas(path);
+    let blocks = block_atlas("assets/textures/blocks.png");
+    let (shapes, shape_icons) = shape_icons(&blocks);
+    let mut strip = |atlas: Image| {
         let tile = atlas.height();
         let layout =
             TextureAtlasLayout::from_grid(UVec2::splat(tile), atlas.width() / tile, 1, None, None);
         (images.add(atlas), layouts.add(layout))
     };
-    let (atlas, layout) = strip("assets/textures/blocks.png");
-    let (items, items_layout) = strip("assets/textures/items.png");
+    let (atlas, layout) = strip(blocks);
+    let (items, items_layout) = strip(block_atlas("assets/textures/items.png"));
+    let (shapes, shapes_layout) = strip(shapes);
     // as it is in a mild climate, which no biome's grass changes, whatever the seed
     let grass = Biomes::new(0).grass_tint(Climate::default());
     commands.insert_resource(ItemIcons {
@@ -98,8 +117,86 @@ pub(crate) fn load_icons(
         layout,
         items,
         items_layout,
+        shapes,
+        shapes_layout,
+        shape_icons,
         grass: LinearRgba::rgb(grass.x, grass.y, grass.z).into(),
     });
+}
+
+// Texels a tile is across.
+const TILE: u32 = 16;
+
+// A strip of pictures of each shape from the front, from `atlas`'s tiles, and which is whose.
+fn shape_icons(atlas: &Image) -> (Image, HashMap<BlockType, usize>) {
+    let shapes: Vec<BlockType> = BlockType::ALL
+        .into_iter()
+        .filter(|block| block.is_shape())
+        .collect();
+    let mut strip = Image::new_fill(
+        Extent3d {
+            width: TILE * shapes.len() as u32,
+            height: TILE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0; 4],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    strip.sampler = ImageSampler::nearest();
+    for (i, &block) in shapes.iter().enumerate() {
+        for y in 0..TILE {
+            for x in 0..TILE {
+                if let Some((tile, from_x, from_y)) = shape_texel(block, x, y) {
+                    let texel = atlas
+                        .get_color_at(tile as u32 * TILE + from_x, from_y)
+                        .expect("a tile's texel");
+                    strip
+                        .set_color_at(i as u32 * TILE + x, y, texel)
+                        .expect("an icon's texel");
+                }
+            }
+        }
+    }
+    let indices = shapes
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| (b, i))
+        .collect();
+    (strip, indices)
+}
+
+// Which texel of which tile a shape's icon shows at `x`, `y`, if any: stairs climbing to the
+// right, a slab, a fence's two posts and rails, a wall, a door's two halves squeezed into one
+// tile, a lantern's glass and cap, and the rest their own tile.
+fn shape_texel(block: BlockType, x: u32, y: u32) -> Option<(Tile, u32, u32)> {
+    let side = block.tile(Face::Side);
+    let within =
+        |x0: u32, y0: u32, x1: u32, y1: u32| (x0..x1).contains(&x) && (y0..y1).contains(&y);
+    let own = Some((side, x, y));
+    match block.style() {
+        RenderStyle::Stairs => (y >= 8 || x >= 8).then_some((side, x, y)),
+        RenderStyle::Slab => (y >= 8).then_some((side, x, y)),
+        RenderStyle::Fence => {
+            let posts = within(2, 0, 6, 16) || within(10, 0, 14, 16);
+            let rails = within(0, 4, 16, 7) || within(0, 10, 16, 13);
+            (posts || rails).then_some((side, x, y))
+        }
+        RenderStyle::Wall => {
+            let posts = within(1, 0, 6, 16) || within(10, 0, 15, 16);
+            (posts || within(0, 3, 16, 16)).then_some((side, x, y))
+        }
+        RenderStyle::Door => within(4, 0, 12, 16).then(|| {
+            let half = block.tile(if y < 8 { Face::Top } else { Face::Side });
+            (half, (x - 4) * 2, (y % 8) * 2)
+        }),
+        // the body's side twice the size, under its cap
+        RenderStyle::Lantern if within(2, 2, 14, 16) => Some((side, (x - 2) / 2, 9 + (y - 2) / 2)),
+        RenderStyle::Lantern if within(4, 0, 12, 2) => Some((side, 6 + (x - 4) / 2, 14 + y)),
+        RenderStyle::Lantern => None,
+        _ => own,
+    }
 }
 
 /// Which of the local player's stacks an icon shows.

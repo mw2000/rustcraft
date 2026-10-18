@@ -1,5 +1,6 @@
 use super::source::BlockSource;
 use super::terrain::is_solid;
+use crate::block::Direction;
 use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
@@ -11,6 +12,16 @@ pub(in crate::chunks::generate) const FACE_NORMAL_OFFSET: [IVec3; 6] = [
     IVec3::new(0, 0, 1),  // back
     IVec3::new(0, 1, 0),  // top
     IVec3::new(0, -1, 0), // bottom
+];
+
+/// The ways `FACE_NORMAL_OFFSET`'s faces face.
+pub(super) const FACE_DIRECTIONS: [Direction; 6] = [
+    Direction::North,
+    Direction::East,
+    Direction::West,
+    Direction::South,
+    Direction::Up,
+    Direction::Down,
 ];
 
 pub(super) const FACE_TANGENTS: [(IVec3, IVec3); 6] = [

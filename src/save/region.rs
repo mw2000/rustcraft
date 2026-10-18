@@ -3,7 +3,7 @@ use std::io;
 use bevy::math::{I64Vec3, U16Vec3};
 use serde::{Deserialize, Serialize};
 
-use crate::block::BlockType;
+use crate::block::Block;
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::containers::{Container, Containers};
 use crate::edits::Edits;
@@ -52,19 +52,21 @@ pub const EXTENSION: &str = "edits";
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkEdits {
     pub coord: ChunkCoordinate,
-    pub blocks: Vec<(U16Vec3, BlockType)>,
+    pub blocks: Vec<(U16Vec3, Block)>,
     pub containers: Vec<(U16Vec3, Container)>,
     pub crops: Vec<(U16Vec3, f32)>,
 }
 
 // The version of the region file format, which since format 3 starts each file after a 0 byte.
 // A format 2 file starts with its palette's length instead, which is never 0, as every file
-// names the blocks of at least one edit. Format 4 has crops.
-const FORMAT: u8 = 4;
+// names the blocks of at least one edit. Format 4 has crops, and format 5 blocks' states in
+// its palette, which is laid out as format 4's: a block with no state is written as before.
+const FORMAT: u8 = 5;
 
 // A region file, in postcard (D-6). Blocks are stored as indices into the file's palette of
-// block names, never as `BlockType` discriminants, so reordering the block table can't change
-// what a save means (§4.1). Containers keep their items by name.
+// blocks by name and state, as templates write them (`Block`'s text), never as `BlockType`
+// discriminants or state bits, so reordering the block table can't change what a save means
+// (§4.1). Containers keep their items by name.
 #[derive(Serialize, Deserialize)]
 struct RegionFile<'a> {
     #[serde(borrow)]
@@ -128,20 +130,19 @@ mod format_2 {
 /// whatever order they come in.
 pub fn encode(mut chunks: Vec<ChunkEdits>) -> Vec<u8> {
     chunks.sort_unstable_by_key(|chunk| chunk.coord.0.to_array());
-    let mut palette = Vec::new();
-    let mut indices = [None; BlockType::ALL.len()];
-    let chunks = chunks
+    let mut palette: Vec<Block> = Vec::new();
+    let chunks: Vec<_> = chunks
         .into_iter()
         .map(|chunk| {
             let mut blocks: Vec<_> = chunk
                 .blocks
                 .into_iter()
                 .map(|(local, block)| {
-                    let index = *indices[block as usize].get_or_insert_with(|| {
-                        palette.push(block.name());
-                        palette.len() as u16 - 1
+                    let index = palette.iter().position(|&b| b == block).unwrap_or_else(|| {
+                        palette.push(block);
+                        palette.len() - 1
                     });
-                    (local_index(local), index)
+                    (local_index(local), index as u16)
                 })
                 .collect();
             blocks.sort_unstable();
@@ -165,6 +166,8 @@ pub fn encode(mut chunks: Vec<ChunkEdits>) -> Vec<u8> {
             }
         })
         .collect();
+    let names: Vec<String> = palette.iter().map(Block::to_string).collect();
+    let palette = names.iter().map(String::as_str).collect();
     let file = RegionFile { palette, chunks };
     postcard::to_extend(&file, vec![0, FORMAT]).expect("edits always encode")
 }
@@ -180,7 +183,9 @@ pub fn decode(
 ) -> io::Result<()> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
     let file: RegionFile = match bytes {
-        [0, FORMAT, file @ ..] => postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?,
+        [0, 4 | FORMAT, file @ ..] => {
+            postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?
+        }
         [0, 3, file @ ..] => {
             let file: format_3::RegionFile =
                 postcard::from_bytes(file).map_err(|e| invalid(e.to_string()))?;
@@ -219,11 +224,8 @@ pub fn decode(
         .palette
         .iter()
         .map(|&name| {
-            BlockType::from_name(name).ok_or_else(|| {
-                invalid(format!(
-                    "unknown block \"{name}\", perhaps saved by a newer version"
-                ))
-            })
+            name.parse::<Block>()
+                .map_err(|e| invalid(format!("{e}, perhaps saved by a newer version")))
         })
         .collect::<io::Result<Vec<_>>>()?;
     let in_chunk = |local: u16| {
@@ -277,7 +279,7 @@ mod tests {
     use serde::Serialize;
 
     use super::{decode, encode, ChunkEdits, Region, RegionFile, SavedChunk};
-    use crate::block::BlockType;
+    use crate::block::{Block, BlockType};
     use crate::chunks::chunk::ChunkCoordinate;
     use crate::containers::{Container, Containers, FUEL, INPUT};
     use crate::edits::Edits;
@@ -288,7 +290,7 @@ mod tests {
         ChunkCoordinate(I64Vec3::new(x, y, z))
     }
 
-    fn edits(coord: ChunkCoordinate, blocks: Vec<(U16Vec3, BlockType)>) -> ChunkEdits {
+    fn edits(coord: ChunkCoordinate, blocks: Vec<(U16Vec3, Block)>) -> ChunkEdits {
         ChunkEdits {
             coord,
             blocks,
@@ -381,18 +383,18 @@ mod tests {
             ChunkEdits {
                 coord: chunk(3, 28, -4),
                 blocks: vec![
-                    (U16Vec3::new(0, 0, 0), BlockType::Air),
-                    (U16Vec3::new(1, 2, 3), BlockType::Air),
-                    (wheat_at, BlockType::Wheat2),
-                    (more_at, BlockType::Wheat0),
-                    (furnace_at, BlockType::Furnace),
+                    (U16Vec3::new(0, 0, 0), BlockType::Air.into()),
+                    (U16Vec3::new(1, 2, 3), BlockType::Air.into()),
+                    (wheat_at, BlockType::Wheat2.into()),
+                    (more_at, BlockType::Wheat0.into()),
+                    (furnace_at, BlockType::Furnace.into()),
                 ],
                 containers: vec![(furnace_at, furnace())],
                 crops: vec![(wheat_at, 12.75), (more_at, 13.0625)],
             },
             edits(
                 chunk(-1, 0, 31),
-                vec![(U16Vec3::new(4, 5, 6), BlockType::Chest)],
+                vec![(U16Vec3::new(4, 5, 6), BlockType::Chest.into())],
             ),
             // a chest the world generated, opened, where nothing was edited
             ChunkEdits {
@@ -413,9 +415,9 @@ mod tests {
         let bytes = encode(vec![edits(
             chunk(0, 0, 0),
             vec![
-                (U16Vec3::new(0, 0, 0), BlockType::Air),
-                (U16Vec3::new(15, 15, 15), BlockType::Furnace),
-                (U16Vec3::new(1, 2, 3), BlockType::Air),
+                (U16Vec3::new(0, 0, 0), BlockType::Air.into()),
+                (U16Vec3::new(15, 15, 15), BlockType::Furnace.into()),
+                (U16Vec3::new(1, 2, 3), BlockType::Air.into()),
             ],
         )]);
         // two blocks named once each, and three edits of a few bytes
@@ -427,12 +429,12 @@ mod tests {
         let bytes = encode(vec![edits(
             chunk(0, 0, 0),
             vec![
-                (U16Vec3::new(1, 0, 0), BlockType::Bricks),
-                (U16Vec3::new(2, 0, 0), BlockType::Air),
-                (U16Vec3::new(3, 0, 0), BlockType::Bricks),
+                (U16Vec3::new(1, 0, 0), BlockType::Bricks.into()),
+                (U16Vec3::new(2, 0, 0), BlockType::Air.into()),
+                (U16Vec3::new(3, 0, 0), BlockType::Bricks.into()),
             ],
         )]);
-        assert_eq!([0, 4], bytes[..2]);
+        assert_eq!([0, 5], bytes[..2]);
         let file: RegionFile = postcard::from_bytes(&bytes[2..]).unwrap();
         assert_eq!(vec!["bricks", "air"], file.palette);
         assert_eq!(vec![(1, 0), (2, 1), (3, 0)], file.chunks[0].blocks);
@@ -456,13 +458,13 @@ mod tests {
         .unwrap();
         let loaded = decoded(&bytes);
         let blocks = vec![
-            (U16Vec3::new(5, 0, 0), BlockType::Furnace),
-            (U16Vec3::new(12, 1, 2), BlockType::Air),
+            (U16Vec3::new(5, 0, 0), BlockType::Furnace.into()),
+            (U16Vec3::new(12, 1, 2), BlockType::Air.into()),
         ];
         assert_eq!(vec![edits(chunk(2, 30, -1), blocks)], loaded);
-        // and it's written as format 4 when it's saved again
+        // and it's written as format 5 when it's saved again
         let again = encode(loaded.clone());
-        assert_eq!([0, 4], again[..2]);
+        assert_eq!([0, 5], again[..2]);
         assert_eq!(loaded, decoded(&again));
     }
 
@@ -488,14 +490,14 @@ mod tests {
             ..edits(
                 chunk(2, 30, -1),
                 vec![
-                    (U16Vec3::new(5, 0, 0), BlockType::Furnace),
-                    (U16Vec3::new(12, 1, 2), BlockType::Wheat3),
+                    (U16Vec3::new(5, 0, 0), BlockType::Furnace.into()),
+                    (U16Vec3::new(12, 1, 2), BlockType::Wheat3.into()),
                 ],
             )
         };
         assert_eq!(vec![expected], loaded);
         let again = encode(loaded.clone());
-        assert_eq!([0, 4], again[..2]);
+        assert_eq!([0, 5], again[..2]);
         assert_eq!(loaded, decoded(&again));
     }
 
@@ -510,17 +512,68 @@ mod tests {
                 crops: Vec::new(),
             }],
         };
-        let bytes = postcard::to_extend(&file, vec![0, 4]).unwrap();
+        let bytes = postcard::to_extend(&file, vec![0, 5]).unwrap();
         assert!(fails(&bytes).to_string().contains("mithril_ore"));
-        let newer = [&[0, 5][..], &bytes[2..]].concat();
+        let newer = [&[0, 6][..], &bytes[2..]].concat();
         assert!(fails(&newer).to_string().contains("newer version"));
+        // nor does a state the game doesn't know
+        let file = RegionFile {
+            palette: vec!["planks_stairs[facing=sideways]"],
+            ..file
+        };
+        let bytes = postcard::to_extend(&file, vec![0, 5]).unwrap();
+        assert!(fails(&bytes).to_string().contains("sideways"));
+    }
+
+    #[test]
+    fn test_blocks_keep_their_states_in_the_palette_and_a_format_4_file_loads_as_it_was() {
+        let stairs: Block = "stone_brick_stairs[facing=west,half=top]".parse().unwrap();
+        let log: Block = "log[axis=z]".parse().unwrap();
+        let blocks = vec![
+            (U16Vec3::new(1, 0, 0), stairs),
+            (U16Vec3::new(2, 0, 0), BlockType::StoneBrickStairs.into()),
+            (U16Vec3::new(3, 0, 0), log),
+            (U16Vec3::new(4, 0, 0), stairs),
+        ];
+        let saved = vec![edits(chunk(0, 0, 0), blocks)];
+        let bytes = encode(saved.clone());
+        let file: RegionFile = postcard::from_bytes(&bytes[2..]).unwrap();
+        // each block in each state named once
+        assert_eq!(
+            vec![
+                "stone_brick_stairs[facing=west,half=top]",
+                "stone_brick_stairs",
+                "log[axis=z]"
+            ],
+            file.palette
+        );
+        assert_eq!(saved, decoded(&bytes));
+        // a format 4 file is laid out the same, its blocks with no state
+        let file = RegionFile {
+            palette: vec!["log", "furnace"],
+            chunks: vec![SavedChunk {
+                chunk: [0, 0, 0],
+                blocks: vec![(0, 0), (1, 1)],
+                containers: Vec::new(),
+                crops: Vec::new(),
+            }],
+        };
+        let old = postcard::to_extend(&file, vec![0, 4]).unwrap();
+        let blocks = vec![
+            (U16Vec3::new(0, 0, 0), BlockType::Log.into()),
+            (U16Vec3::new(1, 0, 0), BlockType::Furnace.into()),
+        ];
+        assert_eq!(vec![edits(chunk(0, 0, 0), blocks)], decoded(&old));
     }
 
     #[test]
     fn test_a_damaged_file_or_a_container_with_the_wrong_slots_is_an_error() {
         let mut chunks = vec![ChunkEdits {
             containers: vec![(U16Vec3::ZERO, furnace())],
-            ..edits(chunk(0, 0, 0), vec![(U16Vec3::ZERO, BlockType::Furnace)])
+            ..edits(
+                chunk(0, 0, 0),
+                vec![(U16Vec3::ZERO, BlockType::Furnace.into())],
+            )
         }];
         let bytes = encode(chunks.clone());
         fails(&bytes[..bytes.len() - 1]);

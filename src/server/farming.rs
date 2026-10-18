@@ -42,7 +42,7 @@ pub(super) fn grow_crops(
             world.edit(at, WHEAT[stage]);
             changed.write(BlockChanged {
                 block: at,
-                to: WHEAT[stage],
+                to: WHEAT[stage].into(),
                 by: None,
             });
         }

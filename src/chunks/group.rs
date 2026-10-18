@@ -527,13 +527,13 @@ mod tests {
             // in the top corner of chunk (0, 20, 0), against the chunks to +x, +y and -z
             ecs.write_message(BlockChanged {
                 block: I64Vec3::new(15, 20 * 16 + 15, 0),
-                to: BlockType::Stone,
+                to: BlockType::Stone.into(),
                 by: None,
             });
             // and one in a chunk not loaded, which is put in when it's generated
             ecs.write_message(BlockChanged {
                 block: I64Vec3::new(400, 20 * 16, 400),
-                to: BlockType::Stone,
+                to: BlockType::Stone.into(),
                 by: None,
             });
             ecs.run_system_once(apply_block_changes).unwrap();
@@ -572,10 +572,10 @@ mod tests {
                 I64Vec3::new(2, 22, 2),
             );
             let key = group(0, 10, 0);
-            let edit = |app: &mut App, to| {
+            let edit = |app: &mut App, to: BlockType| {
                 app.world_mut().write_message(BlockChanged {
                     block: I64Vec3::new(5, 20 * 16 + 5, 5),
-                    to,
+                    to: to.into(),
                     by: None,
                 });
                 for _ in 0..1000 {

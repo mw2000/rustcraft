@@ -2,12 +2,14 @@ use bevy::ecs::system::SystemParam;
 use bevy::math::I64Vec3;
 use bevy::prelude::*;
 
-use crate::block::BlockType;
+use crate::block::shape::Use;
+use crate::block::{Block, BlockType};
 use crate::breaking::{break_time, crack_stage};
+use crate::building::{placed, toggled};
 use crate::client::command_bar::command_bar_closed;
 use crate::client::creatures::{creature_hit, SeenCreature};
 use crate::client::player::LocalPlayer;
-use crate::collision::{looked_at, ray_distance, Aabb, Hit};
+use crate::collision::{boxes_at, looked_at, Hit};
 use crate::containers::Container;
 use crate::crafting::Station;
 use crate::creatures::Creature;
@@ -169,12 +171,12 @@ struct EditRequests<'w> {
 }
 
 impl EditRequests<'_> {
-    fn edit(&mut self, block: I64Vec3, to: BlockType, slot: u8) {
+    fn edit(&mut self, block: I64Vec3, to: impl Into<Block>, slot: u8) {
         self.seq.0 = self.seq.0.wrapping_add(1);
         let seq = self.seq.0;
         self.edits.write(RequestEdit {
             block,
-            to,
+            to: to.into(),
             slot,
             seq,
         });
@@ -198,13 +200,7 @@ fn target_block(
     let (feet, look) = player.single().expect("player does not exist");
     let block = looked_at(&world, feet.translation, *look);
     let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
-    let block_distance = block.map_or(REACH, |hit| {
-        let cube = Aabb {
-            min: Vec3::ZERO,
-            max: Vec3::ONE,
-        };
-        ray_distance(eye, look.forward(), hit.block.as_vec3(), cube).unwrap_or(0.0)
-    });
+    let block_distance = block.map_or(REACH, |hit| eye.distance(hit.point));
     let seen = seen.iter().filter_map(|(seen, body)| {
         creatures
             .get(seen.0)
@@ -215,13 +211,18 @@ fn target_block(
     target.0 = block.filter(|_| creature.0.is_none());
 }
 
-fn outline_target(target: Res<Target>, mut gizmos: Gizmos<OutlineGizmos>) {
+// Each box of the shape looked at, so the outline fits a slab or a fence as it does a cube.
+fn outline_target(world: Res<World>, target: Res<Target>, mut gizmos: Gizmos<OutlineGizmos>) {
     if let Some(hit) = target.0 {
-        let centre = hit.block.as_vec3() + 0.5;
-        gizmos.cube(
-            Transform::from_translation(centre).with_scale(Vec3::splat(OUTLINE_SIZE)),
-            OUTLINE_COLOUR,
-        );
+        let corner = hit.block.as_vec3();
+        for part in boxes_at(hit.block, Use::Outline, |at| world.get(at)).iter() {
+            let centre = corner + (part.min + part.max) / 2.0;
+            let size = part.max - part.min + (OUTLINE_SIZE - 1.0);
+            gizmos.cube(
+                Transform::from_translation(centre).with_scale(size),
+                OUTLINE_COLOUR,
+            );
+        }
     }
 }
 
@@ -278,14 +279,14 @@ fn use_target(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut player: Query<(&GameMode, &mut Hotbar, &Inventory), With<LocalPlayer>>,
+    mut player: Query<(&GameMode, &mut Hotbar, &Inventory, &PlayerLook), With<LocalPlayer>>,
     mut requests: EditRequests,
     mut picks: MessageWriter<PickBlock>,
 ) {
     let Some(hit) = target.0 else {
         return;
     };
-    let (mode, mut hotbar, inventory) = player.single_mut().expect("player does not exist");
+    let (mode, mut hotbar, inventory, look) = player.single_mut().expect("player does not exist");
     let slot = hotbar.selected as u8;
     let replaceable = world.get_block_at(hit.block).is_replaceable();
     // and right click on a crafting table, a furnace or a bed uses it instead, see
@@ -298,13 +299,14 @@ fn use_target(
             .is_some_and(|tool| tool.kind == ToolKind::Hoe);
         if let Some(farmland) = tilled(world.get_block_at(hit.block)).filter(|_| hoe) {
             requests.edit(hit.block, farmland, slot);
-        } else if let Some(placed) = held.and_then(Item::places) {
+        } else if let Some(kind) = held.and_then(Item::places) {
             let at = if replaceable {
                 hit.block
             } else {
                 hit.block + hit.face
             };
-            requests.edit(at, placed, slot);
+            let point = hit.point - hit.block.as_vec3();
+            requests.edit(at, placed(kind, hit.face, point, look.forward()), slot);
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
@@ -318,10 +320,12 @@ fn use_target(
     }
 }
 
-/// Whether right-clicking `hit` uses it, rather than building against it or eating: a bed
-/// always, and a station or a container in survival.
+/// Whether right-clicking `hit` uses it, rather than building against it or eating: a bed,
+/// a door or a trapdoor always, and a station or a container in survival.
 pub fn is_used(world: &World, hit: Hit, mode: GameMode) -> bool {
-    world.get_block_at(hit.block) == BlockType::Bed || opens_screen(world, hit, mode)
+    world.get_block_at(hit.block) == BlockType::Bed
+        || toggled(world.get(hit.block)).is_some()
+        || opens_screen(world, hit, mode)
 }
 
 // Whether right-clicking `hit` opens the inventory screen at it, as a station or a container
@@ -353,7 +357,7 @@ fn use_station(
     if !mouse.just_pressed(MouseButton::Right) {
         return;
     }
-    if world.get_block_at(hit.block) == BlockType::Bed {
+    if world.get_block_at(hit.block) == BlockType::Bed || toggled(world.get(hit.block)).is_some() {
         uses.write(UseBlock { block: hit.block });
     } else if opens_screen(&world, hit, mode) {
         let block = world.get_block_at(hit.block);
@@ -368,7 +372,7 @@ fn use_station(
 mod tests {
     use bevy::math::{I64Vec3, Vec3};
 
-    use super::{BreakStep, Breaking, Hit, BREAK_REST};
+    use super::{BreakStep, Breaking, BREAK_REST};
     use crate::breaking::CRACK_STAGES;
     use crate::collision::overlaps;
     use crate::collision::raycast;
@@ -445,20 +449,15 @@ mod tests {
     #[test]
     fn test_hits_the_block_looked_at_through_the_face_facing_the_eye() {
         let eye = Vec3::new(0.5, 1.5, 0.5);
+        let hit = raycast(eye, Vec3::X, REACH, stops).unwrap();
         assert_eq!(
-            Some(Hit {
-                block: I64Vec3::new(3, 1, 0),
-                face: I64Vec3::NEG_X,
-            }),
-            raycast(eye, Vec3::X, REACH, stops)
+            (I64Vec3::new(3, 1, 0), I64Vec3::NEG_X),
+            (hit.block, hit.face)
         );
-        assert_eq!(
-            Some(Hit {
-                block: I64Vec3::new(0, 0, 0),
-                face: I64Vec3::Y,
-            }),
-            raycast(eye, Vec3::NEG_Y, REACH, stops)
-        );
+        // where it meets the pillar's face
+        assert_eq!(Vec3::new(3.0, 1.5, 0.5), hit.point);
+        let hit = raycast(eye, Vec3::NEG_Y, REACH, stops).unwrap();
+        assert_eq!((I64Vec3::ZERO, I64Vec3::Y), (hit.block, hit.face));
         // at a slant, onto the floor two blocks off
         let hit = raycast(eye, Vec3::new(-4.0, -1.0, 0.0), REACH, stops).unwrap();
         assert_eq!((I64Vec3::new(-2, 0, 0), I64Vec3::Y), (hit.block, hit.face));
@@ -591,6 +590,7 @@ mod tests {
                 .insert_resource(Target(Some(Hit {
                     block: I64Vec3::ZERO,
                     face: I64Vec3::Y,
+                    point: Vec3::new(0.5, 1.0, 0.5),
                 })))
                 .add_systems(Update, (break_target, use_target, use_station));
             app.world_mut().spawn((
@@ -658,10 +658,10 @@ mod tests {
         #[test]
         fn test_left_click_asks_to_break_and_right_click_to_place_against_the_face() {
             let mut app = app(AWAY, GameMode::Creative);
-            let at = |block, to, seq| {
+            let at = |block, to: BlockType, seq| {
                 vec![RequestEdit {
                     block,
-                    to,
+                    to: to.into(),
                     slot: 0,
                     seq,
                 }]
@@ -693,7 +693,8 @@ mod tests {
         fn test_placing_takes_the_selected_slots_block() {
             let mut app = app(AWAY, GameMode::Creative);
             hotbar(&mut app).selected = 3;
-            let to = |requests: Vec<RequestEdit>| requests.iter().map(|r| r.to).collect::<Vec<_>>();
+            let to =
+                |requests: Vec<RequestEdit>| requests.iter().map(|r| r.to.kind).collect::<Vec<_>>();
             assert_eq!(
                 vec![BlockType::Bricks],
                 to(click(&mut app, MouseButton::Right))
@@ -707,7 +708,7 @@ mod tests {
         fn test_right_click_with_a_hoe_tills_and_with_seeds_plants() {
             let mut app = app(AWAY, GameMode::Survival);
             let to = |requests: Vec<RequestEdit>| {
-                let edits = requests.iter().map(|r| (r.block, r.to));
+                let edits = requests.iter().map(|r| (r.block, r.to.kind));
                 edits.collect::<Vec<_>>()
             };
             inventory(&mut app).slots[0] = Some(ItemStack::new(Item::StoneHoe, 1));
@@ -888,6 +889,7 @@ mod tests {
                 .init_asset::<GizmoAsset>()
                 .init_resource::<GizmoHandles>()
                 .init_gizmo_group::<OutlineGizmos>()
+                .insert_resource(crate::world::World::new(16))
                 .insert_resource(Target(target))
                 .add_systems(Update, outline_target);
             app.update();
@@ -911,6 +913,7 @@ mod tests {
             let lines = outline(Some(Hit {
                 block,
                 face: IVec3::Y.as_i64vec3(),
+                point: block.as_vec3() + Vec3::new(0.5, 1.0, 0.5),
             }));
             assert!(!lines.is_empty());
             let margin = (OUTLINE_SIZE - 1.0) / 2.0;

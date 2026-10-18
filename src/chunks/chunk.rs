@@ -1,6 +1,6 @@
 use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
-use crate::block::BlockType;
+use crate::block::{Block, BlockState, BlockType};
 use crate::chunks::generate::trees::TreeTints;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -66,13 +66,17 @@ pub fn neighbor_26_index(dx: i32, dy: i32, dz: i32) -> usize {
     }
 }
 
-// One block-type run in a chunk's linear cell ordering (see `ChunkData::linear_index`).
-// `length` covers at most size^3 = 4096 cells, comfortably within u16.
+// One run of a block in a state in a chunk's linear cell ordering (see `linear_index`).
+// `length` covers at most size^3 = 4096 cells, comfortably within u16, and the state fits in the
+// byte the block left spare, so a run takes no more room than before blocks had states.
 #[derive(Debug, Clone, Copy)]
 struct Run {
     block: BlockType,
+    state: BlockState,
     length: u16,
 }
+
+const _: () = assert!(size_of::<Run>() == 4);
 
 #[derive(Clone)]
 pub struct ChunkData {
@@ -146,6 +150,7 @@ impl Default for ChunkData {
         Self {
             runs: vec![Run {
                 block: BlockType::Air,
+                state: BlockState::default(),
                 length: CELLS as u16,
             }],
             trees: TreeTints::default(),
@@ -160,8 +165,14 @@ impl ChunkData {
         let mut runs: Vec<Run> = Vec::new();
         for block in cells {
             match runs.last_mut() {
-                Some(run) if run.block == block => run.length += 1,
-                _ => runs.push(Run { block, length: 1 }),
+                Some(run) if run.block == block && run.state == BlockState::default() => {
+                    run.length += 1
+                }
+                _ => runs.push(Run {
+                    block,
+                    state: BlockState::default(),
+                    length: 1,
+                }),
             }
         }
         assert_eq!(CELLS, runs.iter().map(|r| r.length as usize).sum::<usize>());
@@ -195,13 +206,14 @@ impl ChunkData {
         self.runs.iter().all(|r| r.block.is_opaque())
     }
 
-    /// The columns with an opaque block in them.
+    /// The columns with a block in them that no light gets through, which roofs the columns
+    /// under it over.
     pub fn opaque_columns(&self) -> ColumnSet {
         let mut columns = ColumnSet::default();
         let mut start = 0;
         for run in &self.runs {
             let end = start + run.length as usize;
-            if run.block.is_opaque() {
+            if run.block.blocks_light() {
                 // a column's cells are contiguous, see `linear_index`
                 for column in start / CHUNK_SIZE as usize..=(end - 1) / CHUNK_SIZE as usize {
                     let size = CHUNK_SIZE as usize;
@@ -245,6 +257,27 @@ impl ChunkData {
         })
     }
 
+    /// Its blocks with a state other than none, and their states.
+    pub fn states(&self) -> impl Iterator<Item = (U16Vec3, BlockState)> + '_ {
+        let mut start = 0usize;
+        self.runs
+            .iter()
+            .filter_map(move |run| {
+                let first = start;
+                start += run.length as usize;
+                (run.state != BlockState::default()).then_some((first..start, run.state))
+            })
+            .flat_map(|(cells, state)| cells.map(move |i| (coord_from_index(i), state)))
+    }
+
+    /// Whether any of its blocks keeps light out without filling its cell, as stairs and slabs
+    /// do, see `SkyLight::light_shapes`.
+    pub fn has_light_shapes(&self) -> bool {
+        self.runs
+            .iter()
+            .any(|run| run.block.is_shape() && run.block.blocks_light())
+    }
+
     /// Writes every cell's block to `out`, in `linear_index` order.
     pub fn decode_into(&self, out: &mut [BlockType; CELLS]) {
         // Short runs, which layers of soil and veins of ore cut columns into, are written as a
@@ -268,32 +301,45 @@ impl ChunkData {
         self.runs[self.locate(linear_index(coord)).0].block
     }
 
-    pub fn set_block_at(&mut self, coord: U16Vec3, block: BlockType) {
+    /// The block at `coord` with its state.
+    pub fn get(&self, coord: U16Vec3) -> Block {
+        let run = self.runs[self.locate(linear_index(coord)).0];
+        Block {
+            kind: run.block,
+            state: run.state,
+        }
+    }
+
+    pub fn set_block_at(&mut self, coord: U16Vec3, block: impl Into<Block>) {
+        let Block { kind, state } = block.into();
         let index = linear_index(coord);
         let (at, start) = self.locate(index);
         let existing = self.runs[at];
-        if existing.block == block {
+        let same = |run: &Run| run.block == kind && run.state == state;
+        if same(&existing) {
             return;
         }
         let before = index - start;
         let after = existing.length as usize - before - 1;
-        let run = |block, length: usize| Run {
+        let run = |block, state, length: usize| Run {
             block,
+            state,
             length: length as u16,
         };
         let pieces = [
-            run(existing.block, before),
-            run(block, 1),
-            run(existing.block, after),
+            run(existing.block, existing.state, before),
+            run(kind, state, 1),
+            run(existing.block, existing.state, after),
         ];
         let used = (before == 0) as usize..3 - (after == 0) as usize;
         self.runs.splice(at..=at, pieces[used].iter().copied());
-        // merge the new run with a same-type neighbour either side, so edits don't fragment the runs
+        // merge the new run with a neighbour of the same block either side, so edits don't
+        // fragment the runs
         let at = at + (before > 0) as usize;
-        if at + 1 < self.runs.len() && self.runs[at + 1].block == block {
+        if at + 1 < self.runs.len() && same(&self.runs[at + 1]) {
             self.runs[at].length += self.runs.remove(at + 1).length;
         }
-        if at > 0 && self.runs[at - 1].block == block {
+        if at > 0 && same(&self.runs[at - 1]) {
             self.runs[at - 1].length += self.runs.remove(at).length;
         }
     }
@@ -303,7 +349,7 @@ impl ChunkData {
 mod tests {
     use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
-    use crate::block::BlockType;
+    use crate::block::{Block, BlockState, BlockType};
 
     use super::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 
@@ -396,6 +442,38 @@ mod tests {
 
         chunk_data.set_block_at(U16Vec3::new(0, 5, 0), BlockType::Air);
         assert_eq!(1, chunk_data.runs.len()); // back to a single uniform run
+    }
+
+    #[test]
+    fn test_states_are_kept_in_the_runs_and_only_the_same_block_in_the_same_state_merges() {
+        use crate::block::Direction;
+        let mut chunk_data = ChunkData::default();
+        let east = BlockState::default().with_facing(Direction::East);
+        let stairs = |state| Block::new(BlockType::PlanksStairs, state).unwrap();
+        for y in 0..3 {
+            chunk_data.set_block_at(U16Vec3::new(0, y, 0), stairs(east));
+        }
+        // three stairs facing east, then air
+        assert_eq!(2, chunk_data.runs.len());
+        chunk_data.set_block_at(U16Vec3::new(0, 1, 0), stairs(BlockState::default()));
+        assert_eq!(4, chunk_data.runs.len());
+        assert_eq!(stairs(east), chunk_data.get(U16Vec3::new(0, 2, 0)));
+        assert_eq!(
+            BlockType::PlanksStairs,
+            chunk_data.get_block_at(U16Vec3::new(0, 1, 0))
+        );
+        let states: Vec<_> = chunk_data.states().collect();
+        assert_eq!(
+            vec![(U16Vec3::new(0, 0, 0), east), (U16Vec3::new(0, 2, 0), east)],
+            states
+        );
+        chunk_data.set_block_at(U16Vec3::new(0, 1, 0), stairs(east));
+        assert_eq!(2, chunk_data.runs.len());
+        for y in 0..3 {
+            chunk_data.set_block_at(U16Vec3::new(0, y, 0), BlockType::Air);
+        }
+        assert_eq!(1, chunk_data.runs.len());
+        assert_eq!(0, chunk_data.states().count());
     }
 
     #[test]

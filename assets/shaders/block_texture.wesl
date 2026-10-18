@@ -7,7 +7,7 @@
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, see `Tile` in block.rs
-const ATLAS_CELLS: f32 = 55.0;
+const ATLAS_CELLS: f32 = 78.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
@@ -54,7 +54,7 @@ fn block_sample(uv: vec2<f32>, vertex_alpha: f32, footprint: BlockFootprint) -> 
 // order. `gen_atlas` prints these and the block-textures skill's `pack.py`
 // rewrites them, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 55>(
+    var means = array<vec3<f32>, 78>(
         vec3<f32>(0.1182, 0.1186, 0.1186), // stone
         vec3<f32>(0.5003, 0.5003, 0.5003), // grass top
         vec3<f32>(0.4776, 0.3611, 0.1822), // sand
@@ -79,7 +79,7 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.1485, 0.1359, 0.1296), // iron ore
         vec3<f32>(0.2778, 0.1663, 0.0667), // crafting table top
         vec3<f32>(0.2776, 0.1755, 0.0874), // crafting table side
-        vec3<f32>(0.0981, 0.0981, 0.0981), // furnace side
+        vec3<f32>(0.0981, 0.0981, 0.0981), // furnace front
         vec3<f32>(0.4960, 0.4960, 0.4960), // tall grass
         vec3<f32>(0.3511, 0.0999, 0.0184), // poppy
         vec3<f32>(0.4152, 0.3750, 0.0280), // dandelion
@@ -110,6 +110,29 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.0782, 0.3459, 0.1625), // polished jade
         vec3<f32>(0.5330, 0.5788, 0.6221), // bright steel block
         vec3<f32>(0.6481, 0.6424, 0.5752), // ember lamp
+        vec3<f32>(0.1088, 0.1098, 0.1098), // furnace side
+        vec3<f32>(0.6831, 0.7870, 0.8147), // glass
+        vec3<f32>(0.4673, 0.4673, 0.4673), // vines
+        vec3<f32>(0.2550, 0.1495, 0.0621), // door bottom
+        vec3<f32>(0.2036, 0.1183, 0.0475), // door top
+        vec3<f32>(0.2224, 0.1310, 0.0518), // trapdoor
+        vec3<f32>(0.3244, 0.1875, 0.0686), // ladder
+        vec3<f32>(0.2115, 0.1453, 0.0898), // lantern
+        vec3<f32>(0.1097, 0.1369, 0.0860), // mossy cobblestone
+        vec3<f32>(0.0967, 0.0972, 0.0972), // cracked stone bricks
+        vec3<f32>(0.1082, 0.1189, 0.1006), // mossy stone bricks
+        vec3<f32>(0.1945, 0.1953, 0.1953), // polished stone
+        vec3<f32>(0.3128, 0.1112, 0.0556), // terracotta
+        vec3<f32>(0.2736, 0.0467, 0.0285), // red terracotta
+        vec3<f32>(0.4915, 0.2348, 0.0168), // yellow terracotta
+        vec3<f32>(0.0607, 0.0482, 0.1112), // blue terracotta
+        vec3<f32>(0.0723, 0.0866, 0.0228), // green terracotta
+        vec3<f32>(0.0732, 0.0343, 0.0139), // dark planks
+        vec3<f32>(0.5076, 0.3990, 0.2001), // light planks
+        vec3<f32>(0.1658, 0.1021, 0.0519), // bookshelf
+        vec3<f32>(0.1401, 0.0877, 0.0445), // barrel top
+        vec3<f32>(0.1550, 0.0950, 0.0480), // barrel side
+        vec3<f32>(0.1468, 0.0905, 0.0441), // barrel bottom
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

@@ -8,7 +8,7 @@ import bevy_pbr::{
 import bevy_render::globals::Globals;
 import super::block_texture::{block_alpha, material_fade};
 import super::dither::dither_threshold;
-import super::foliage::{is_leaf, is_plant, sway, swayed};
+import super::foliage::{is_cutout, is_glass, is_leaf, is_plant, sway, swayed};
 import super::curvature::{curved, curved_last};
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
@@ -59,8 +59,8 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
     return out;
 }
 
-// Only leaves and plants have holes, so only they pay for a texture sample. Untextured LOD
-// cells draw leaves solid, so cast solid shadows too.
+// Only leaves, plants, glass and shapes have holes, so only they pay for a texture sample.
+// Untextured LOD cells draw leaves solid, so cast solid shadows too.
 fn cut_holes(in: prepass_io::VertexOutput) {
 // `DebugSettings::solid_leaves` casts solid shadows everywhere
 @if(!SOLID_LEAVES) {
@@ -71,7 +71,8 @@ fn cut_holes(in: prepass_io::VertexOutput) {
     if draws > 0.5 {
         return;
     }
-    if (is_leaf(in.color.a) || is_plant(draws)) && block_alpha(in.uv, in.color.a) < 0.5 {
+    let holed = is_leaf(in.color.a) || is_glass(in.color.a) || is_plant(draws) || is_cutout(draws);
+    if holed && block_alpha(in.uv, in.color.a) < 0.5 {
         discard;
     }
 }

@@ -1,4 +1,9 @@
+pub mod shape;
+mod state;
+
 use rand::{Rng, RngExt};
+
+pub use state::{Block, BlockState, Direction, Property};
 
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::farming::WHEAT;
@@ -52,6 +57,90 @@ pub enum RenderStyle {
     /// As a thin stick standing on the floor of the cell, its flame unshaded, at full detail
     /// only.
     Torch,
+    /// As a cube lying along the axis of its state, its top tile on its ends and its side
+    /// tile's grain running along it, as logs do.
+    Pillar,
+    /// As a cube facing one of the four ways round, which shows this tile, as a furnace's mouth.
+    Fronted(Tile),
+    /// As a cube facing any of the six ways, its top tile that way and its bottom the other,
+    /// as a barrel's lid.
+    Lidded,
+    // Shapes (`block::shape`), drawn from boxes within their cells at full detail only, but for
+    // stairs, slabs and walls, which coarse LODs draw as cubes of their own tiles.
+    /// A slab and a step up on it to the way it faces, turned over in the top half.
+    Stairs,
+    /// The bottom or top half of a cube.
+    Slab,
+    /// A post joined by rails to the fences and solid blocks beside it.
+    Fence,
+    /// A thick post joined by walls to the walls, panes and solid blocks beside it.
+    Wall,
+    /// A thin pane joined to the panes, walls and solid blocks beside it.
+    Pane,
+    /// One block of a door two blocks tall, shut across its cell or open against its hinge side.
+    Door,
+    /// A hatch across the bottom or top of its cell, or open against the side it faces from.
+    Trapdoor,
+    /// Flat against the side of its cell it faces from, and climbed.
+    Ladder,
+    /// Flat against the side of its cell it faces from, climbed, and tinted as leaves are.
+    Vine,
+    /// A small box standing on the floor of its cell or hanging from its ceiling, its glass
+    /// glowing unshaded.
+    Lantern,
+}
+
+impl RenderStyle {
+    /// Whether it's drawn as a whole cube, whatever way it's turned.
+    pub const fn is_cube(self) -> bool {
+        matches!(
+            self,
+            RenderStyle::Cube | RenderStyle::Pillar | RenderStyle::Fronted(_) | RenderStyle::Lidded
+        )
+    }
+
+    /// Whether it's drawn from boxes within its cell, see `block::shape`.
+    pub const fn is_shape(self) -> bool {
+        matches!(
+            self,
+            RenderStyle::Stairs
+                | RenderStyle::Slab
+                | RenderStyle::Fence
+                | RenderStyle::Wall
+                | RenderStyle::Pane
+                | RenderStyle::Door
+                | RenderStyle::Trapdoor
+                | RenderStyle::Ladder
+                | RenderStyle::Vine
+                | RenderStyle::Lantern
+        )
+    }
+
+    /// Whether coarse LODs draw it, as a cube: cubes, water, and the shapes big enough to make
+    /// out from afar. The rest, like plants, are too small to.
+    pub const fn is_drawn_far(self) -> bool {
+        self.is_cube()
+            || matches!(
+                self,
+                RenderStyle::Liquid | RenderStyle::Stairs | RenderStyle::Slab | RenderStyle::Wall
+            )
+    }
+
+    /// The properties of the state of a block drawn this way.
+    pub const fn state_properties(self) -> &'static [Property] {
+        use Property::*;
+        match self {
+            RenderStyle::Pillar => &[Axis],
+            RenderStyle::Fronted(_) | RenderStyle::Ladder | RenderStyle::Vine => &[Facing],
+            RenderStyle::Lidded => &[FacingAny],
+            RenderStyle::Stairs => &[Facing, Half],
+            RenderStyle::Slab => &[Half],
+            RenderStyle::Door => &[Facing, Half, Open, Hinge],
+            RenderStyle::Trapdoor => &[Facing, Half, Open],
+            RenderStyle::Lantern => &[Hanging],
+            _ => &[],
+        }
+    }
 }
 
 /// What a block leaves behind when it's broken in survival, to be picked up.
@@ -127,6 +216,132 @@ const RIPE: Drops = Drops::Both(
     &Drops::Several(Item::Seeds, 1, 3),
 );
 
+// What a shape cut from a block takes from it: its tiles, and how it's broken.
+struct Material {
+    top: Tile,
+    side: Tile,
+    bottom: Tile,
+    hardness: f32,
+    tool: ToolKind,
+    tier: u8,
+}
+
+const fn material(tile: Tile, hardness: f32, tool: ToolKind, tier: u8) -> Material {
+    Material {
+        top: tile,
+        side: tile,
+        bottom: tile,
+        hardness,
+        tool,
+        tier,
+    }
+}
+
+const PLANKS: Material = material(Tile::Planks, 3.0, Axe, 0);
+const DARK_PLANKS: Material = material(Tile::DarkPlanks, 3.0, Axe, 0);
+const COBBLESTONE: Material = material(Tile::Cobblestone, 7.5, Pickaxe, 1);
+const STONE_BRICKS: Material = material(Tile::StoneBricks, 7.5, Pickaxe, 1);
+const BRICKS: Material = material(Tile::Bricks, 7.5, Pickaxe, 1);
+const TERRACOTTA: Material = material(Tile::Terracotta, 6.0, Pickaxe, 1);
+const SANDSTONE: Material = Material {
+    top: Tile::SandstoneTop,
+    bottom: Tile::SandstoneTop,
+    ..material(Tile::SandstoneSide, 4.0, Pickaxe, 1)
+};
+
+// A shape's row: cut from `material`, drawn as `style`, and solid. It lets light through as
+// `light_opacity` says and darkens what's beside it as much as `occlusion_weight` does.
+const fn shaped(
+    name: &'static str,
+    style: RenderStyle,
+    material: Material,
+    light_opacity: u8,
+    occlusion_weight: f32,
+) -> Properties {
+    Properties {
+        name,
+        solid: true,
+        replaceable: false,
+        style,
+        drops: Drops::Itself,
+        hardness: material.hardness,
+        tool: Some(material.tool),
+        tier: material.tier,
+        light_opacity,
+        emits: 0,
+        occlusion_weight,
+        top: material.top,
+        side: material.side,
+        bottom: material.bottom,
+        lod: material.side,
+    }
+}
+
+// Stairs and slabs keep the sky out, as roofs are made of them, while light reaches their own
+// faces from the cells beside them (`SkyLight::light_shapes`). Fences and walls let it through.
+const fn stairs(name: &'static str, material: Material) -> Properties {
+    shaped(name, RenderStyle::Stairs, material, MAX_LIGHT, 0.8)
+}
+
+const fn slab(name: &'static str, material: Material) -> Properties {
+    shaped(name, RenderStyle::Slab, material, MAX_LIGHT, 0.5)
+}
+
+const fn wall(name: &'static str, material: Material) -> Properties {
+    shaped(name, RenderStyle::Wall, material, 0, 0.5)
+}
+
+const fn fence(name: &'static str, material: Material) -> Properties {
+    shaped(name, RenderStyle::Fence, material, 0, 0.2)
+}
+
+// A plain cube of one tile, broken as `material` is.
+const fn cube(name: &'static str, tile: Tile, material: Material) -> Properties {
+    Properties {
+        top: tile,
+        side: tile,
+        bottom: tile,
+        lod: tile,
+        ..shaped(name, RenderStyle::Cube, material, MAX_LIGHT, 1.0)
+    }
+}
+
+// How a block's meshed, as a few bits worked out from its row (`MESHING`).
+#[derive(Copy, Clone)]
+struct Meshing(u8);
+
+impl Meshing {
+    const NONE: Self = Self(0);
+    // whether it hides the faces behind it
+    const OPAQUE: u8 = 1;
+    // whether it's drawn as a cube at full detail, and in LODs
+    const CUBE: u8 = 2;
+    const FAR_CUBE: u8 = 4;
+    // whether its look depends on its state
+    const STATED: u8 = 8;
+    const SHAPE: u8 = 16;
+
+    const fn of(properties: &Properties) -> Self {
+        let style = properties.style;
+        let opaque = style.is_cube() && properties.light_opacity == MAX_LIGHT;
+        let far_cube = style.is_drawn_far() && !matches!(style, RenderStyle::Liquid);
+        const fn bit(set: bool, bit: u8) -> u8 {
+            if set {
+                bit
+            } else {
+                0
+            }
+        }
+        Self(
+            bit(opaque, Self::OPAQUE)
+                | bit(style.is_cube(), Self::CUBE)
+                | bit(far_cube, Self::FAR_CUBE)
+                | bit(!style.state_properties().is_empty(), Self::STATED)
+                | bit(style.is_shape(), Self::SHAPE),
+        )
+    }
+}
+
 // Declares `BlockType` and its table of `Properties` together, so each block's properties sit
 // beside its variant and the table can't fall out of step with the enum.
 macro_rules! blocks {
@@ -144,6 +359,17 @@ macro_rules! blocks {
         }
 
         const PROPERTIES: [Properties; BlockType::ALL.len()] = [$(Properties $properties),*];
+
+        // What meshing asks of nearly every face and corner, worked out once from each row.
+        const MESHING: [Meshing; BlockType::ALL.len()] = {
+            let mut meshing = [Meshing::NONE; BlockType::ALL.len()];
+            let mut i = 0;
+            while i < meshing.len() {
+                meshing[i] = Meshing::of(&PROPERTIES[i]);
+                i += 1;
+            }
+            meshing
+        };
     };
 }
 
@@ -189,7 +415,7 @@ blocks! {
     },
     Log {
         name: "log", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
-        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        style: RenderStyle::Pillar, replaceable: false, drops: Drops::Itself,
         hardness: 3.0, tool: Some(Axe), tier: 0,
         top: Tile::LogEnd, side: Tile::LogBark, bottom: Tile::LogEnd, lod: Tile::LogBark,
     },
@@ -346,9 +572,8 @@ blocks! {
     },
     Furnace {
         name: "furnace", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
-        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        style: RenderStyle::Fronted(Tile::FurnaceFront), replaceable: false, drops: Drops::Itself,
         hardness: 8.0, tool: Some(Pickaxe), tier: 1,
-        // Blocks have no facing yet, so every side has the furnace's mouth.
         top: Tile::Stone, side: Tile::FurnaceSide, bottom: Tile::Stone, lod: Tile::FurnaceSide,
     },
     // Plants, standing on the block below and gone with it. They're broken at a touch, let light
@@ -446,6 +671,94 @@ blocks! {
         top: Tile::LootMarker, side: Tile::LootMarker, bottom: Tile::LootMarker,
         lod: Tile::LootMarker,
     },
+    // Glass lets light and sight through, and a wall of it shows no faces between its blocks.
+    // It drops itself, as there are no tools for taking it whole and windows are rebuilt often.
+    Glass {
+        name: "glass", solid: true, light_opacity: 0, occlusion_weight: 0.2, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Itself,
+        hardness: 0.5, tool: None, tier: 0,
+        top: Tile::Glass, side: Tile::Glass, bottom: Tile::Glass, lod: Tile::Glass,
+    },
+    GlassPane {
+        name: "glass_pane", solid: true, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Pane, replaceable: false, drops: Drops::Itself,
+        hardness: 0.5, tool: None, tier: 0,
+        top: Tile::Glass, side: Tile::Glass, bottom: Tile::Glass, lod: Tile::Glass,
+    },
+    PlanksStairs { ..stairs("planks_stairs", PLANKS) },
+    DarkPlanksStairs { ..stairs("dark_planks_stairs", DARK_PLANKS) },
+    CobblestoneStairs { ..stairs("cobblestone_stairs", COBBLESTONE) },
+    StoneBrickStairs { ..stairs("stone_brick_stairs", STONE_BRICKS) },
+    BrickStairs { ..stairs("brick_stairs", BRICKS) },
+    SandstoneStairs { ..stairs("sandstone_stairs", SANDSTONE) },
+    PlanksSlab { ..slab("planks_slab", PLANKS) },
+    DarkPlanksSlab { ..slab("dark_planks_slab", DARK_PLANKS) },
+    CobblestoneSlab { ..slab("cobblestone_slab", COBBLESTONE) },
+    StoneBrickSlab { ..slab("stone_brick_slab", STONE_BRICKS) },
+    BrickSlab { ..slab("brick_slab", BRICKS) },
+    SandstoneSlab { ..slab("sandstone_slab", SANDSTONE) },
+    CobblestoneWall { ..wall("cobblestone_wall", COBBLESTONE) },
+    StoneBrickWall { ..wall("stone_brick_wall", STONE_BRICKS) },
+    SandstoneWall { ..wall("sandstone_wall", SANDSTONE) },
+    PlanksFence { ..fence("planks_fence", PLANKS) },
+    DarkPlanksFence { ..fence("dark_planks_fence", DARK_PLANKS) },
+    // A door's lower block draws `side` and its upper `top`. Either leaves the door, as one item
+    // places both.
+    Door {
+        name: "door", solid: true, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Door, replaceable: false, drops: Drops::Itself,
+        hardness: 3.0, tool: Some(Axe), tier: 0,
+        top: Tile::DoorTop, side: Tile::DoorBottom, bottom: Tile::DoorBottom, lod: Tile::DoorBottom,
+    },
+    Trapdoor {
+        name: "trapdoor", solid: true, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Trapdoor, replaceable: false, drops: Drops::Itself,
+        hardness: 3.0, tool: Some(Axe), tier: 0,
+        top: Tile::Trapdoor, side: Tile::Trapdoor, bottom: Tile::Trapdoor, lod: Tile::Trapdoor,
+    },
+    Ladder {
+        name: "ladder", solid: true, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Ladder, replaceable: false, drops: Drops::Itself,
+        hardness: 0.6, tool: Some(Axe), tier: 0,
+        top: Tile::Ladder, side: Tile::Ladder, bottom: Tile::Ladder, lod: Tile::Ladder,
+    },
+    // Hangs down walls; walked through and built over as plants are.
+    Vines {
+        name: "vines", solid: false, light_opacity: 0, occlusion_weight: 0.0, emits: 0,
+        style: RenderStyle::Vine, replaceable: true, drops: Drops::Itself,
+        hardness: 0.2, tool: None, tier: 0,
+        top: Tile::Vines, side: Tile::Vines, bottom: Tile::Vines, lod: Tile::Vines,
+    },
+    Lantern {
+        name: "lantern", solid: true, light_opacity: 0, occlusion_weight: 0.0, emits: 13,
+        style: RenderStyle::Lantern, replaceable: false, drops: Drops::Itself,
+        hardness: 1.0, tool: Some(Pickaxe), tier: 0,
+        top: Tile::Lantern, side: Tile::Lantern, bottom: Tile::Lantern, lod: Tile::Lantern,
+    },
+    // Weathered stone for old buildings, polished stone for fine ones, and baked clay.
+    MossyCobblestone { ..cube("mossy_cobblestone", Tile::MossyCobblestone, COBBLESTONE) },
+    MossyStoneBricks { ..cube("mossy_stone_bricks", Tile::MossyStoneBricks, STONE_BRICKS) },
+    CrackedStoneBricks { ..cube("cracked_stone_bricks", Tile::CrackedStoneBricks, STONE_BRICKS) },
+    PolishedStone { ..cube("polished_stone", Tile::PolishedStone, STONE_BRICKS) },
+    Terracotta { ..cube("terracotta", Tile::Terracotta, TERRACOTTA) },
+    RedTerracotta { ..cube("red_terracotta", Tile::RedTerracotta, TERRACOTTA) },
+    YellowTerracotta { ..cube("yellow_terracotta", Tile::YellowTerracotta, TERRACOTTA) },
+    BlueTerracotta { ..cube("blue_terracotta", Tile::BlueTerracotta, TERRACOTTA) },
+    GreenTerracotta { ..cube("green_terracotta", Tile::GreenTerracotta, TERRACOTTA) },
+    DarkPlanks { ..cube("dark_planks", Tile::DarkPlanks, PLANKS) },
+    LightPlanks { ..cube("light_planks", Tile::LightPlanks, PLANKS) },
+    Bookshelf {
+        top: Tile::Planks, bottom: Tile::Planks,
+        ..cube("bookshelf", Tile::Bookshelf, material(Tile::Planks, 2.25, Axe, 0))
+    },
+    // A container of 27 slots, as a chest is, its lid toward the way it faces.
+    Barrel {
+        name: "barrel", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Lidded, replaceable: false, drops: Drops::Itself,
+        hardness: 3.75, tool: Some(Axe), tier: 0,
+        top: Tile::BarrelTop, side: Tile::BarrelSide, bottom: Tile::BarrelBottom,
+        lod: Tile::BarrelSide,
+    },
 }
 
 impl BlockType {
@@ -535,7 +848,17 @@ impl BlockType {
     /// Whether it's something there, rather than air or water: what's looked at, broken and
     /// placed.
     pub fn is_tangible(&self) -> bool {
-        self.is_solid() || self.needs_ground() || self.is_for_authoring()
+        self.is_solid() || self.needs_ground() || self.is_for_authoring() || self.is_climbable()
+    }
+
+    /// Whether a body in it climbs it, as ladders and vines are climbed.
+    pub fn is_climbable(&self) -> bool {
+        matches!(self.style(), RenderStyle::Ladder | RenderStyle::Vine)
+    }
+
+    /// The properties its state has, see `BlockState`.
+    pub fn state_properties(self) -> &'static [Property] {
+        self.style().state_properties()
     }
 
     /// Whether it's only for authoring structures: a structure void or a marker.
@@ -543,8 +866,39 @@ impl BlockType {
         matches!(self, BlockType::StructureVoid | BlockType::LootMarker)
     }
 
-    // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
+    /// Whether the faces of blocks behind this one are hidden by it: a whole cube that light
+    /// can't get through. Leaves have holes, and glass and shapes show what's behind them.
     pub fn is_opaque(&self) -> bool {
+        self.meshing(Meshing::OPAQUE)
+    }
+
+    fn meshing(self, bit: u8) -> bool {
+        MESHING[self as usize].0 & bit != 0
+    }
+
+    /// Whether it's drawn as a cube, at full detail or by LODs if `far`, see
+    /// `RenderStyle::is_drawn_far`.
+    pub fn is_drawn_as_cube(self, far: bool) -> bool {
+        self.meshing(if far {
+            Meshing::FAR_CUBE
+        } else {
+            Meshing::CUBE
+        })
+    }
+
+    /// Whether how it looks depends on its state.
+    pub fn has_state(self) -> bool {
+        self.meshing(Meshing::STATED)
+    }
+
+    /// Whether it's a shape, see `RenderStyle::is_shape`.
+    pub fn is_shape(self) -> bool {
+        self.meshing(Meshing::SHAPE)
+    }
+
+    /// Whether no light gets through it, so a roof of it keeps the sky out. Stairs and slabs
+    /// do, though they aren't opaque.
+    pub fn blocks_light(&self) -> bool {
         self.light_opacity() == MAX_LIGHT
     }
 
@@ -555,6 +909,43 @@ impl BlockType {
             Face::Top => properties.top,
             Face::Side => properties.side,
             Face::Bottom => properties.bottom,
+        }
+    }
+
+    /// The tile its face toward `direction` draws in `state`, and whether it's turned a
+    /// quarter, swapping its u and v, so the grain of a log on its side runs along it.
+    pub fn face_tile(self, state: BlockState, direction: Direction) -> (Tile, bool) {
+        let face = match direction {
+            Direction::Up => Face::Top,
+            Direction::Down => Face::Bottom,
+            _ => Face::Side,
+        };
+        // the end tiles of what lies along an axis, and whether a side's grain is turned to it
+        let along = |axis: usize, top: Tile, bottom: Tile| match direction.axis() == axis {
+            true if direction.offset()[axis] > 0 => (top, false),
+            true => (bottom, false),
+            // the side tiles' grain runs down their v, which on the top and bottom faces runs
+            // along x, and on the sides up y
+            false => {
+                let turned = match axis {
+                    0 => direction.axis() == 2,
+                    2 => true,
+                    _ => false,
+                };
+                (self.properties().side, turned)
+            }
+        };
+        let properties = self.properties();
+        match self.style() {
+            RenderStyle::Pillar => along(state.axis(), properties.top, properties.bottom),
+            // the lid is toward the way it faces, whichever end of its axis that is
+            RenderStyle::Lidded if direction == state.facing() => (properties.top, false),
+            RenderStyle::Lidded if direction == state.facing().opposite() => {
+                (properties.bottom, false)
+            }
+            RenderStyle::Lidded => along(state.facing().axis(), properties.top, properties.bottom),
+            RenderStyle::Fronted(front) if direction == state.facing() => (front, false),
+            _ => (self.tile(face), false),
         }
     }
 
@@ -625,7 +1016,7 @@ pub enum Tile {
     IronOre,
     CraftingTableTop,
     CraftingTableSide,
-    FurnaceSide,
+    FurnaceFront,
     TallGrass,
     Poppy,
     Dandelion,
@@ -656,9 +1047,32 @@ pub enum Tile {
     PolishedJade,
     BrightSteelBlock,
     EmberLamp,
+    FurnaceSide,
+    Glass,
+    Vines,
+    DoorBottom,
+    DoorTop,
+    Trapdoor,
+    Ladder,
+    Lantern,
+    MossyCobblestone,
+    CrackedStoneBricks,
+    MossyStoneBricks,
+    PolishedStone,
+    Terracotta,
+    RedTerracotta,
+    YellowTerracotta,
+    BlueTerracotta,
+    GreenTerracotta,
+    DarkPlanks,
+    LightPlanks,
+    Bookshelf,
+    BarrelTop,
+    BarrelSide,
+    BarrelBottom,
 }
 
-pub const TILE_COUNT: usize = 55;
+pub const TILE_COUNT: usize = 78;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -670,7 +1084,7 @@ impl Tile {
     pub fn tinted(self) -> bool {
         matches!(
             self,
-            Tile::GrassTop | Tile::Leaves | Tile::TallGrass | Tile::Fern
+            Tile::GrassTop | Tile::Leaves | Tile::TallGrass | Tile::Fern | Tile::Vines
         )
     }
 }
@@ -707,7 +1121,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::EmberLamp as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::BarrelBottom as usize + 1);
     }
 
     #[test]
@@ -814,15 +1228,15 @@ mod tests {
     }
 
     #[test]
-    fn test_only_air_water_plants_other_than_crops_and_structure_void_are_replaceable() {
+    fn test_only_air_water_plants_other_than_crops_structure_void_and_vines_are_replaceable() {
         for block in BlockType::ALL {
             let expected = matches!(
                 block,
-                BlockType::Air | BlockType::Water | BlockType::StructureVoid
+                BlockType::Air | BlockType::Water | BlockType::StructureVoid | BlockType::Vines
             ) || (block.is_plant() && !block.is_crop());
             assert_eq!(expected, block.is_replaceable(), "{block:?}");
             assert_eq!(
-                !expected || block.is_plant() || block.is_for_authoring(),
+                !expected || block.is_plant() || block.is_for_authoring() || block.is_climbable(),
                 block.is_tangible(),
                 "{block:?}"
             );

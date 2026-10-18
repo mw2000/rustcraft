@@ -25,7 +25,7 @@ use bevy_replicon_renet2::netcode::NETCODE_USER_DATA_BYTES;
 use serde::{Deserialize, Serialize};
 
 use crate::authoring::Selection;
-use crate::block::BlockType;
+use crate::block::{Block, BlockType};
 use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::chunks::lod::CellEdits;
 use crate::containers::Container;
@@ -48,7 +48,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -136,7 +136,7 @@ impl Plugin for ProtocolPlugin {
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestEdit {
     pub block: I64Vec3,
-    pub to: BlockType,
+    pub to: Block,
     pub slot: u8,
     pub seq: u32,
 }
@@ -146,7 +146,7 @@ pub struct RequestEdit {
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockChanged {
     pub block: I64Vec3,
-    pub to: BlockType,
+    pub to: Block,
     #[serde(with = "requester")]
     pub by: Option<(ClientId, u32)>,
 }
@@ -156,7 +156,7 @@ pub struct BlockChanged {
 pub struct EditRejected {
     pub seq: u32,
     pub block: I64Vec3,
-    pub actual: BlockType,
+    pub actual: Block,
 }
 
 /// A line a player typed into the command bar, for the server to run as theirs.
@@ -325,15 +325,15 @@ impl EditSummary {
 }
 
 /// The edits made in a chunk, for a client coming near it, as a region file has them: each
-/// block as where it is in the chunk and an index into a palette of the blocks edited to, so
-/// each block's name is sent once. With how many `BlockChanged`s the client had been sent
+/// block as where it is in the chunk and an index into a palette of the blocks edited to, with
+/// their states, so each is named once. With how many `BlockChanged`s the client had been sent
 /// before, as either can overtake the other on its own channel, so the client can tell which
 /// is newer.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChunkEdits {
     coord: I64Vec3,
     changes_before: u64,
-    palette: Vec<BlockType>,
+    palette: Vec<Block>,
     edits: Vec<(u16, u16)>,
 }
 
@@ -341,18 +341,17 @@ impl ChunkEdits {
     pub fn new(
         coord: ChunkCoordinate,
         changes_before: u64,
-        edits: impl IntoIterator<Item = (U16Vec3, BlockType)>,
+        edits: impl IntoIterator<Item = (U16Vec3, Block)>,
     ) -> Self {
         let mut palette = Vec::new();
-        let mut indices = [None; BlockType::ALL.len()];
         let edits = edits
             .into_iter()
             .map(|(local, block)| {
-                let index = *indices[block as usize].get_or_insert_with(|| {
+                let index = palette.iter().position(|&b| b == block).unwrap_or_else(|| {
                     palette.push(block);
-                    palette.len() as u16 - 1
+                    palette.len() - 1
                 });
-                (local_index(local), index)
+                (local_index(local), index as u16)
             })
             .collect();
         Self {
@@ -377,7 +376,7 @@ impl ChunkEdits {
 
     /// Each edit, as the block edited and what it's become. Any that aren't in a chunk or the
     /// palette, which a server never sends, are left out.
-    pub fn edits(&self) -> impl Iterator<Item = (I64Vec3, BlockType)> + '_ {
+    pub fn edits(&self) -> impl Iterator<Item = (I64Vec3, Block)> + '_ {
         let origin = self.coord * CHUNK_SIZE as i64;
         self.edits.iter().filter_map(move |&(local, index)| {
             let block = *self.palette.get(index as usize)?;
@@ -576,7 +575,7 @@ mod tests {
     use bevy_replicon::prelude::ClientId;
 
     use super::{name_from_user_data, name_to_user_data, BlockChanged, ChunkEdits, EditSummary};
-    use crate::block::BlockType;
+    use crate::block::{Block, BlockType};
     use crate::chunks::chunk::ChunkCoordinate;
     use crate::player::name::PlayerName;
 
@@ -586,7 +585,7 @@ mod tests {
         for by in [None, Some((ClientId::Server, 3)), Some((client, 4))] {
             let change = BlockChanged {
                 block: I64Vec3::new(-5, 70, 1 << 40),
-                to: BlockType::Planks,
+                to: "door[facing=south,half=top,open=true]".parse().unwrap(),
                 by,
             };
             let bytes = postcard::to_stdvec(&change).unwrap();
@@ -606,10 +605,12 @@ mod tests {
     #[test]
     fn test_a_chunks_edits_round_trip_naming_each_block_once() {
         let coord = ChunkCoordinate(I64Vec3::new(-3, 28, 1 << 40));
+        let stairs = "planks_stairs[facing=west]".parse().unwrap();
         let edits = [
-            (U16Vec3::new(0, 0, 0), BlockType::Air),
-            (U16Vec3::new(15, 15, 15), BlockType::Planks),
-            (U16Vec3::new(1, 2, 3), BlockType::Air),
+            (U16Vec3::new(0, 0, 0), Block::AIR),
+            (U16Vec3::new(15, 15, 15), BlockType::Planks.into()),
+            (U16Vec3::new(1, 2, 3), Block::AIR),
+            (U16Vec3::new(1, 2, 4), stairs),
         ];
         let sent = ChunkEdits::new(coord, 7, edits);
         let bytes = postcard::to_stdvec(&sent).unwrap();
@@ -619,7 +620,7 @@ mod tests {
         assert!(received.edits().eq(expected));
         assert_eq!((coord, 7), (received.coord(), received.changes_before()));
         // a few bytes an edit, and a name a block
-        assert!(bytes.len() < 40, "{} bytes", bytes.len());
+        assert!(bytes.len() < 70, "{} bytes", bytes.len());
     }
 
     #[test]

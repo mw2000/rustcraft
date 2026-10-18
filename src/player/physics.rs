@@ -1,8 +1,9 @@
-use bevy::math::{I64Vec3, Quat, Vec2, Vec3, Vec3Swizzles};
+use bevy::math::{BVec3, I64Vec3, Quat, Vec2, Vec3, Vec3Swizzles};
 
 use super::{Movement, Player, PlayerLook, BODY};
-use crate::block::BlockType;
-use crate::collision::{move_and_collide, Aabb};
+use crate::block::shape::{Boxes, Use};
+use crate::block::{Block, BlockType};
+use crate::collision::{boxes_at, move_and_collide, Aabb};
 
 // Flying, blocks a second, and how much faster sprinting.
 const FLY_SPEED: f32 = 20.0;
@@ -22,6 +23,10 @@ const SINK_SPEED: f32 = 2.0;
 const SWIM_UP_SPEED: f32 = 4.0;
 // The longest frame moved in one step, so a hitch doesn't fling the player.
 const MAX_STEP: f32 = 0.1;
+// How high a body walks up onto without jumping: a slab or a stair, not a block.
+const STEP_HEIGHT: f32 = 0.6;
+// Blocks a second up and down a ladder or vines.
+const CLIMB_SPEED: f32 = 3.0;
 
 /// What a player asks of a step of movement, from their keys.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -45,7 +50,7 @@ pub fn step(
     look: PlayerLook,
     input: MoveInput,
     dt: f32,
-    block: impl Fn(I64Vec3) -> Option<BlockType>,
+    block: impl Fn(I64Vec3) -> Option<Block>,
 ) -> Vec3 {
     let dt = dt.min(MAX_STEP);
     match player.movement {
@@ -84,7 +89,7 @@ fn walk_player(
     look: PlayerLook,
     input: MoveInput,
     dt: f32,
-    block: impl Fn(I64Vec3) -> Option<BlockType>,
+    block: impl Fn(I64Vec3) -> Option<Block>,
 ) -> Vec3 {
     let mut speed = WALK_SPEED;
     if input.sprint {
@@ -124,11 +129,15 @@ pub fn walk(
     wanted: Vec3,
     jump: bool,
     dt: f32,
-    block: impl Fn(I64Vec3) -> Option<BlockType>,
+    block: impl Fn(I64Vec3) -> Option<Block>,
 ) -> Vec3 {
     let dt = dt.min(MAX_STEP);
+    let kind = |at: Vec3| block(at.floor().as_i64vec3()).map(|block| block.kind);
     let middle = position + Vec3::Y * body.max.y / 2.0;
-    let swimming = block(middle.floor().as_i64vec3()) == Some(BlockType::Water);
+    let swimming = kind(middle) == Some(BlockType::Water);
+    let climbing = [position, middle]
+        .into_iter()
+        .any(|at| kind(at).is_some_and(|kind| kind.is_climbable()));
     let wanted = if swimming {
         wanted * SWIM_MULTIPLIER
     } else {
@@ -145,6 +154,13 @@ pub fn walk(
         } else {
             (momentum.velocity.y - WATER_GRAVITY * dt).max(-SINK_SPEED)
         };
+    } else if climbing {
+        // up while jumping or walking into it, and otherwise slowly down
+        momentum.velocity.y = if jump || momentum.against_wall {
+            CLIMB_SPEED
+        } else {
+            (momentum.velocity.y - GRAVITY * dt).max(-CLIMB_SPEED)
+        };
     } else {
         if jump && momentum.grounded {
             momentum.velocity.y = JUMP_SPEED;
@@ -152,14 +168,33 @@ pub fn walk(
         momentum.velocity.y = (momentum.velocity.y - GRAVITY * dt).max(-TERMINAL_SPEED);
     }
 
-    let solid = |at: I64Vec3| block(at).is_none_or(|block| block.is_solid());
-    let (position, hit) = move_and_collide(position, momentum.velocity * dt, body, solid);
-    momentum.grounded = hit.y && momentum.velocity.y < 0.0;
+    // the world not generated yet is solid
+    let boxes = |at: I64Vec3| match block(at) {
+        None => Boxes::cube(),
+        Some(_) => boxes_at(at, Use::Collision, |at| block(at).unwrap_or_default()),
+    };
+    let delta = momentum.velocity * dt;
+    let (mut end, mut hit) = move_and_collide(position, delta, body, boxes);
+    let mut stepped = false;
+    // on the ground and stopped across, it steps up onto what's low enough, as onto a slab, if
+    // that gets it further
+    if momentum.grounded && (hit.x || hit.z) && !swimming {
+        let up = move_and_collide(position, Vec3::Y * STEP_HEIGHT, body, boxes).0;
+        let (across, across_hit) = move_and_collide(up, delta.with_y(0.0), body, boxes);
+        let (down, down_hit) =
+            move_and_collide(across, Vec3::NEG_Y * (up.y - position.y), body, boxes);
+        let further = |at: Vec3| (at - position).xz().length_squared();
+        if down_hit.y && further(down) > further(end) + 1e-6 {
+            (end, hit) = (down, BVec3::new(across_hit.x, true, across_hit.z));
+            stepped = true;
+        }
+    }
+    momentum.grounded = stepped || (hit.y && momentum.velocity.y < 0.0);
     if hit.y {
         momentum.velocity.y = 0.0;
     }
     momentum.against_wall = (hit.x || hit.z) && wanted.xz() != Vec2::ZERO;
-    position
+    end
 }
 
 #[cfg(test)]
@@ -179,13 +214,13 @@ mod tests {
     };
 
     // grass from y 0 down, a wall at x 3, and nothing generated past z 100
-    fn block(at: I64Vec3) -> Option<BlockType> {
+    fn block(at: I64Vec3) -> Option<Block> {
         if at.z > 100 {
             None
         } else if at.y < 0 || at.x == 3 {
-            Some(BlockType::Grass)
+            Some(BlockType::Grass.into())
         } else {
-            Some(BlockType::Air)
+            Some(Block::AIR)
         }
     }
 
@@ -334,6 +369,136 @@ mod tests {
             2.0,
         );
         assert!((end.z - (101.0 - BODY.max.z)).abs() < 1e-5, "{end}");
+    }
+
+    // Walks a body east from x 0.5 over a floor at y 0 for `seconds`, jumping if `jump`, with
+    // `put` the blocks on it, and returns where it ends up.
+    fn walk_east(put: &[(I64Vec3, &str)], jump: bool, seconds: f32) -> Vec3 {
+        let blocks: Vec<(I64Vec3, Block)> = put
+            .iter()
+            .map(|&(at, text)| (at, text.parse().unwrap()))
+            .collect();
+        let block = |at: I64Vec3| {
+            Some(match blocks.iter().find(|(b, _)| *b == at) {
+                Some(&(_, block)) => block,
+                None if at.y < 0 => BlockType::Stone.into(),
+                None => Block::AIR,
+            })
+        };
+        let mut momentum = Momentum::default();
+        let mut at = Vec3::new(0.5, 0.0, 0.5);
+        for _ in 0..(seconds / DT).round() as usize {
+            at = walk(
+                at,
+                &mut momentum,
+                BODY,
+                Vec3::X * WALK_SPEED,
+                jump,
+                DT,
+                block,
+            );
+        }
+        at
+    }
+
+    #[test]
+    fn test_walks_up_slabs_and_stairs_without_jumping_but_not_onto_a_block() {
+        let slabs: Vec<_> = (2..8)
+            .map(|x| (I64Vec3::new(x, 0, 0), "planks_slab"))
+            .collect();
+        let slab = walk_east(&slabs, false, 1.0);
+        assert!(slab.x > 3.0 && (slab.y - 0.5).abs() < 1e-4, "{slab}");
+        let mut stairs = vec![(I64Vec3::new(2, 0, 0), "cobblestone_stairs[facing=east]")];
+        stairs.extend((3..10).map(|x| (I64Vec3::new(x, 0, 0), "cobblestone")));
+        let up = walk_east(&stairs, false, 1.5);
+        assert!(up.x > 4.0 && (up.y - 1.0).abs() < 1e-4, "{up}");
+        // a top slab is a block to step onto
+        let block = walk_east(
+            &[(I64Vec3::new(2, 0, 0), "planks_slab[half=top]")],
+            false,
+            1.0,
+        );
+        assert!((block.x - 1.7).abs() < 1e-4 && block.y == 0.0, "{block}");
+        // and stairs turned the wrong way are a block from that side
+        let back = walk_east(
+            &[(I64Vec3::new(2, 0, 0), "planks_stairs[facing=west]")],
+            false,
+            1.0,
+        );
+        assert!((back.x - 1.7).abs() < 1e-4, "{back}");
+    }
+
+    #[test]
+    fn test_fences_and_walls_cant_be_jumped_and_only_open_doors_walked_through() {
+        for blocker in ["planks_fence", "dark_planks_fence", "cobblestone_wall"] {
+            let at = walk_east(&[(I64Vec3::new(2, 0, 0), blocker)], true, 2.0);
+            assert!(at.x < 2.5, "over the {blocker} to {at}");
+        }
+        let door = |open: &'static str, upper: &'static str| {
+            [
+                (I64Vec3::new(2, 0, 0), open),
+                (I64Vec3::new(2, 1, 0), upper),
+            ]
+        };
+        let shut = walk_east(
+            &door("door[facing=west]", "door[facing=west,half=top]"),
+            true,
+            2.0,
+        );
+        // shut on the far side of its cell
+        assert!(
+            (shut.x - (3.0 - 3.0 / 16.0 - 0.3)).abs() < 1e-4,
+            "through the door to {shut}"
+        );
+        let open = door(
+            "door[facing=west,open=true]",
+            "door[facing=west,half=top,open=true]",
+        );
+        let open = walk_east(&open, false, 1.0);
+        assert!(open.x > 3.0, "{open}");
+        let hatches: Vec<_> = (2..8)
+            .map(|x| (I64Vec3::new(x, 0, 0), "trapdoor"))
+            .collect();
+        let hatch = walk_east(&hatches, false, 1.0);
+        assert!(
+            hatch.x > 3.0 && (hatch.y - 3.0 / 16.0).abs() < 1e-4,
+            "{hatch}"
+        );
+        // vines and torches are walked through
+        let vines = walk_east(&[(I64Vec3::new(2, 0, 0), "vines[facing=east]")], false, 1.0);
+        assert!(vines.x > 3.0, "{vines}");
+    }
+
+    #[test]
+    fn test_ladders_are_climbed_walking_into_them_and_slid_down_slowly() {
+        // a ladder up a wall at x 2, three blocks tall, onto a floor above
+        let mut put = vec![];
+        for y in 0..3 {
+            put.push((I64Vec3::new(2, y, 0), "stone"));
+            put.push((I64Vec3::new(1, y, 0), "ladder[facing=west]"));
+        }
+        put.extend((2..12).map(|x| (I64Vec3::new(x, 2, 0), "stone")));
+        let top = walk_east(&put, false, 3.0);
+        assert!(top.x > 2.5 && top.y == 3.0, "climbed to {top}");
+        // let go, it comes down no faster than it climbs
+        let blocks: Vec<(I64Vec3, Block)> = put
+            .iter()
+            .map(|&(at, text)| (at, text.parse().unwrap()))
+            .collect();
+        let block = |at: I64Vec3| {
+            Some(match blocks.iter().find(|(b, _)| *b == at) {
+                Some(&(_, block)) => block,
+                None if at.y < 0 => BlockType::Stone.into(),
+                None => Block::AIR,
+            })
+        };
+        let mut momentum = Momentum::default();
+        let mut at = Vec3::new(1.5, 2.0, 0.5);
+        for _ in 0..30 {
+            at = walk(at, &mut momentum, BODY, Vec3::ZERO, false, DT, block);
+            assert!(momentum.velocity.y >= -CLIMB_SPEED);
+        }
+        assert!(at.y < 2.0 && at.y > 0.5, "{at}");
     }
 
     #[test]

@@ -29,7 +29,8 @@ impl Surface {
             Gravel => Self::Gravel,
             Snow => Self::Snow,
             Leaves => Self::Leaves,
-            Ice => Self::Ice,
+            Ice | Glass | GlassPane => Self::Ice,
+            Vines => Self::Leaves,
             _ if block.style() == RenderStyle::Cross => Self::Leaves,
             _ => match block.tool() {
                 Some(ToolKind::Pickaxe) => Self::Stone,
@@ -95,6 +96,10 @@ mod tests {
             (Poppy, Some(Surface::Leaves)),
             (RipeWheat, Some(Surface::Leaves)),
             (Ice, Some(Surface::Ice)),
+            (GlassPane, Some(Surface::Ice)),
+            (Vines, Some(Surface::Leaves)),
+            (StoneBrickStairs, Some(Surface::Stone)),
+            (Door, Some(Surface::Wood)),
             (Air, None),
             (Water, None),
         ];

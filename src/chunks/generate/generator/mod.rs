@@ -5,6 +5,7 @@ mod greedy;
 mod lod;
 mod mesh;
 mod shading;
+mod shapes;
 mod source;
 mod terrain;
 #[cfg(test)]

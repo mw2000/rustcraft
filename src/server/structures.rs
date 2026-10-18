@@ -15,7 +15,7 @@ use bevy_replicon::prelude::*;
 use super::drops::DroppedItem;
 use super::sync::BlockChanges;
 use crate::authoring::{Selection, MARKERS, MAX_SIZE};
-use crate::block::BlockType;
+use crate::block::{Block, BlockType};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::generate::structures::{Placement, Structure, Template, STRUCTURES};
 use crate::collision::looked_at;
@@ -114,11 +114,12 @@ impl Authoring<'_, '_> {
             for z in 0..size.z {
                 for x in 0..size.x {
                     let at = I64Vec3::new(x, y, z);
-                    let block = world.get_block_at(min + at);
-                    if let Some(&(_, kind)) = MARKERS.iter().find(|(marker, _)| *marker == block) {
+                    let block = world.get(min + at);
+                    let marker = MARKERS.iter().find(|(marker, _)| *marker == block.kind);
+                    if let Some(&(_, kind)) = marker {
                         markers.push((kind.to_string(), at));
                     }
-                    cells.push((!block.is_for_authoring()).then_some(block));
+                    cells.push((!block.kind.is_for_authoring()).then_some(block));
                 }
             }
         }
@@ -187,10 +188,10 @@ impl Authoring<'_, '_> {
                 for x in 0..size.x {
                     let at = I64Vec3::new(x, y, z);
                     let block = match marked.iter().find(|(marker, _)| *marker == at) {
-                        Some(&(_, marker)) => marker,
+                        Some(&(_, marker)) => marker.into(),
                         None => template
                             .cell(rotation, at)
-                            .unwrap_or(BlockType::StructureVoid),
+                            .unwrap_or(BlockType::StructureVoid.into()),
                     };
                     self.edit(world, min + at, block);
                 }
@@ -211,7 +212,7 @@ impl Authoring<'_, '_> {
 
     // Changes `at` to `to` as a player's edit does, telling the clients near it, and letting go
     // of what was there: a container leaves what was in it, as items are never lost with it.
-    fn edit(&mut self, world: &mut World, at: I64Vec3, to: BlockType) {
+    fn edit(&mut self, world: &mut World, at: I64Vec3, to: Block) {
         if !world.edit(at, to) {
             return;
         }
@@ -290,10 +291,10 @@ fn load(dir: Option<&Path>, name: &str) -> Result<Cow<'static, Structure>, Strin
 }
 
 // The commonest block among `cells` other than air, if there's one.
-fn commonest(cells: &[Option<BlockType>]) -> Option<BlockType> {
+fn commonest(cells: &[Option<Block>]) -> Option<BlockType> {
     let mut counts = [0; BlockType::ALL.len()];
-    for &block in cells.iter().flatten() {
-        counts[block as usize] += 1;
+    for block in cells.iter().flatten() {
+        counts[block.kind as usize] += 1;
     }
     BlockType::ALL
         .into_iter()
@@ -520,7 +521,11 @@ mod tests {
         assert_eq!((I64Vec3::splat(3), 1), (template.size, template.floor));
         // what most of its bottom layer is
         assert_eq!(BlockType::Stone, template.foundation);
-        let cell = |x, y, z| template.cell(0, I64Vec3::new(x, y, z));
+        let cell = |x, y, z| {
+            template
+                .cell(0, I64Vec3::new(x, y, z))
+                .map(|cell| cell.kind)
+        };
         assert_eq!(Some(BlockType::Stone), cell(1, 0, 1));
         assert_eq!(None, cell(0, 1, 0));
         assert_eq!(Some(BlockType::Cobblestone), cell(2, 1, 2));
@@ -550,7 +555,9 @@ mod tests {
                     let wanted = if at == template.turn(1, loot) {
                         BlockType::LootMarker
                     } else {
-                        template.cell(1, at).unwrap_or(BlockType::StructureVoid)
+                        template
+                            .cell(1, at)
+                            .map_or(BlockType::StructureVoid, |cell| cell.kind)
                     };
                     assert_eq!(wanted, server.block_at(min + at), "{at}");
                 }

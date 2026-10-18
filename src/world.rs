@@ -6,7 +6,7 @@ use bevy::{
     platform::collections::HashMap,
 };
 
-use crate::block::BlockType;
+use crate::block::{Block, BlockType};
 use crate::chunks::generate::light::BLOCK_LIGHT_REACH;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
@@ -168,14 +168,15 @@ impl World {
     /// Changes the block at `block` to `to`, in the edit layer and at once in its chunk if
     /// that's loaded, so collision sees it straight away. Returns whether anything changed:
     /// nothing does beyond the top or bottom of the world, or if the block is already `to`.
-    pub fn edit(&mut self, block: I64Vec3, to: BlockType) -> bool {
+    pub fn edit(&mut self, block: I64Vec3, to: impl Into<Block>) -> bool {
+        let to = to.into();
         let coord = ChunkCoordinate::containing(block);
         if !Self::layers(self.height).contains(&coord.0.y) {
             return false;
         }
         if let Some(data) = self.chunks.get_mut(&coord) {
             let local = ChunkCoordinate::local_block(block);
-            let was = data.get_block_at(local);
+            let was = data.get(local);
             if was == to {
                 return false;
             }
@@ -184,7 +185,7 @@ impl World {
             self.reroof_below(coord);
             // only what the client holds is drawn, as for roofs
             if self.holders.get(&coord) != Some(&Holder::Server.bit())
-                && self.relights(block, was, to)
+                && self.relights(block, was.kind, to.kind)
             {
                 self.relit.push(block);
             }
@@ -355,7 +356,7 @@ impl World {
         };
         let local = ChunkCoordinate::local_block(block);
         data.roofed.contains(local.x, local.z)
-            || (local.y + 1..CHUNK_SIZE).any(|y| data.get_block_at(local.with_y(y)).is_opaque())
+            || (local.y + 1..CHUNK_SIZE).any(|y| data.get_block_at(local.with_y(y)).blocks_light())
     }
 
     /// Whether the chunk and the chunks against its faces are all opaque, so it has no faces to draw.
@@ -366,9 +367,14 @@ impl World {
 
     /// The block at `block`, or air in a chunk not generated yet.
     pub fn get_block_at(&self, block: I64Vec3) -> BlockType {
+        self.get(block).kind
+    }
+
+    /// The block at `block` with its state, or air in a chunk not generated yet.
+    pub fn get(&self, block: I64Vec3) -> Block {
         self.chunk(ChunkCoordinate::containing(block))
-            .map_or(BlockType::Air, |data| {
-                data.get_block_at(ChunkCoordinate::local_block(block))
+            .map_or(Block::AIR, |data| {
+                data.get(ChunkCoordinate::local_block(block))
             })
     }
 }

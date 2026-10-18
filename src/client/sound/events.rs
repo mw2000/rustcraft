@@ -7,7 +7,7 @@ use bevy::ui_widgets::Activate;
 use bevy_replicon::prelude::{ClientId, ClientSystems, FromClient};
 
 use super::{PlaySound, SoundKind, Surface};
-use crate::block::BlockType;
+use crate::block::{Block, BlockType};
 use crate::client::edits::{apply_block_changes, Predictions};
 use crate::client::others::SeenPlayer;
 use crate::client::player::LocalPlayer;
@@ -74,8 +74,8 @@ fn edit_sound(was: BlockType, to: BlockType) -> Option<SoundKind> {
     }
 }
 
-fn edit_played(world: &World, block: I64Vec3, to: BlockType) -> Option<PlaySound> {
-    edit_sound(world.get_block_at(block), to).map(|kind| PlaySound {
+fn edit_played(world: &World, block: I64Vec3, to: Block) -> Option<PlaySound> {
+    edit_sound(world.get_block_at(block), to.kind).map(|kind| PlaySound {
         kind,
         at: Some(block.as_vec3() + 0.5),
     })
@@ -235,7 +235,10 @@ fn open_and_close_chests(
         }
     }
     for used in uses.read() {
-        if world.get_block_at(used.block) == BlockType::Chest {
+        if matches!(
+            world.get_block_at(used.block),
+            BlockType::Chest | BlockType::Barrel
+        ) {
             *open = Some(used.block);
             sounds.write(PlaySound {
                 kind: SoundKind::ChestOpen,

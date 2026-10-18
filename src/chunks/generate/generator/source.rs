@@ -1,12 +1,18 @@
-use crate::block::BlockType;
+use crate::block::{BlockState, BlockType};
 use crate::chunks::chunk::{neighbor_26_index, ChunkData, ColumnSet, CELLS, CHUNK_SIZE};
 use bevy::math::IVec3;
 use bevy::math::Vec3;
+use bevy::platform::collections::HashMap;
 use std::sync::Arc;
 
 pub(super) trait BlockSource {
     fn block(&self, coord: IVec3) -> BlockType;
     fn non_air(&self) -> Vec<(IVec3, BlockType)>;
+
+    /// The state of the block at `coord`, which only full detail has: LODs draw none.
+    fn state(&self, _coord: IVec3) -> BlockState {
+        BlockState::default()
+    }
 
     /// The terrain itself, without the skirts `block` adds around a LOD node's edges.
     fn terrain(&self, coord: IVec3) -> BlockType {
@@ -93,6 +99,11 @@ pub(super) struct ChunkNeighbourhood<'a> {
     roofed_above: [ColumnSet; 9],
     /// The blocks in it giving off light, from the chunk's lowest block, with their levels.
     pub(super) emitters: Vec<(IVec3, u8)>,
+    // the states of the few blocks with one, as most chunks have none
+    states: HashMap<IVec3, BlockState>,
+    /// Whether any of its blocks keeps light out without filling its cell, see
+    /// `ChunkData::has_light_shapes`.
+    pub(super) light_shapes: bool,
 }
 
 impl<'a> ChunkNeighbourhood<'a> {
@@ -103,6 +114,8 @@ impl<'a> ChunkNeighbourhood<'a> {
         let mut cells = [BlockType::Air; CELLS];
         let mut roofed_above = [ColumnSet::default(); 9];
         let mut emitters = Vec::new();
+        let mut states = HashMap::new();
+        let mut light_shapes = false;
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -121,6 +134,11 @@ impl<'a> ChunkNeighbourhood<'a> {
                         data.emitters()
                             .map(|(coord, level)| (coord.as_ivec3() + offset, level)),
                     );
+                    states.extend(
+                        data.states()
+                            .map(|(coord, state)| (coord.as_ivec3() + offset, state)),
+                    );
+                    light_shapes |= data.has_light_shapes();
                     data.decode_into(&mut cells);
                     // both grids run y innermost, so each column copies across whole
                     for x in 0..size {
@@ -140,6 +158,8 @@ impl<'a> ChunkNeighbourhood<'a> {
             blocks,
             roofed_above,
             emitters,
+            states,
+            light_shapes,
         }
     }
 
@@ -175,6 +195,13 @@ impl BlockSource for ChunkNeighbourhood<'_> {
 
     fn leaf_tint(&self, coord: IVec3) -> Vec3 {
         self.chunk.trees.at(coord)
+    }
+
+    fn state(&self, coord: IVec3) -> BlockState {
+        if self.states.is_empty() {
+            return BlockState::default();
+        }
+        self.states.get(&coord).copied().unwrap_or_default()
     }
 
     fn non_air(&self) -> Vec<(IVec3, BlockType)> {
@@ -239,6 +266,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
 
     fn non_air(&self) -> Vec<(IVec3, BlockType)> {
         self.source.non_air()
+    }
+
+    fn state(&self, coord: IVec3) -> BlockState {
+        self.source.state(coord)
     }
 
     fn surface_top(&self, coord: IVec3) -> Option<f32> {

@@ -25,15 +25,19 @@ pub(super) struct MeshBuffers {
     pub(super) grass_sides: Vec<(usize, f32)>,
     // the plants' vertices, which sway by their tops, see `foliage.wesl`
     pub(super) plants: Range<usize>,
+    // the shapes' vertices, whose tiles' holes are cut out of their shadows as well
+    pub(super) cutouts: Range<usize>,
     // where the boxes of trees and structures start and how they draw, which is on their own terms
     pub(super) boxes: Option<(usize, f32)>,
 }
 
 // How a face draws, carried in each vertex's second uv, see `world.wesl`: its own tile, a
-// plant's, its tile with leaves' holes filled, or its block's mean colour.
+// plant's, a shape's, its tile with leaves' holes filled, or its block's mean colour.
 pub(super) const TEXTURED: f32 = 0.0;
 
 pub(super) const PLANT: f32 = 0.25;
+
+pub(super) const CUTOUT: f32 = 0.5;
 
 pub(super) const TEXTURED_SOLID: f32 = 0.75;
 
@@ -210,6 +214,7 @@ impl MeshBuffers {
                 .map(|(i, [l, _])| match self.boxes {
                     Some((start, flag)) if i >= start => [l, flag],
                     _ if self.plants.contains(&i) => [l, PLANT],
+                    _ if self.cutouts.contains(&i) => [l, CUTOUT],
                     _ => [
                         l,
                         if self.untextured {

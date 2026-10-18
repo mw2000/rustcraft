@@ -482,7 +482,7 @@ pub(super) fn move_creatures(
     let block = |at: I64Vec3| {
         world
             .is_chunk_generated(ChunkCoordinate::containing(at))
-            .then(|| world.get_block_at(at))
+            .then(|| world.get(at))
     };
     for (entity, creature, mut transform, mut body, mut route, mind, mut health) in &mut creatures {
         let mut at = transform.translation;
@@ -527,7 +527,7 @@ pub(super) fn move_creatures(
         }
 
         let middle = at + Vec3::Y * properties.height / 2.0;
-        let in_water = block(middle.floor().as_i64vec3()) == Some(BlockType::Water);
+        let in_water = block(middle.floor().as_i64vec3()).map(|b| b.kind) == Some(BlockType::Water);
         let jump = in_water || ((climb || body.momentum.against_wall) && wanted != Vec3::ZERO);
         let push = body.knockback;
         body.knockback *= KNOCKBACK_LEFT.powf(dt);

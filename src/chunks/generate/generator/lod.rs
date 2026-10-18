@@ -364,7 +364,7 @@ impl LodBlocks {
                     cell,
                     (IVec3::splat(-1), IVec3::splat(size)),
                     |x, z| heights.height(x, z).round() as i64,
-                    |coord, block| cells[Self::index(size, coord)] = block,
+                    |coord, block| cells[Self::index(size, coord)] = block.kind,
                 );
             }
         }

@@ -4,7 +4,7 @@ use std::fmt::Write;
 use bevy::math::{I64Vec2, I64Vec3, Vec3Swizzles};
 use serde::{Deserialize, Serialize};
 
-use crate::block::BlockType;
+use crate::block::{Block, BlockType};
 
 // What a template's layers write for a cell that leaves the world as it is, and for one that
 // clears it to air, carving interiors out of the ground.
@@ -59,7 +59,7 @@ pub struct Template {
     /// What fills the ground up to its lowest layer where the ground falls away under it.
     pub foundation: BlockType,
     // x fastest, then z, then y; None leaves the world as it is, and air clears it
-    cells: Vec<Option<BlockType>>,
+    cells: Vec<Option<Block>>,
     /// Points of interest by kind, such as `loot` for a chest (M2.3).
     pub markers: Vec<(String, I64Vec3)>,
 }
@@ -71,6 +71,7 @@ struct TemplateFile {
     size: [i64; 3],
     floor: i64,
     foundation: String,
+    // each key's block with its state, as `Block`'s text has it: `stone_brick_stairs[facing=east]`
     palette: BTreeMap<char, String>,
     #[serde(default)]
     markers: BTreeMap<String, Vec<[i64; 3]>>,
@@ -82,13 +83,12 @@ impl TryFrom<TemplateFile> for Template {
 
     fn try_from(file: TemplateFile) -> Result<Self, String> {
         let size = I64Vec3::from_array(file.size);
-        let block = |name: &str| BlockType::from_name(name).ok_or(format!("no block {name}"));
         let mut palette = BTreeMap::new();
-        for (&key, name) in &file.palette {
+        for (&key, text) in &file.palette {
             if key == LEAVE || key == CLEAR {
                 return Err(format!("'{key}' is kept for leaving or clearing a cell"));
             }
-            palette.insert(key, block(name)?);
+            palette.insert(key, text.parse::<Block>()?);
         }
         if file.layers.len() as i64 != size.y {
             return Err(format!("{} layers for a size of {size}", file.layers.len()));
@@ -104,7 +104,7 @@ impl TryFrom<TemplateFile> for Template {
             for key in rows.iter().flat_map(|row| row.chars()) {
                 cells.push(match key {
                     LEAVE => None,
-                    CLEAR => Some(BlockType::Air),
+                    CLEAR => Some(Block::AIR),
                     key => Some(
                         *palette
                             .get(&key)
@@ -127,7 +127,7 @@ impl TryFrom<TemplateFile> for Template {
                 }
                 if kind == LOOT {
                     let index = (point.y * size.z + point.z) * size.x + point.x;
-                    cells[index as usize] = Some(BlockType::Chest);
+                    cells[index as usize] = Some(BlockType::Chest.into());
                 }
                 markers.push((kind.clone(), point));
             }
@@ -135,7 +135,8 @@ impl TryFrom<TemplateFile> for Template {
         Ok(Self {
             size,
             floor: file.floor,
-            foundation: block(&file.foundation)?,
+            foundation: BlockType::from_name(&file.foundation)
+                .ok_or(format!("no block {}", file.foundation))?,
             cells,
             markers,
         })
@@ -169,13 +170,14 @@ impl Structure {
         for (_, at) in template.markers.iter().filter(|(kind, _)| kind == LOOT) {
             cells[((at.y * size.z + at.z) * size.x + at.x) as usize] = None;
         }
-        let mut palette: Vec<(char, BlockType)> = Vec::new();
+        let mut palette: Vec<(char, Block)> = Vec::new();
         for block in cells.iter().flatten() {
-            if *block == BlockType::Air || palette.iter().any(|(_, b)| b == block) {
+            if *block == Block::AIR || palette.iter().any(|(_, b)| b == block) {
                 continue;
             }
             let spare = ('a'..='z').chain('A'..='Z').chain('0'..='9');
             let key = block
+                .kind
                 .name()
                 .chars()
                 .filter(char::is_ascii_alphanumeric)
@@ -185,9 +187,9 @@ impl Structure {
             palette.push((key, *block));
         }
         palette.sort_unstable_by_key(|&(key, _)| key);
-        let key_of = |cell: Option<BlockType>| match cell {
+        let key_of = |cell: Option<Block>| match cell {
             None => LEAVE,
-            Some(BlockType::Air) => CLEAR,
+            Some(Block::AIR) => CLEAR,
             Some(block) => palette.iter().find(|(_, b)| *b == block).unwrap().0,
         };
         let entries = |items: Vec<String>| format!("{{ {} }}", items.join(", "));
@@ -202,7 +204,7 @@ impl Structure {
         let _ = writeln!(out, "foundation = {:?}", template.foundation.name());
         let keys = palette
             .iter()
-            .map(|(key, block)| format!("{key} = {:?}", block.name()));
+            .map(|(key, block)| format!("{key} = {:?}", block.to_string()));
         let _ = writeln!(out, "palette = {}", entries(keys.collect()));
         let mut markers: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         for (kind, at) in &template.markers {
@@ -236,7 +238,7 @@ impl Template {
         size: I64Vec3,
         floor: i64,
         foundation: BlockType,
-        cells: Vec<Option<BlockType>>,
+        cells: Vec<Option<Block>>,
         markers: Vec<(String, I64Vec3)>,
     ) -> Self {
         Self {
@@ -258,14 +260,16 @@ impl Template {
     }
 
     /// The cell at `at` in the template turned `rotation` quarter turns about its middle, from
-    /// its lowest corner: None to leave the world as it is, air to clear it.
-    pub fn cell(&self, rotation: u8, at: I64Vec3) -> Option<BlockType> {
+    /// its lowest corner, its block turned with it: None to leave the world as it is, air to
+    /// clear it.
+    pub fn cell(&self, rotation: u8, at: I64Vec3) -> Option<Block> {
         let at = self.unturn(rotation, at);
         let size = self.size;
         if at.cmplt(I64Vec3::ZERO).any() || at.cmpge(size).any() {
             return None;
         }
         self.cells[((at.y * size.z + at.z) * size.x + at.x) as usize]
+            .map(|block| block.turned(rotation))
     }
 
     /// Where the template's own `at` lands once it's turned `rotation` quarter turns.
@@ -309,19 +313,25 @@ mod tests {
     fn test_layers_read_as_blocks_cleared_cells_and_cells_left_alone() {
         let t = template("layers = ['''\ncs.\n---\n''', '''\nccc\nc.c\n''']").unwrap();
         assert_eq!(I64Vec3::new(3, 2, 2), t.size);
-        assert_eq!(Some(BlockType::Cobblestone), t.cell(0, I64Vec3::ZERO));
         assert_eq!(
-            Some(BlockType::StoneBricks),
+            Some(BlockType::Cobblestone.into()),
+            t.cell(0, I64Vec3::ZERO)
+        );
+        assert_eq!(
+            Some(BlockType::StoneBricks.into()),
             t.cell(0, I64Vec3::new(1, 0, 0))
         );
         assert_eq!(None, t.cell(0, I64Vec3::new(2, 0, 0)));
-        assert_eq!(Some(BlockType::Air), t.cell(0, I64Vec3::new(1, 0, 1)));
+        assert_eq!(Some(Block::AIR), t.cell(0, I64Vec3::new(1, 0, 1)));
         assert_eq!(None, t.cell(0, I64Vec3::new(1, 1, 1)));
         // outside it, the world is left as it is
         assert_eq!(None, t.cell(0, I64Vec3::new(3, 0, 0)));
         assert_eq!(vec![("loot".to_string(), I64Vec3::new(2, 1, 0))], t.markers);
         // and its loot marker is a chest
-        assert_eq!(Some(BlockType::Chest), t.cell(0, I64Vec3::new(2, 1, 0)));
+        assert_eq!(
+            Some(BlockType::Chest.into()),
+            t.cell(0, I64Vec3::new(2, 1, 0))
+        );
     }
 
     #[test]
@@ -353,7 +363,7 @@ mod tests {
             BlockType::Snow,
             BlockType::Water,
         ];
-        let cells = blocks.into_iter().map(Some).collect();
+        let cells = blocks.into_iter().map(|b| Some(b.into())).collect();
         let size = I64Vec3::new(4, 1, 1);
         let template = Template::new(size, 0, BlockType::Stone, cells, Vec::new());
         let structure = Structure {
@@ -364,6 +374,39 @@ mod tests {
         let text = structure.to_toml();
         assert!(text.contains("'''\nsanw\n'''"), "{text}");
         assert_eq!(structure, toml::from_str::<Structure>(&text).unwrap());
+    }
+
+    #[test]
+    fn test_blocks_keep_their_state_through_the_palette_and_turn_with_the_template() {
+        let file: TemplateFile = toml::from_str(
+            "size = [2, 1, 1]\nfloor = 0\nfoundation = \"cobblestone\"\n\
+             palette = { s = \"stone_brick_stairs[facing=east,half=top]\", l = \"log[axis=x]\" }\n\
+             layers = ['''\nsl\n''']",
+        )
+        .unwrap();
+        let t = Template::try_from(file).unwrap();
+        let stairs: Block = "stone_brick_stairs[facing=east,half=top]".parse().unwrap();
+        assert_eq!(Some(stairs), t.cell(0, I64Vec3::ZERO));
+        // a quarter turn takes east to south, and logs along x to along z
+        let turned: Block = "stone_brick_stairs[facing=south,half=top]".parse().unwrap();
+        assert_eq!(Some(turned), t.cell(1, t.turn(1, I64Vec3::ZERO)));
+        let log: Block = "log[axis=z]".parse().unwrap();
+        assert_eq!(Some(log), t.cell(1, t.turn(1, I64Vec3::X)));
+        let structure = Structure {
+            name: "steps".into(),
+            placement: Placement::default(),
+            template: t,
+        };
+        let text = structure.to_toml();
+        assert!(
+            text.contains("s = \"stone_brick_stairs[facing=east,half=top]\""),
+            "{text}"
+        );
+        assert_eq!(structure, toml::from_str::<Structure>(&text).unwrap());
+        // a state the block can't have is refused
+        let bad = "size = [1, 1, 1]\nfloor = 0\nfoundation = \"stone\"\n\
+                   palette = { s = \"stone[facing=east]\" }\nlayers = ['''\ns\n''']";
+        assert!(Template::try_from(toml::from_str::<TemplateFile>(bad).unwrap()).is_err());
     }
 
     #[test]

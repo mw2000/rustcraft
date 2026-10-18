@@ -13,9 +13,9 @@ use crate::survival::{SpawnBed, Vitals};
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 /// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), format 3 added
-/// containers to the region files (M1.6), and format 4 crops (M1.9b), each reading the
-/// region files before it as they were.
-pub const FORMAT_VERSION: u32 = 4;
+/// containers to the region files (M1.6), format 4 crops (M1.9b) and format 5 blocks' states
+/// (M2.4a), each reading the region files before it as they were.
+pub const FORMAT_VERSION: u32 = 5;
 
 /// A world's `world.toml`: everything about it but its edits.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

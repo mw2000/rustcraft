@@ -17,12 +17,13 @@ use crate::items::Item;
 use crate::menu::{font, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
 use crate::protocol::Craft;
 
-// In pixels: two columns of buttons, each the output and what it takes.
+// In pixels: five columns of buttons, each the output and what it takes, so a crafting table's
+// sixty-odd recipes fit on the screen.
 const CARD_WIDTH: f32 = 140.0;
 const CARD_HEIGHT: f32 = 44.0;
 const CARD_BORDER: f32 = 2.0;
 const CARD_GAP: f32 = 4.0;
-const COLUMNS: u16 = 2;
+const COLUMNS: u16 = 5;
 // Over a recipe there aren't the ingredients for.
 const DIMMED: Color = Color::srgba(0.0, 0.0, 0.0, 0.65);
 

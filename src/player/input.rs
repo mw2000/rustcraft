@@ -45,7 +45,7 @@ pub fn player_move(
     let block = |at| {
         world
             .is_chunk_generated(ChunkCoordinate::containing(at))
-            .then(|| world.get_block_at(at))
+            .then(|| world.get(at))
     };
     transform.translation = step(
         transform.translation,

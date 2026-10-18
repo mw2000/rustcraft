@@ -46,9 +46,18 @@ fn block_ambient(block: f32) -> vec3<f32> {
     return TORCH_LIGHT * pow(clamp(block, 0.0, 1.0), BLOCK_LIGHT_CURVE);
 }
 
-// Whether a fragment of a block face is a torch's flame, from its atlas cell and uv.
+// A lantern's glass, which glows as a flame does, where its tile has it, see
+// `generator::shapes`'s `LANTERN_BODY`.
+const LANTERN_GLASS_MIN: vec2<f32> = vec2<f32>(1.0, 10.0) / 16.0;
+const LANTERN_GLASS_MAX: vec2<f32> = vec2<f32>(5.0, 15.0) / 16.0;
+
+// Whether a fragment of a block face is a torch's flame or a lantern's glass, from its atlas
+// cell and uv.
 fn is_flame(vertex_alpha: f32, uv: vec2<f32>) -> bool {
-    return abs(vertex_alpha - f32(constants::TORCH_CELL)) < 0.5 && fract(uv.y) < FLAME_BOTTOM;
+    let tile = fract(uv);
+    let lantern = abs(vertex_alpha - f32(constants::LANTERN_CELL)) < 0.5
+        && all(tile >= LANTERN_GLASS_MIN) && all(tile < LANTERN_GLASS_MAX);
+    return lantern || (abs(vertex_alpha - f32(constants::TORCH_CELL)) < 0.5 && tile.y < FLAME_BOTTOM);
 }
 
 fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {

@@ -95,6 +95,13 @@ impl SkyLight {
         }
     }
 
+    /// Lights `shapes`, cells whose blocks keep light out but don't fill them, such as stairs
+    /// and slabs, as brightly as light could get into them from beside them, so the faces
+    /// lit from them aren't dark.
+    pub fn light_shapes(&mut self, shapes: &[IVec3]) {
+        light_shapes(self.min, self.size, &mut self.levels, shapes);
+    }
+
     /// The light at `coord`, or full light outside the box.
     pub fn level(&self, coord: IVec3) -> u8 {
         let local = coord - self.min;
@@ -190,6 +197,11 @@ impl BlockLight {
         }
     }
 
+    /// Lights `shapes` as `SkyLight::light_shapes` does.
+    pub fn light_shapes(&mut self, shapes: &[IVec3]) {
+        light_shapes(self.min, self.size, &mut self.levels, shapes);
+    }
+
     /// The light at `coord`, or none outside the box.
     pub fn level(&self, coord: IVec3) -> u8 {
         let local = coord - self.min;
@@ -197,6 +209,29 @@ impl BlockLight {
             return 0;
         }
         self.levels[SkyLight::index(self.size, local)]
+    }
+}
+
+// Lights each of `shapes` in the box of `size` cells from `min` a level dimmer than the
+// brightest cell beside it, those highest first, as light mostly comes from above.
+fn light_shapes(min: IVec3, size: IVec3, levels: &mut [u8], shapes: &[IVec3]) {
+    let inside = |local: &IVec3| local.cmpge(IVec3::ZERO).all() && local.cmplt(size).all();
+    let mut shapes: Vec<IVec3> = shapes
+        .iter()
+        .map(|&coord| coord - min)
+        .filter(inside)
+        .collect();
+    shapes.sort_unstable_by_key(|local| -local.y);
+    for local in shapes {
+        let brightest = FACE_NORMAL_OFFSET
+            .into_iter()
+            .map(|offset| local + offset)
+            .filter(inside)
+            .map(|next| levels[SkyLight::index(size, next)])
+            .max();
+        if let Some(brightest) = brightest {
+            levels[SkyLight::index(size, local)] = brightest.saturating_sub(1);
+        }
     }
 }
 

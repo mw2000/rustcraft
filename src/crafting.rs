@@ -100,6 +100,11 @@ recipes! {
         name: "sticks", station: Hand,
         ingredients: [(PLANKS, 2)], output: (Item::Stick, 4),
     },
+    // vines plaited of tall grass, as there are none to find yet
+    Vines {
+        name: "vines", station: Hand,
+        ingredients: [(Item::Block(BlockType::TallGrass), 3)], output: (Item::Block(BlockType::Vines), 1),
+    },
     Torches {
         name: "torches", station: Hand,
         ingredients: [(Item::Coal, 1), (Item::Stick, 1)],
@@ -195,6 +200,142 @@ recipes! {
         ingredients: [(PLANKS, 3), (Item::Block(BlockType::TallGrass), 3)],
         output: (Item::Block(BlockType::Bed), 1),
     },
+    // Building blocks (M2.4a): shapes cut from their blocks, stairs six into four and slabs
+    // three into six, and weathered and coloured blocks, moss grown from vines and terracotta
+    // dyed with flowers. Bookshelves' books are of pressed straw, and dark planks are stained
+    // with coal.
+    PlanksStairs {
+        name: "planks_stairs", station: CraftingTable,
+        ingredients: [(PLANKS, 6)], output: (Item::Block(BlockType::PlanksStairs), 4),
+    },
+    DarkPlanksStairs {
+        name: "dark_planks_stairs", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::DarkPlanks), 6)], output: (Item::Block(BlockType::DarkPlanksStairs), 4),
+    },
+    CobblestoneStairs {
+        name: "cobblestone_stairs", station: CraftingTable,
+        ingredients: [(COBBLESTONE, 6)], output: (Item::Block(BlockType::CobblestoneStairs), 4),
+    },
+    StoneBrickStairs {
+        name: "stone_brick_stairs", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::StoneBricks), 6)], output: (Item::Block(BlockType::StoneBrickStairs), 4),
+    },
+    BrickStairs {
+        name: "brick_stairs", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Bricks), 6)], output: (Item::Block(BlockType::BrickStairs), 4),
+    },
+    SandstoneStairs {
+        name: "sandstone_stairs", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Sandstone), 6)], output: (Item::Block(BlockType::SandstoneStairs), 4),
+    },
+    PlanksSlab {
+        name: "planks_slab", station: CraftingTable,
+        ingredients: [(PLANKS, 3)], output: (Item::Block(BlockType::PlanksSlab), 6),
+    },
+    DarkPlanksSlab {
+        name: "dark_planks_slab", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::DarkPlanks), 3)], output: (Item::Block(BlockType::DarkPlanksSlab), 6),
+    },
+    CobblestoneSlab {
+        name: "cobblestone_slab", station: CraftingTable,
+        ingredients: [(COBBLESTONE, 3)], output: (Item::Block(BlockType::CobblestoneSlab), 6),
+    },
+    StoneBrickSlab {
+        name: "stone_brick_slab", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::StoneBricks), 3)], output: (Item::Block(BlockType::StoneBrickSlab), 6),
+    },
+    BrickSlab {
+        name: "brick_slab", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Bricks), 3)], output: (Item::Block(BlockType::BrickSlab), 6),
+    },
+    SandstoneSlab {
+        name: "sandstone_slab", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Sandstone), 3)], output: (Item::Block(BlockType::SandstoneSlab), 6),
+    },
+    CobblestoneWall {
+        name: "cobblestone_wall", station: CraftingTable,
+        ingredients: [(COBBLESTONE, 6)], output: (Item::Block(BlockType::CobblestoneWall), 6),
+    },
+    StoneBrickWall {
+        name: "stone_brick_wall", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::StoneBricks), 6)], output: (Item::Block(BlockType::StoneBrickWall), 6),
+    },
+    SandstoneWall {
+        name: "sandstone_wall", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Sandstone), 6)], output: (Item::Block(BlockType::SandstoneWall), 6),
+    },
+    PlanksFence {
+        name: "planks_fence", station: CraftingTable,
+        ingredients: [(PLANKS, 4), (Item::Stick, 2)], output: (Item::Block(BlockType::PlanksFence), 3),
+    },
+    DarkPlanksFence {
+        name: "dark_planks_fence", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::DarkPlanks), 4), (Item::Stick, 2)], output: (Item::Block(BlockType::DarkPlanksFence), 3),
+    },
+    Door {
+        name: "door", station: CraftingTable,
+        ingredients: [(PLANKS, 6)], output: (Item::Block(BlockType::Door), 3),
+    },
+    Trapdoor {
+        name: "trapdoor", station: CraftingTable,
+        ingredients: [(PLANKS, 6)], output: (Item::Block(BlockType::Trapdoor), 2),
+    },
+    Ladder {
+        name: "ladder", station: CraftingTable,
+        ingredients: [(Item::Stick, 7)], output: (Item::Block(BlockType::Ladder), 3),
+    },
+    Lantern {
+        name: "lantern", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 1), (Item::Block(BlockType::Torch), 1)], output: (Item::Block(BlockType::Lantern), 1),
+    },
+    GlassPane {
+        name: "glass_pane", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Glass), 6)], output: (Item::Block(BlockType::GlassPane), 16),
+    },
+    DarkPlanks {
+        name: "dark_planks", station: CraftingTable,
+        ingredients: [(PLANKS, 4), (Item::Coal, 1)], output: (Item::Block(BlockType::DarkPlanks), 4),
+    },
+    LightPlanks {
+        name: "light_planks", station: CraftingTable,
+        ingredients: [(PLANKS, 4), (SAND, 1)], output: (Item::Block(BlockType::LightPlanks), 4),
+    },
+    PolishedStone {
+        name: "polished_stone", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Stone), 4)], output: (Item::Block(BlockType::PolishedStone), 4),
+    },
+    MossyCobblestone {
+        name: "mossy_cobblestone", station: CraftingTable,
+        ingredients: [(COBBLESTONE, 1), (Item::Block(BlockType::Vines), 1)], output: (Item::Block(BlockType::MossyCobblestone), 1),
+    },
+    MossyStoneBricks {
+        name: "mossy_stone_bricks", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::StoneBricks), 1), (Item::Block(BlockType::Vines), 1)], output: (Item::Block(BlockType::MossyStoneBricks), 1),
+    },
+    RedTerracotta {
+        name: "red_terracotta", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Terracotta), 8), (Item::Block(BlockType::Poppy), 1)], output: (Item::Block(BlockType::RedTerracotta), 8),
+    },
+    YellowTerracotta {
+        name: "yellow_terracotta", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Terracotta), 8), (Item::Block(BlockType::Dandelion), 1)], output: (Item::Block(BlockType::YellowTerracotta), 8),
+    },
+    BlueTerracotta {
+        name: "blue_terracotta", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Terracotta), 8), (Item::Block(BlockType::Cornflower), 1)], output: (Item::Block(BlockType::BlueTerracotta), 8),
+    },
+    GreenTerracotta {
+        name: "green_terracotta", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Terracotta), 8), (Item::Block(BlockType::TallGrass), 1)], output: (Item::Block(BlockType::GreenTerracotta), 8),
+    },
+    Bookshelf {
+        name: "bookshelf", station: CraftingTable,
+        ingredients: [(PLANKS, 6), (Item::Wheat, 3)], output: (Item::Block(BlockType::Bookshelf), 1),
+    },
+    Barrel {
+        name: "barrel", station: CraftingTable,
+        ingredients: [(PLANKS, 6), (Item::Block(BlockType::PlanksSlab), 2)], output: (Item::Block(BlockType::Barrel), 1),
+    },
     Bread {
         name: "bread", station: CraftingTable,
         ingredients: [(Item::Wheat, 3)], output: (Item::Bread, 1),
@@ -282,6 +423,19 @@ recipes! {
     BrightSteelIngot {
         name: "bright_steel_ingot", station: Furnace,
         ingredients: [(Item::BrightSteelBlend, 1)], output: (Item::BrightSteelIngot, 1),
+    },
+    // sand into glass, stone bricks cracked by the heat, and earth baked into terracotta
+    Glass {
+        name: "glass", station: Furnace,
+        ingredients: [(SAND, 1)], output: (Item::Block(BlockType::Glass), 1),
+    },
+    CrackedStoneBricks {
+        name: "cracked_stone_bricks", station: Furnace,
+        ingredients: [(Item::Block(BlockType::StoneBricks), 1)], output: (Item::Block(BlockType::CrackedStoneBricks), 1),
+    },
+    Terracotta {
+        name: "terracotta", station: Furnace,
+        ingredients: [(Item::Block(BlockType::Dirt), 1)], output: (Item::Block(BlockType::Terracotta), 1),
     },
 }
 
@@ -468,6 +622,49 @@ mod tests {
     }
 
     #[test]
+    fn test_every_shape_is_made_at_a_table_stairs_six_into_four_and_slabs_three_into_six() {
+        use crate::block::RenderStyle;
+        let made = |block: BlockType| {
+            Recipe::ALL
+                .iter()
+                .copied()
+                .find(|recipe| recipe.output().item == Item::Block(block))
+                .unwrap_or_else(|| panic!("nothing makes {}", block.name()))
+        };
+        for block in BlockType::ALL {
+            let (made_of, makes) = match block.style() {
+                RenderStyle::Stairs => (6, 4),
+                RenderStyle::Slab => (3, 6),
+                RenderStyle::Wall => (6, 6),
+                _ => continue,
+            };
+            let recipe = made(block);
+            assert_eq!(
+                Station::CraftingTable,
+                recipe.station(),
+                "{}",
+                recipe.name()
+            );
+            assert_eq!(made_of, recipe.ingredients()[0].1, "{}", recipe.name());
+            assert_eq!(makes, recipe.output().count, "{}", recipe.name());
+        }
+        // and every new building block is made somehow, but for what's only for authoring
+        for block in BlockType::ALL
+            .iter()
+            .skip(BlockType::LootMarker as usize + 1)
+        {
+            made(*block);
+        }
+        assert_eq!(16, made(BlockType::GlassPane).output().count);
+        assert_eq!(&[(Item::Stick, 7)], made(BlockType::Ladder).ingredients());
+        assert_eq!(
+            &[(Item::IronIngot, 1), (Item::Block(BlockType::Torch), 1)],
+            made(BlockType::Lantern).ingredients()
+        );
+        assert_eq!(3, made(BlockType::Door).output().count);
+    }
+
+    #[test]
     fn test_furnaces_smelt_ore_into_ingots_and_burn_coal_and_wood() {
         let smelted = |block| Recipe::smelting(Item::Block(block)).map(|r| r.output().item);
         assert_eq!(Some(Item::CopperIngot), smelted(BlockType::CopperOre));
@@ -476,7 +673,20 @@ mod tests {
             Some(Item::Block(BlockType::Stone)),
             smelted(BlockType::Cobblestone)
         );
-        assert_eq!(None, smelted(BlockType::Dirt));
+        assert_eq!(None, smelted(BlockType::Planks));
+        // and sand into glass, stone bricks into cracked ones, and earth into terracotta
+        assert_eq!(
+            Some(Item::Block(BlockType::Glass)),
+            smelted(BlockType::Sand)
+        );
+        assert_eq!(
+            Some(Item::Block(BlockType::CrackedStoneBricks)),
+            smelted(BlockType::StoneBricks)
+        );
+        assert_eq!(
+            Some(Item::Block(BlockType::Terracotta)),
+            smelted(BlockType::Dirt)
+        );
         // a furnace's rows smelt one item into one
         for &recipe in Recipe::ALL {
             if recipe.station() == Station::Furnace {

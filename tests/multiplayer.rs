@@ -300,7 +300,7 @@ fn client_has_edit(client: &mut App, block: I64Vec3, to: BlockType) -> bool {
             world
                 .edits_mut()
                 .in_chunk(coord)
-                .any(|edit| edit == (local, to))
+                .any(|edit| edit == (local, to.into()))
         })
 }
 
@@ -344,7 +344,7 @@ fn test_a_client_joins_plays_and_leaves() {
     });
     client.world_mut().write_message(RequestEdit {
         block: below,
-        to: BlockType::Bricks,
+        to: BlockType::Bricks.into(),
         slot: 0,
         seq: 1,
     });
@@ -360,7 +360,7 @@ fn test_a_client_joins_plays_and_leaves() {
     let beside = below + I64Vec3::X;
     server.world_mut().write_message(RequestEdit {
         block: beside,
-        to: BlockType::Planks,
+        to: BlockType::Planks.into(),
         slot: 0,
         seq: 1,
     });
@@ -404,7 +404,7 @@ fn test_a_client_joins_plays_and_leaves() {
     }
     client.world_mut().write_message(RequestEdit {
         block: below,
-        to: BlockType::Air,
+        to: BlockType::Air.into(),
         slot: 0,
         seq: 2,
     });
@@ -581,7 +581,7 @@ fn test_a_change_far_from_a_client_reaches_it_only_as_it_comes_near() {
     let to = other_than(server.world().resource::<World>(), block);
     server.world_mut().write_message(RequestEdit {
         block,
-        to,
+        to: to.into(),
         slot: 0,
         seq: 1,
     });
@@ -617,7 +617,7 @@ fn test_a_client_sees_its_edit_at_once_and_undone_if_its_refused() {
     let was = generate_at(&mut client, feet);
     client.world_mut().write_message(RequestEdit {
         block: feet,
-        to: BlockType::Stone,
+        to: BlockType::Stone.into(),
         slot: 0,
         seq: 1,
     });
@@ -678,7 +678,7 @@ fn test_a_survival_break_is_seen_at_once_and_undone_if_its_sooner_than_it_takes(
     let break_it = |client: &mut App, seq| {
         client.world_mut().write_message(RequestEdit {
             block: ground,
-            to: BlockType::Air,
+            to: BlockType::Air.into(),
             slot: 0,
             seq,
         });
@@ -749,7 +749,7 @@ fn test_edits_sent_before_a_client_has_its_world_wait_for_it() {
     });
     server.world_mut().write_message(RequestEdit {
         block: changed,
-        to: BlockType::Planks,
+        to: BlockType::Planks.into(),
         slot: 0,
         seq: 1,
     });
@@ -904,7 +904,7 @@ fn test_a_client_draws_a_build_far_off_in_its_lods() {
     });
     server.world_mut().write_message(RequestEdit {
         block: top,
-        to: BlockType::Planks,
+        to: BlockType::Planks.into(),
         slot: 0,
         seq: 1,
     });
@@ -942,7 +942,7 @@ fn test_a_chunks_edits_and_a_change_to_it_overtaking_each_other_leave_the_newer(
     // the host breaks it, the client's first change
     server.world_mut().write_message(RequestEdit {
         block,
-        to: BlockType::Air,
+        to: BlockType::Air.into(),
         slot: 0,
         seq: 1,
     });
@@ -956,18 +956,18 @@ fn test_a_chunks_edits_and_a_change_to_it_overtaking_each_other_leave_the_newer(
     assert_eq!(BlockType::Air, shown(&mut client));
 
     // the chunk's edits from before the change, held up by a lost packet, don't undo it
-    let before = ChunkEdits::new(coord, 0, [(local, BlockType::Bricks)]);
+    let before = ChunkEdits::new(coord, 0, [(local, BlockType::Bricks.into())]);
     client.world_mut().write_message(before);
     client.update();
     assert_eq!(BlockType::Air, shown(&mut client));
 
     // nor does a second change held up behind the chunk's edits sent after it
-    let after = ChunkEdits::new(coord, 2, [(local, BlockType::Stone)]);
+    let after = ChunkEdits::new(coord, 2, [(local, BlockType::Stone.into())]);
     client.world_mut().write_message(after);
     client.update();
     client.world_mut().write_message(BlockChanged {
         block,
-        to: BlockType::Bricks,
+        to: BlockType::Bricks.into(),
         by: None,
     });
     client.update();
@@ -1645,7 +1645,7 @@ fn test_a_dedicated_server_has_no_player_of_its_own_and_takes_commands_from_its_
     });
     client.world_mut().write_message(RequestEdit {
         block: below,
-        to: BlockType::Bricks,
+        to: BlockType::Bricks.into(),
         slot: 0,
         seq: 1,
     });
@@ -1681,7 +1681,9 @@ fn test_a_dedicated_server_has_no_player_of_its_own_and_takes_commands_from_its_
     assert_eq!(None, file.player);
     let coord = ChunkCoordinate::containing(below);
     let local = ChunkCoordinate::local_block(below);
-    assert!(edits.in_chunk(coord).eq([(local, BlockType::Bricks)]));
+    assert!(edits
+        .in_chunk(coord)
+        .eq([(local, BlockType::Bricks.into())]));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

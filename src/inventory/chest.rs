@@ -17,6 +17,10 @@ const CHEST_GAP: f32 = 24.0;
 #[derive(Component)]
 pub(super) struct ChestPanel;
 
+// The panel's name, of the chest or barrel it's open at.
+#[derive(Component)]
+pub(super) struct ChestName;
+
 /// The chest's slots, under its name, hidden until the screen's opened at a chest, for the screen
 /// to put over the inventory's.
 pub(super) fn spawn_chest(slots: &mut ChildSpawnerCommands, icons: &ItemIcons) {
@@ -32,7 +36,7 @@ pub(super) fn spawn_chest(slots: &mut ChildSpawnerCommands, icons: &ItemIcons) {
             },
         ))
         .with_children(|panel| {
-            panel.spawn((Text::new("Chest"), font(18.0), TEXT_SHADOW));
+            panel.spawn((ChestName, Text::new("Chest"), font(18.0), TEXT_SHADOW));
             panel.spawn(slot_grid(8.0)).with_children(|grid| {
                 for slot in 0..chest.slots.len() {
                     grid.spawn((
@@ -46,15 +50,26 @@ pub(super) fn spawn_chest(slots: &mut ChildSpawnerCommands, icons: &ItemIcons) {
         });
 }
 
-/// Shows the chest's slots when the screen's open at a chest.
-pub(super) fn show_chest(view: Res<ContainerView>, mut panel: Query<&mut Node, With<ChestPanel>>) {
-    let display = match view.block() {
-        Some(BlockType::Chest) => Display::Flex,
-        _ => Display::None,
+/// Shows the chest's slots, and its name, when the screen's open at a chest or a barrel, which
+/// hold as much.
+pub(super) fn show_chest(
+    view: Res<ContainerView>,
+    mut panel: Query<&mut Node, With<ChestPanel>>,
+    mut name: Query<&mut Text, With<ChestName>>,
+) {
+    let (display, title) = match view.block() {
+        Some(BlockType::Chest) => (Display::Flex, "Chest"),
+        Some(BlockType::Barrel) => (Display::Flex, "Barrel"),
+        _ => (Display::None, ""),
     };
     for mut node in &mut panel {
         if node.display != display {
             node.display = display;
+        }
+    }
+    for mut text in &mut name {
+        if !title.is_empty() && text.0 != title {
+            text.0 = title.into();
         }
     }
 }

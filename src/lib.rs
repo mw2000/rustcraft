@@ -1,6 +1,7 @@
 pub mod authoring;
 pub mod block;
 pub mod breaking;
+pub mod building;
 pub mod chunks;
 #[cfg(feature = "client")]
 pub mod client;

@@ -1,13 +1,14 @@
 // Times each stage of building terrain around spawn, one thread, for comparing before and after a
 // change and for profiling. Run with:
 //   cargo run --release --example bench -- [seed, default 1] [lod, to time only LOD meshes]
-//   [torches, to stand a torch every 4 blocks on every floor before meshing chunks]
+//   [torches, to stand a torch every 4 blocks on every floor before meshing chunks, or shapes,
+//   to stand stairs, slabs, fences, panes, lanterns and the like every 2 blocks on them]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::math::{I64Vec3, U16Vec3};
-use rustcraft::block::BlockType;
+use rustcraft::block::{Block, BlockType};
 use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use rustcraft::chunks::generate::generator::{
     generate_chunk, generate_chunk_mesh, generate_lod_mesh,
@@ -41,12 +42,12 @@ fn main() {
     let regions = Arc::new(RegionStore::new(noise.clone()));
     let mode = std::env::args().nth(2);
     if mode.as_deref() != Some("lod") {
-        chunks(&regions, spawn, mode.as_deref() == Some("torches"));
+        chunks(&regions, spawn, mode.as_deref());
     }
     lods(&regions, spawn);
 }
 
-fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3, torches: bool) {
+fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3, mode: Option<&str>) {
     let coords: Vec<ChunkCoordinate> = (-ACROSS / 2..ACROSS / 2)
         .flat_map(|x| {
             (-LAYERS / 2..LAYERS / 2).flat_map(move |y| {
@@ -67,12 +68,17 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3, torches: bool) {
             .map(|&c| (c, Arc::new(generate_chunk(regions.clone(), c))))
             .collect()
     });
-    let data = if torches {
-        data.into_iter()
-            .map(|(c, chunk)| (c, Arc::new(stand_torches(&chunk))))
-            .collect()
-    } else {
-        data
+    let stand: Option<fn(&ChunkData) -> ChunkData> = match mode {
+        Some("torches") => Some(stand_torches),
+        Some("shapes") => Some(stand_shapes),
+        _ => None,
+    };
+    let data = match stand {
+        Some(stand) => data
+            .into_iter()
+            .map(|(c, chunk)| (c, Arc::new(stand(&chunk))))
+            .collect(),
+        None => data,
     };
     // the inner chunks, which have all their neighbours
     let meshed: Vec<ChunkCoordinate> = coords
@@ -114,6 +120,34 @@ fn stand_torches(chunk: &ChunkData) -> ChunkData {
                 if chunk.get_block_at(under).is_solid() && chunk.get_block_at(at) == BlockType::Air
                 {
                     chunk.set_block_at(at, BlockType::Torch);
+                }
+            }
+        }
+    }
+    chunk
+}
+
+// Shapes on every floor, open or in a cave, every 2 blocks each way, a different one at each.
+fn stand_shapes(chunk: &ChunkData) -> ChunkData {
+    const SHAPES: [&str; 8] = [
+        "stone_brick_stairs[facing=east]",
+        "planks_slab[half=top]",
+        "planks_fence",
+        "glass_pane",
+        "cobblestone_wall",
+        "lantern",
+        "glass",
+        "log[axis=x]",
+    ];
+    let mut chunk = chunk.clone();
+    for x in (0..CHUNK_SIZE).step_by(2) {
+        for z in (0..CHUNK_SIZE).step_by(2) {
+            for y in 1..CHUNK_SIZE {
+                let (under, at) = (U16Vec3::new(x, y - 1, z), U16Vec3::new(x, y, z));
+                if chunk.get_block_at(under).is_solid() && chunk.get_block_at(at) == BlockType::Air
+                {
+                    let shape = SHAPES[((x / 2 + z / 2 * 3 + y) % 8) as usize];
+                    chunk.set_block_at(at, shape.parse::<Block>().unwrap());
                 }
             }
         }

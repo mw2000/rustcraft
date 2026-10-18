@@ -102,7 +102,12 @@ impl Plugin for ServerPlugin {
                 // so a singleplayer edit or command is made and answered in the frame it's
                 // asked for
                 (
-                    (edits::receive_break_starts, edits::receive_edits).chain(),
+                    (
+                        edits::receive_break_starts,
+                        edits::receive_edits,
+                        edits::use_doors,
+                    )
+                        .chain(),
                     // opened before it's clicked on
                     (
                         containers::open_containers,

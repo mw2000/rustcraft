@@ -84,8 +84,10 @@ Blocks are declared in the `blocks!` table in `src/block.rs`: the terrain's own 
 water, snow, logs, leaves, dirt, gravel, ice, sandstone), and ones for building and mining (planks,
 cobblestone, stone bricks, bricks, coal, copper and iron ore, the far climates' gold, frost crystal
 and jade ores and embers with blocks made from them, crafting table, furnace, chest), plants
-(tall grass, poppy, dandelion, cornflower, fern), the torch and the bed, and for farming farmland and
-wheat's eight stages.
+(tall grass, poppy, dandelion, cornflower, fern), the torch and the bed, for farming farmland and
+wheat's eight stages, and since M2.4a building blocks: stairs, slabs and walls cut from the
+stones and planks, fences, doors, trapdoors, glass and panes, ladders, vines, lanterns, weathered
+and coloured stone, two more woods of planks, bookshelves and barrels, with states (§4.1).
 
 Blocks can be broken and placed, kept in an edit layer over the generated world (`src/edits.rs`,
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
@@ -163,14 +165,64 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
   its `draw.py` from the existing tiles' shades where they need hard edges (bricks, ores, crafted
   blocks) or ComfyUI isn't set up.
 
+- **Built (M2.4a): block state and shapes** (`src/block/state.rs`, `src/block/shape.rs`,
+  `src/building.rs`, `generator/shapes.rs`).
+  - **State:** a `BlockState` is a byte beside a block's type: `facing` (north, east, south,
+    west, and for some up and down; north is -z), `axis` (y, x, z), `half` (bottom or top, a
+    door's lower or upper block; `hanging` for lanterns shares its bit), `open` and `hinge`,
+    each in bits of its own, every property's first value 0. Which properties a block has
+    comes from its render style (`RenderStyle::state_properties`), so the table declares it
+    with the style. A `Block` is a type and a state: what's in a cell, edited, saved and sent.
+    Its text, which templates, saves and messages use, is the name with the properties not at
+    their first value, `stone_brick_stairs[facing=east,half=top]`, so a block with no state is
+    its name and old saves and templates read as they were. Fences, walls and panes join their
+    neighbours as they're drawn, from the blocks beside them, so store nothing.
+  - **In `ChunkData`'s runs** the state takes the byte the block's run left spare, so a run is
+    still 4 bytes; runs merge only where block and state both match. Everything generated has
+    state 0 (logs stand upright), so terrain's runs are as they were. Structures' blocks with a
+    state are put into a chunk once its runs are made, so terrain's cells stay a `BlockType`
+    each. Meshing reads states only for the blocks with any, from a map the neighbourhood
+    builds from the runs with one, empty for terrain.
+  - **Render styles added:** `Pillar` (logs: ends along their axis, bark turned to run along
+    it), `Fronted(tile)` (the furnace: a front facing the player), `Lidded` (the barrel: its lid
+    any way), and the shapes: `Stairs`, `Slab`, `Fence`, `Wall`, `Pane`, `Door`, `Trapdoor`,
+    `Ladder`, `Vine` and `Lantern`. Glass is a `Cube` that lets light through, hides nothing
+    behind it, and draws no faces between its blocks, as ice. A shape is a few boxes in its
+    cell (`shape::boxes`), for drawing, collision (fences and walls 1.5 tall to bodies, vines
+    none) and the outline. Its faces show the part of their tile they cover, and are culled
+    where the neighbour fills its whole face (`shape::fills_face`): opaque cubes, a slab's
+    bottom or top, stairs' back and slab side; so a slab hides the face it sits on but not the
+    one over its empty half, and cubes' faces are culled against stairs' backs too. Ladders and
+    vines are a quad a sixteenth off their wall; lanterns map their boxes to their tile's parts,
+    hang on a chain, and their glass glows unshaded as a torch's flame does. Vines are tinted
+    as leaves. Shapes cut their tiles' holes out of their shadows (`generator::CUTOUT`), and
+    glass by its atlas cell, as leaves do.
+  - **Light:** stairs and slabs keep the sky out, so a roof of them roofs, but their cells
+    would be dark for the faces lit from them, so they take the light of the brightest cell
+    beside them, less one (`SkyLight::light_shapes`), only where a neighbourhood has any. The
+    rest of the shapes, glass and panes let light through. Shapes' faces are lit flat, by the
+    cell they face, or their own where that keeps light out, with no ambient occlusion.
+    `BlockType::is_opaque` (a cube light can't get through, which hides faces) and
+    `blocks_light` (roofs) are now apart.
+  - **LODs** draw stairs, slabs and walls as cubes of their tiles, counting them as built in
+    `LodEdits`, and leave out fences, panes, doors, trapdoors, ladders, vines and lanterns, as
+    plants and torches, as too thin to make out (INV-5).
+  - **Cost** (INV-7): meshing what flags each block needs (opaque, a cube near or far, has a
+    state, a shape) is a table worked out once from the rows (`MESHING`). The bench's vertex
+    counts are identical; chunk meshing is about 2% quicker than before (the opaque table), and
+    LOD meshing runs the same instructions, within 0.1%. A pathological scene of a shape every two blocks on every
+    floor (`bench 1 shapes`) meshes in about 1.0 s against 0.44 s, with 4.8 times the vertices.
+  - Later: stairs' corners joining, double slabs, doors' hinges picked from their
+    neighbours, chests facing a way, wall torches, and culling faces between shapes.
+
 New blocks are added as features need them, and that's expected (§5).
 
 ### 4.2 Edit layer (proposed)
 
 The world's state beyond the seed (INV-1).
 
-- Edits are kept per chunk, as a sparse map from block position to `BlockType`: what a player put
-  there, air included. A chunk's blocks are its generated blocks with its edits applied on top.
+- Edits are kept per chunk, as a sparse map from block position to `Block` (its type and, since
+  M2.4a, its state, §4.1): what a player put there, air included. A chunk's blocks are its generated blocks with its edits applied on top.
 - An edit marks its chunk, and any neighbour it borders, for remeshing and relighting.
 - **Built (M0.2):** `Edits` (`src/edits.rs`) is held by `World`, which puts a chunk's edits back
   as it's loaded (`insert_chunk`). The world only changes through an `EditBlock` message, made by
@@ -278,6 +330,11 @@ The world's state beyond the seed (INV-1).
     loads as before. Crops changing (planted, broken, ripened and let go of) mark their chunk for
     saving as edits do; a crop growing a stage is an edit. `world.toml`'s format is 4, for the
     same reason as 3, and format 2's and 3's are read as they were.
+  - **Since format 5 (M2.4a)** a region's palette names each block with its state, in the text
+    templates use (`stone_brick_stairs[facing=east]`, §4.1), each block in each state once. A
+    block with no state is its name, so format 4 is laid out the same and read as format 5, and
+    rewritten as it the next time its region changes; a state the game doesn't know fails the
+    load. `world.toml`'s format is 5 so an older game refuses the world.
   - `Edits` remembers which chunks changed since the last save. Every 30 s, and only if
     something changed, the main thread copies `world.toml`'s contents and the edits of the
     regions with new ones, which is quick, and the IO pool writes them, one
@@ -799,6 +856,11 @@ The world's state beyond the seed (INV-1).
     server too. They're let go a chunk further out, as before. Generation is on the compute pool;
     in singleplayer the client holds all of these already.
   - `/summon <creature> [<x> <y> <z>]`, for operators, brings one. `PROTOCOL_VERSION` is 14.
+- **Built (M2.4a):** `RequestEdit::to`, `BlockChanged::to` and `EditRejected::actual` are a
+  `Block`, a type and its state, sent as its text, and `ChunkEdits`' palette names blocks with
+  their states. A door's other block, and what loses what held it up, is sent as a
+  `BlockChanged` by nobody. `UseBlock` on a door or trapdoor opens or shuts it (both of a door's
+  blocks) for anyone in reach, in either mode. `PROTOCOL_VERSION` is 15.
   - `tests/multiplayer.rs` adds: a joiner sees a sheep dropped beside it fall smoothly between
     its poses, isn't shown one beside the host 300 blocks off, and hurts it with a hit, its
     flinch reaching it.
@@ -853,6 +915,33 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   (checked by the server since M0.5b, §4.4), and middle click picks the block looked at into the
   hotbar (§5.2). None of it happens while paused, in the inventory or with the command bar open.
   Since M1.1 survival places from the hotbar slot held, and breaking drops items (§5.2).
+- **Built (M2.4a): placing with state, doors and climbing** (`src/building.rs`, §4.1).
+  - **The state a block's placed in** is the client's, from where the look meets the block
+    (`Hit::point`, from the box of its shape the ray meets, so a slab's top is clicked on its
+    top) and the face: stairs face the way the player looks, and slabs, stairs and trapdoors
+    take the half of a side clicked, the top against a ceiling; logs lie along the face's axis
+    and barrels face out of it; furnaces face the player; ladders and vines go flat against
+    the face clicked; lanterns hang under a ceiling; doors face the way the player looks and
+    turn on the side of their middle clicked. The server only checks it's a state the block
+    can be in (`Block`'s text can't say another), as players are trusted with which way they
+    face (§4.4).
+  - **Held up:** ladders need a whole solid block behind them, vines that or vines over them,
+    doors and standing lanterns solid ground, hanging lanterns a solid block over them, and
+    plants and torches as before (`needs_support`, `supported`). The server refuses one placed
+    with nothing to hold it, and takes away, leaving its item, whatever an edit leaves
+    unsupported on any side of it.
+  - **Doors** are placed by their lower block, which the server puts the upper one over, if
+    there's room for it and no one in it; breaking either takes both and leaves one door.
+    Right-clicking a door or trapdoor in either mode sends `UseBlock`, and the server opens or
+    shuts it; an open door stands against its hinge side, so it can be walked through.
+  - **Collision** is by the boxes of each cell's shape (`collision::boxes_at`), fences and walls
+    standing 1.5 tall so they can't be jumped. Walking steps up onto anything up to 0.6 high
+    without jumping, as onto a slab or a stair, if it gets further across that way. In a
+    ladder or vines a body climbs at 3 blocks a second while jumping or walking into it, and
+    otherwise slides down no faster; the server's falls count climbing as no fall, as water,
+    and standing on any box's top as standing.
+  - **Outline** draws each box of the shape looked at.
+
 - **Built (M1.2):** breaking in survival takes time (`src/breaking.rs` holds the rules both
   sides use).
   - **Break time** is the block's `hardness` (§4.1), its seconds by hand, divided by the speed
@@ -1023,8 +1112,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     `ui.py`). Slots are the inventory's buttons and stack views (`StackView::Container`).
   - **Not done:** a furnace looks the same lit or not. A lit tile is cheap, but swapping the
     block for a lit furnace through the edit layer would rebuild meshes and send `BlockChanged`
-    each time it lights and goes out, and blocks have no facing to show it on the front; it
-    waits for block state beyond `BlockType` (and block light from a lit furnace with it).
+    each time it lights and goes out. Since M2.4a it faces the player who placed it, its mouth
+    on its front; a lit front would be a state, sent as a change each time it lights.
 - **Built (M2.3): chests.** `chest` is a block (planks' hardness, quicker with an axe, its own
   top and a side with a latch on every face, as blocks have no facing yet) made from 8 planks at
   a crafting table, and a container of 27 slots (`Container::new`). Its rules are a furnace's
@@ -1109,6 +1198,19 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     take the ore. Coal ore still needs a wooden pickaxe to drop it. Charcoal and glass wait for logs and
     sand to have something to smelt into.
   - `PROTOCOL_VERSION` is 6.
+- **Built (M2.4a): building blocks' recipes.** At a crafting table stairs are made 6 of
+  their block into 4 and slabs 3 into 6, walls 6 into 6, fences of 4 planks and 2 sticks into
+  3, doors of 6 planks into 3, trapdoors of 6 into 2, ladders of 7 sticks into 3, a lantern of
+  an iron ingot and a torch, 16 panes of 6 glass, dark planks of 4 planks and a coal (stained)
+  and light ones of 4 planks and a sand (scoured), 4 polished stone of 4 stone, mossy
+  cobblestone and stone bricks of the block and vines, coloured terracotta of 8 terracotta and a
+  flower or tall grass for green, a bookshelf of 6 planks and 3 wheat (books of pressed straw),
+  and a barrel of 6 planks and 2 planks slabs. By hand, vines are plaited from 3 tall grass, as
+  none grow yet. Furnaces smelt sand into glass, stone bricks into cracked ones and dirt into
+  terracotta. Glass drops itself: there are no tools for taking it whole, and windows are
+  rebuilt often. A barrel is a container of 27 slots, opened as a chest is. The crafting list
+  is five columns wide to fit a table's sixty-odd recipes.
+
 - **Progression needs travel (P3):** higher tiers need ores found only in certain climates (under
   glaciers, deep under deserts, in mountain cores), so moving up means going somewhere.
 - **Built (M2.5): regional ores and bright steel.** Each far climate has an ore under it that
@@ -1289,8 +1391,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     torch's flame is drawn at full brightness whatever the light. Ambient occlusion is as before.
   - LODs leave edits out, so have no block light; torches aren't drawn in them, like plants.
   - Later: wall torches (blocks with a facing), lit water (its shader takes sky light only),
-    a flicker, and coloured or dimmer emitters (lava, glowstone, lanterns) in the `emits`
-    column.
+    a flicker, and coloured or dimmer emitters (lava, glowstone) in the `emits` column. Since
+    M2.4a lanterns give 13, a little less than a torch.
 
 ### 5.5a Farming and food
 
@@ -1425,7 +1527,8 @@ landmarks visible from far away (P1).
     `STRUCTURES` from files built in with `include_str!`, so generation reads nothing from disk,
     on a server as on a client. A file names the type, its placement, and its template: a size,
     the layer standing at ground level (those under it are sunk), a foundation block, a palette
-    of one character a block name, markers by kind (`loot` points, chests since M2.3), and the layers as
+    of one character a block name (with its state since M2.4a, `log[axis=x]`, §4.1; turning a
+    structure turns its blocks' facing and axis), markers by kind (`loot` points, chests since M2.3), and the layers as
     text grids, bottom first. `.` leaves the world as it is and `-` clears it to air, carving
     interiors out of the ground. Text over a binary format with a dump tool, since a template a
     few thousand blocks big reads and diffs as a picture of itself; M2.2's `/structure save`
@@ -1851,7 +1954,7 @@ start.**
 - ☑ **M2.2 Structure authoring.** `/structure save` and loading in creative mode (§5.6).
 - ☑ **M2.3 Chests and loot tables.** Chests as containers, loot tables rolled from the seed for
   chests the world generates (§5.2, §5.6).
-- ☐ **M2.4a Building blocks.** What structures and players need to build things that look good:
+- ☑ **M2.4a Building blocks.** What structures and players need to build things that look good:
   - **Block state:** blocks that face a direction or have a small state (facing, top/bottom half,
     open/closed, axis), stored compactly in `ChunkData`'s runs, saved, synced and meshed, placed
     facing the player. Logs placed sideways and a furnace with a front come with it.
@@ -1863,6 +1966,8 @@ start.**
     planks; textures by script (INV-8).
   - Collision, raycasts, light (glass and panes let light through), LODs (shapes drawn as their
     nearest cube far away) and the creative picker all know the shapes.
+  - Built: §4.1 (state, shapes, light, LODs, cost), §4.3 (format 5), §4.4 (protocol 15), §5.1
+    (placing, doors, climbing, stepping up) and §5.3 (recipes).
 - ☐ **M2.4b First structures,** to the style guide in the `structures` skill (§5.6): desert
   temple, jungle temple, forest ruin, glacier outpost, mineshaft, dungeon, alongside the
   watchtower, each reworked with the new blocks (§5.6).

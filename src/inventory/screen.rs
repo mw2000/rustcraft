@@ -484,7 +484,7 @@ mod tests {
             .filter(|recipe| recipe.station() == Station::Hand)
             .map(|&recipe| (recipe, false))
             .collect();
-        assert_eq!(4, by_hand.len());
+        assert_eq!(5, by_hand.len());
         assert_eq!(by_hand, listed(&mut app));
         // and with a log there are planks to be made
         let mut query = app.world_mut().query::<&mut Inventory>();

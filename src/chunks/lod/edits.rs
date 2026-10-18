@@ -4,7 +4,7 @@ use bevy::math::{I64Vec3, IVec3};
 use bevy::platform::collections::{HashMap, HashSet};
 
 use super::key::LodKey;
-use crate::block::{BlockType, RenderStyle};
+use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use crate::edits::Edits;
 
@@ -25,7 +25,7 @@ pub struct CellEdits {
 impl CellEdits {
     /// A block edited to `block`.
     pub fn of_block(block: BlockType) -> Self {
-        if matches!(block.style(), RenderStyle::Cube | RenderStyle::Liquid) {
+        if block.style().is_drawn_far() {
             Self {
                 block,
                 built: 1,
@@ -96,9 +96,9 @@ pub fn children(cell: I64Vec3) -> impl Iterator<Item = I64Vec3> {
 /// The 2-block cell at `cell`, in level 1's cells, as the edit layer has it.
 pub fn summarise(edits: &Edits, cell: I64Vec3) -> CellEdits {
     CellEdits::merge(children(cell).map(|block| {
-        edits
-            .get(block)
-            .map_or(CellEdits::default(), CellEdits::of_block)
+        edits.get(block).map_or(CellEdits::default(), |block| {
+            CellEdits::of_block(block.kind)
+        })
     }))
 }
 

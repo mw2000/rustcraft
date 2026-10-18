@@ -3,7 +3,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_replicon::prelude::ClientId;
 
-use crate::block::BlockType;
+use crate::block::Block;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk_loader::ChunkLoader;
 use crate::protocol::{BlockChanged, ChunkEdits, EditRejected, EditSummary, RequestEdit};
@@ -20,14 +20,14 @@ pub struct Predictions {
     requests: HashMap<u32, I64Vec3>,
     // each block with requests unanswered, what the server has there as last told, and how
     // many of them there are
-    blocks: HashMap<I64Vec3, (BlockType, u32)>,
+    blocks: HashMap<I64Vec3, (Block, u32)>,
 }
 
 impl Predictions {
     // Makes the edit requested in `world`, remembering what the server has there in case it's
     // refused. Returns whether the world changed.
     fn predict(&mut self, world: &mut World, request: &RequestEdit) -> bool {
-        let server = world.get_block_at(request.block);
+        let server = world.get(request.block);
         self.requests.insert(request.seq, request.block);
         self.blocks.entry(request.block).or_insert((server, 0)).1 += 1;
         world.edit(request.block, request.to)
@@ -36,7 +36,7 @@ impl Predictions {
     // Puts what the server says is at `block` into `world`, unless this client's asked for it
     // to change and not yet heard back, when it's kept for if the server refuses. Returns
     // whether the world changed.
-    fn told(&mut self, world: &mut World, block: I64Vec3, to: BlockType) -> bool {
+    fn told(&mut self, world: &mut World, block: I64Vec3, to: Block) -> bool {
         match self.blocks.get_mut(&block) {
             Some((server, _)) => {
                 *server = to;

@@ -2569,8 +2569,11 @@ fn test_structures_stand_on_their_foundations_cleared_inside_with_no_trees_or_pl
                 let column = corner + I64Vec3::new(x, 0, z);
                 let (cx, cz) = (column.x.div_euclid(16), column.z.div_euclid(16));
                 let ground = world.ground(cx, cz)(column.x.rem_euclid(16), column.z.rem_euclid(16));
-                let wanted =
-                    |y: i64| template.cell(placed.rotation, I64Vec3::new(x, y - corner.y, z));
+                let wanted = |y: i64| {
+                    template
+                        .cell(placed.rotation, I64Vec3::new(x, y - corner.y, z))
+                        .map(|cell| cell.kind)
+                };
                 // filled from the ground up to its floor
                 for y in ground.min(corner.y)..placed.min.y {
                     let block = world.block(column.with_y(y));
@@ -2693,7 +2696,7 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
                     (0..template.size.z).any(|z| {
                         template
                             .cell(0, I64Vec3::new(x, y, z))
-                            .is_some_and(|b| b != BlockType::Air)
+                            .is_some_and(|b| b.kind != BlockType::Air)
                     })
                 })
             })
@@ -2806,7 +2809,7 @@ fn test_lods_draw_edits_as_full_detail_has_them_within_their_cells() {
                     // and on their edges, what most of the cell's blocks are, as edited
                     let (mut built, mut cleared) = (0, 0);
                     for block in blocks((low, I64Vec3::splat(2))) {
-                        match world.edits().get(block) {
+                        match world.edits().get(block).map(|edit| edit.kind) {
                             Some(BlockType::Bricks) => built += 1,
                             Some(_) => cleared += 1,
                             None => {}
@@ -3024,4 +3027,178 @@ fn test_ferns_grow_in_jungle_and_taiga_but_not_savanna() {
             "no grass in {biome}"
         );
     }
+}
+
+// The faces of `mesh` facing `normal` with all their corners in the plane `at` across its axis.
+fn faces_at(mesh: &Mesh, normal: [f32; 3], at: f32) -> usize {
+    let axis = normal.iter().position(|&n| n != 0.0).unwrap();
+    faces(mesh)
+        .into_iter()
+        .filter(|(n, vs)| *n == normal && vs.iter().all(|v| v[axis] == at))
+        .count()
+}
+
+fn chunk_of(blocks: &[(U16Vec3, &str)]) -> ChunkData {
+    let mut chunk = ChunkData::default();
+    for &(at, text) in blocks {
+        chunk.set_block_at(at, text.parse::<crate::block::Block>().unwrap());
+    }
+    chunk
+}
+
+#[test]
+fn test_a_slab_hides_the_face_it_sits_on_but_not_the_one_over_its_empty_half() {
+    let mesh = mesh_chunk(chunk_of(&[
+        (U16Vec3::new(4, 4, 4), "stone"),
+        (U16Vec3::new(4, 5, 4), "stone_brick_slab"),
+        (U16Vec3::new(4, 6, 4), "stone"),
+    ]))
+    .opaque;
+    let (up, down) = ([0.0, 1.0, 0.0], [0.0, -1.0, 0.0]);
+    // blocks span their coordinates less a half to plus a half in the mesh
+    assert_eq!(
+        0,
+        faces_at(&mesh, up, 4.5),
+        "the stone's top, under the slab"
+    );
+    assert_eq!(1, faces_at(&mesh, up, 5.0), "the slab's top");
+    assert_eq!(1, faces_at(&mesh, down, 5.5), "the stone over the slab");
+    assert_eq!(
+        0,
+        faces_at(&mesh, down, 4.5),
+        "the slab's bottom, on the stone"
+    );
+}
+
+#[test]
+fn test_stairs_hide_the_face_against_their_back_and_glass_shows_none_between_its_blocks() {
+    let west = [-1.0, 0.0, 0.0];
+    let behind = |stairs: &str| {
+        let mesh = mesh_chunk(chunk_of(&[
+            (U16Vec3::new(4, 4, 4), stairs),
+            (U16Vec3::new(5, 4, 4), "stone"),
+        ]))
+        .opaque;
+        faces_at(&mesh, west, 4.5)
+    };
+    assert_eq!(0, behind("planks_stairs[facing=east]"));
+    assert_eq!(1, behind("planks_stairs[facing=west]"));
+    let glass = mesh_chunk(chunk_of(&[
+        (U16Vec3::new(4, 4, 4), "glass"),
+        (U16Vec3::new(5, 4, 4), "glass"),
+        (U16Vec3::new(6, 4, 4), "stone"),
+    ]))
+    .opaque;
+    let east = [1.0, 0.0, 0.0];
+    assert_eq!(0, faces_at(&glass, east, 4.5) + faces_at(&glass, west, 4.5));
+    // but the stone behind it is seen through it
+    assert_eq!(1, faces_at(&glass, west, 5.5));
+}
+
+#[test]
+fn test_glass_lets_the_sky_through_and_a_stair_roof_keeps_it_out_but_is_lit_on_top() {
+    let roofed = |roof: &str| {
+        let mut chunk = floor_chunk();
+        for x in 2..14 {
+            for z in 2..14 {
+                chunk.set_block_at(
+                    U16Vec3::new(x, 3, z),
+                    roof.parse::<crate::block::Block>().unwrap(),
+                );
+            }
+        }
+        top_lights(&mesh_chunk(chunk).opaque)
+    };
+    let under = |lights: &[([f32; 3], f32)]| {
+        lights
+            .iter()
+            .filter(|(p, _)| {
+                p[1] == 0.5 && (6.0..10.0).contains(&p[0]) && (6.0..10.0).contains(&p[2])
+            })
+            .map(|(_, l)| *l)
+            .fold(1.0, f32::min)
+    };
+    assert_eq!(1.0, under(&roofed("glass")));
+    // a stair roof shades the floor as a stone one does
+    let stairs = roofed("planks_stairs[facing=north]");
+    assert!(under(&stairs) < 1.0);
+    assert_eq!(under(&roofed("stone")), under(&stairs));
+    // the stairs' steps face the open sky, and are lit as brightly as the ground beside them
+    assert!(stairs.iter().any(|(p, l)| p[1] == 3.5 && *l == 1.0));
+}
+
+#[test]
+fn test_lods_draw_stairs_slabs_and_walls_as_cubes_and_leave_out_the_small_shapes() {
+    use crate::chunks::lod::CellEdits;
+    for drawn in [
+        BlockType::StoneBrickStairs,
+        BlockType::PlanksSlab,
+        BlockType::CobblestoneWall,
+    ] {
+        assert_eq!(1, CellEdits::of_block(drawn).built, "{}", drawn.name());
+        let mesh = mesh_lod(&lod_with(&[(IVec3::new(4, 4, 4), drawn)]));
+        assert_eq!(24, mesh.count_vertices(), "{}", drawn.name());
+    }
+    for left_out in [
+        BlockType::PlanksFence,
+        BlockType::GlassPane,
+        BlockType::Door,
+        BlockType::Ladder,
+        BlockType::Lantern,
+        BlockType::Vines,
+    ] {
+        assert_eq!(
+            0,
+            CellEdits::of_block(left_out).built,
+            "{}",
+            left_out.name()
+        );
+        let mesh = mesh_lod(&lod_with(&[(IVec3::new(4, 4, 4), left_out)]));
+        assert_eq!(0, mesh.count_vertices(), "{}", left_out.name());
+    }
+}
+
+#[test]
+fn test_logs_on_their_side_show_their_ends_along_their_axis() {
+    let mesh = |log: &str| mesh_chunk(chunk_of(&[(U16Vec3::new(4, 4, 4), log)])).opaque;
+    let tile_facing = |mesh: &Mesh, normal: [f32; 3]| {
+        let Some(VertexAttributeValues::Float32x4(colours)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("missing colours");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            panic!("missing normals");
+        };
+        let i = normals.iter().position(|n| *n == normal).unwrap();
+        colours[i][3]
+    };
+    let end = Tile::LogEnd.atlas_cell();
+    let upright = mesh("log");
+    assert_eq!(end, tile_facing(&upright, [0.0, 1.0, 0.0]));
+    let along_x = mesh("log[axis=x]");
+    assert_eq!(end, tile_facing(&along_x, [1.0, 0.0, 0.0]));
+    assert_eq!(
+        Tile::LogBark.atlas_cell(),
+        tile_facing(&along_x, [0.0, 1.0, 0.0])
+    );
+    let furnace = mesh("furnace[facing=east]");
+    assert_eq!(
+        Tile::FurnaceFront.atlas_cell(),
+        tile_facing(&furnace, [1.0, 0.0, 0.0])
+    );
+    assert_eq!(
+        Tile::FurnaceSide.atlas_cell(),
+        tile_facing(&furnace, [-1.0, 0.0, 0.0])
+    );
+}
+
+#[test]
+fn test_shapes_cut_their_holes_out_of_their_shadows() {
+    let mesh = mesh_chunk(chunk_of(&[(U16Vec3::new(4, 4, 4), "glass_pane")])).opaque;
+    let Some(VertexAttributeValues::Float32x2(draws)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+        panic!("missing how faces draw");
+    };
+    assert!(!draws.is_empty() && draws.iter().all(|d| d[1] == super::buffers::CUTOUT));
 }

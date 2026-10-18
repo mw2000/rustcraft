@@ -17,6 +17,17 @@ fn is_plant(draws: f32) -> bool {
     return abs(draws - 0.25) < 0.125;
 }
 
+// Whether a block mesh's face is a shape's, a stair's or a glass pane's, whose tile's holes are
+// cut out of its shadow: `generator::CUTOUT`.
+fn is_cutout(draws: f32) -> bool {
+    return abs(draws - 0.5) < 0.125;
+}
+
+// Whether a block mesh's vertex alpha, its atlas cell, is glass's, which has holes as leaves do.
+fn is_glass(vertex_alpha: f32) -> bool {
+    return abs(vertex_alpha - f32(constants::GLASS_CELL)) < 0.5;
+}
+
 // How far a block mesh's vertex sways, from its atlas cell, how its face draws and its uv's v,
 // which runs down a plant from its top: leaves all over, plants from their roots, which stay
 // put, up to their tops. Coarse LOD cells, whose faces span many blocks, stay still: their

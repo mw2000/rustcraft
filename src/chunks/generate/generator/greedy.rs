@@ -2,13 +2,14 @@ use super::buffers::Vertex;
 use super::buffers::{FanQuad, GrassTint, MeshBuffers, MeshStyle};
 use super::lod::SKIRT_CELLS;
 use super::shading::{
-    axis_of, face_light, vertex_ao, vertex_light, AO_GAMMA, FACE_NORMAL_OFFSET, FACE_TANGENTS,
+    axis_of, face_light, vertex_ao, vertex_light, AO_GAMMA, FACE_DIRECTIONS, FACE_NORMAL_OFFSET,
+    FACE_TANGENTS,
 };
 use super::source::{BlockSource, GridView};
 use super::terrain::is_solid;
+use crate::block::shape::fills_face;
 use crate::block::BlockType;
-use crate::block::Face;
-use crate::block::RenderStyle;
+use crate::block::{Block, BlockState, Direction};
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
@@ -42,6 +43,8 @@ fn by_corner<T: Copy + Default>(corners: &[[bool; 2]; 4], values: [T; 4]) -> [[T
 #[derive(Copy, Clone)]
 pub(super) struct FaceCell {
     pub(super) block: BlockType,
+    // which way it's turned, which picks the tile its face draws
+    pub(super) state: BlockState,
     // the tree's own tint over the grass's, for leaves, see `Tree::tint`
     pub(super) tint: Vec3,
     pub(super) ao: [f32; 4],
@@ -73,6 +76,7 @@ impl FaceCell {
         axis: usize,
     ) -> bool {
         self.block == other.block
+            && self.state == other.state
             && self.tint == other.tint
             && self.ao == other.ao
             && self.light == other.light
@@ -81,10 +85,11 @@ impl FaceCell {
     }
 }
 
-// Whether a face of `block` at `coord` shows, and if so how much of it up the mesh's y axis,
-// with LOD surface cells topped out at the ground's real height (see `LodBlocks::surface_top`):
-// `Some(None)` for the whole face. Faces show through leaves' holes, other leaves' too, unless
-// `leaves_cover_leaves`.
+// Whether a face of the cube `block` at `coord` shows, and if so how much of it up the mesh's y
+// axis, with LOD surface cells topped out at the ground's real height (see
+// `LodBlocks::surface_top`): `Some(None)` for the whole face. Faces show through leaves' holes,
+// other leaves' too, unless `leaves_cover_leaves`, and a wall of ice or glass shows none
+// between its blocks. Stairs and slabs hide the faces against their whole sides.
 pub(super) fn face_span(
     source: &impl BlockSource,
     coord: IVec3,
@@ -92,16 +97,24 @@ pub(super) fn face_span(
     block: BlockType,
     leaves_cover_leaves: bool,
 ) -> Option<Option<[f32; 2]>> {
-    if block.style() != RenderStyle::Cube {
-        return None;
-    }
     let neighbour = coord + normal;
     let neighbour_block = source.block(neighbour);
     let covered = neighbour_block.is_opaque()
         || (leaves_cover_leaves
             && block == BlockType::Leaves
             && neighbour_block == BlockType::Leaves)
-        || (block == BlockType::Ice && neighbour_block == BlockType::Ice);
+        || (matches!(block, BlockType::Ice | BlockType::Glass) && neighbour_block == block)
+        || (neighbour_block.is_shape() && {
+            let side = Direction::of_offset(-normal.as_i64vec3()).expect("a face's normal");
+            let state = source.state(neighbour);
+            fills_face(
+                Block {
+                    kind: neighbour_block,
+                    state,
+                },
+                side,
+            )
+        });
     // every face is asked about, and most are hidden, so those leave before any lookups
     if !source.has_surface_tops() || normal.y < 0 {
         return (!covered).then_some(None);
@@ -133,7 +146,9 @@ thread_local! {
 
 // Merges runs of identically shaded opaque faces into single quads, one face direction slice at a
 // time, where the shading doesn't change along the run, see `FaceCell::merges_along`.
-// With `solid_leaves`, leaves hide the faces of the leaves behind them.
+// With `solid_leaves`, leaves hide the faces of the leaves behind them. LODs (`far`) draw the
+// stairs, slabs and walls in them as cubes.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
     faces: &[[Vertex; 4]; 6],
@@ -143,6 +158,7 @@ pub(super) fn mesh_opaque_greedy(
     uv_tiles: f32,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = Light>,
+    far: bool,
 ) {
     let MeshStyle {
         ambient_occlusion,
@@ -196,7 +212,7 @@ pub(super) fn mesh_opaque_greedy(
                 for a in 0..size {
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
-                    if block.style() != RenderStyle::Cube {
+                    if !block.is_drawn_as_cube(far) {
                         continue;
                     }
                     // past the mesh's edge the terrain may be drawn at another detail, with no
@@ -230,9 +246,16 @@ pub(super) fn mesh_opaque_greedy(
                             air.map_or([MAX_LIGHT, 0], |dy| light.levels(coord + IVec3::Y * dy));
                         levels.map(face_light)
                     });
+                    // plain cubes, nearly all of them, have no state to look up
+                    let state = if block.has_state() {
+                        source.state(coord)
+                    } else {
+                        BlockState::default()
+                    };
                     mask[(b * size + a) as usize] = Some(FaceCell {
                         span,
                         block,
+                        state,
                         tint: if block == BlockType::Leaves {
                             source.leaf_tint(coord)
                         } else {
@@ -301,11 +324,13 @@ pub(super) fn mesh_opaque_greedy(
                     }
 
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
-                    let tile = if textured {
-                        cell.block.tile(Face::of_normal_y(normal.y as f32))
+                    let (tile, turned) = if textured {
+                        cell.block.face_tile(cell.state, FACE_DIRECTIONS[i])
                     } else {
-                        cell.block.lod_tile()
+                        (cell.block.lod_tile(), false)
                     };
+                    // a turned tile swaps its u and v, so a log's grain runs along it
+                    let turn = |uv: [f32; 2]| if turned { [uv[1], uv[0]] } else { uv };
                     let atlas_cell = tile.atlas_cell();
                     let color = |ao: f32, position: Vec3| {
                         // leaves share grass's tint, over a darker texture
@@ -336,7 +361,8 @@ pub(super) fn mesh_opaque_greedy(
                             }
                             position
                         });
-                        let uvs = std::array::from_fn(|j| template[j].uv.map(|c| c * uv_tiles));
+                        let uvs =
+                            std::array::from_fn(|j| turn(template[j].uv.map(|c| c * uv_tiles)));
                         let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
                         let positions = positions.map(|p| p.to_array());
                         buffers.push_tiled_quad(
@@ -371,14 +397,14 @@ pub(super) fn mesh_opaque_greedy(
                     let extent = [w as f32, h as f32];
                     let uv_at = |i: usize, j: usize| {
                         let along = [i as f32, j as f32];
-                        [0, 1].map(|k| {
+                        turn([0, 1].map(|k| {
                             let t = (uv_axes[k] == b_axis) as usize;
                             (if uv_ascending[k] {
                                 along[t]
                             } else {
                                 extent[t] - along[t]
                             }) * uv_tiles
-                        })
+                        }))
                     };
                     buffers.push_fan_quad(FanQuad {
                         corner,

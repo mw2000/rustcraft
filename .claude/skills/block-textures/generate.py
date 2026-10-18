@@ -45,7 +45,7 @@ TILES = [
     dict(name="IronOre", drawn=True),
     dict(name="CraftingTableTop", drawn=True),
     dict(name="CraftingTableSide", drawn=True),
-    dict(name="FurnaceSide", drawn=True),
+    dict(name="FurnaceFront", drawn=True),
     dict(name="TallGrass", drawn=True),  # greyscale, tinted per climate like GrassTop
     dict(name="Poppy", drawn=True),
     dict(name="Dandelion", drawn=True),
@@ -70,6 +70,29 @@ TILES = [
     dict(name="PolishedJade", drawn=True),
     dict(name="BrightSteelBlock", drawn=True),
     dict(name="EmberLamp", drawn=True),
+    dict(name="FurnaceSide", drawn=True),
+    dict(name="Glass", drawn=True),  # cut-outs, RGBA, like the plants
+    dict(name="Vines", drawn=True),  # greyscale, tinted per climate like TallGrass
+    dict(name="DoorBottom", drawn=True),
+    dict(name="DoorTop", drawn=True),
+    dict(name="Trapdoor", drawn=True),
+    dict(name="Ladder", drawn=True),
+    dict(name="Lantern", drawn=True),  # unwrapped onto the lantern's boxes, see draw.py
+    dict(name="MossyCobblestone", drawn=True),
+    dict(name="CrackedStoneBricks", drawn=True),
+    dict(name="MossyStoneBricks", drawn=True),
+    dict(name="PolishedStone", drawn=True),
+    dict(name="Terracotta", drawn=True),
+    dict(name="RedTerracotta", drawn=True),
+    dict(name="YellowTerracotta", drawn=True),
+    dict(name="BlueTerracotta", drawn=True),
+    dict(name="GreenTerracotta", drawn=True),
+    dict(name="DarkPlanks", drawn=True),
+    dict(name="LightPlanks", drawn=True),
+    dict(name="Bookshelf", drawn=True),
+    dict(name="BarrelTop", drawn=True),
+    dict(name="BarrelSide", drawn=True),
+    dict(name="BarrelBottom", drawn=True),
 ]
 
 

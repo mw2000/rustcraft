@@ -262,12 +262,11 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
-        let to = BlockType::Air;
         send(
             app,
             RequestEdit {
                 block,
-                to,
+                to: crate::block::Block::AIR,
                 slot: 8,
                 seq: 0,
             },
@@ -347,7 +346,7 @@ mod tests {
             &mut app,
             RequestEdit {
                 block: FURNACE,
-                to: BlockType::Air,
+                to: BlockType::Air.into(),
                 slot: 0,
                 seq: 0,
             },

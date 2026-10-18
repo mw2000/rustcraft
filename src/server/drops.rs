@@ -12,8 +12,9 @@ use rand::rngs::StdRng;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
+use crate::block::shape::{Boxes, Use};
 use crate::chunks::chunk::ChunkCoordinate;
-use crate::collision::{move_and_collide, Aabb};
+use crate::collision::{boxes_at, move_and_collide, Aabb};
 use crate::inventory::Inventory;
 use crate::items::ItemStack;
 use crate::player::{Player, BODY, EYE_HEIGHT};
@@ -139,6 +140,13 @@ pub(super) fn fall(
         !world.is_chunk_generated(ChunkCoordinate::containing(at))
             || world.get_block_at(at).is_solid()
     };
+    let boxes = |at: I64Vec3| {
+        if world.is_chunk_generated(ChunkCoordinate::containing(at)) {
+            boxes_at(at, Use::Collision, |at| world.get(at))
+        } else {
+            Boxes::cube()
+        }
+    };
     for (entity, mut item, mut transform) in &mut items {
         // Falling changes nothing clients are sent, and one lying still isn't moved, so items
         // are only replicated again as they move or their stacks change.
@@ -156,7 +164,7 @@ pub(super) fn fall(
             continue;
         }
         item.velocity.y = (item.velocity.y - GRAVITY * dt).max(-TERMINAL_SPEED);
-        let (moved, hit) = move_and_collide(transform.translation, item.velocity * dt, ITEM, solid);
+        let (moved, hit) = move_and_collide(transform.translation, item.velocity * dt, ITEM, boxes);
         if transform.translation != moved {
             transform.translation = moved;
         }

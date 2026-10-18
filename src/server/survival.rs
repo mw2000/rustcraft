@@ -11,13 +11,16 @@
 //! and so does falling before a player's first stood since arriving, respawning or being put
 //! somewhere, which is them dropping onto ground that's only just loaded under them.
 
+use bevy::math::I64Vec3;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::drops::{Chance, DroppedItem};
 use super::players::{announce, PoseCheck};
+use crate::block::shape::Use;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
+use crate::collision::boxes_at;
 use crate::game_mode::GameMode;
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::player::name::PlayerName;
@@ -80,10 +83,12 @@ pub(super) struct Footing {
 /// Where a player's body is, as far as falling and drowning go.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Surroundings {
-    /// Standing on the top of a solid block.
+    /// Standing on the top of a solid block, or of a slab, stairs or anything else solid.
     pub on_ground: bool,
     /// Feet or middle in water, which breaks a fall.
     pub in_water: bool,
+    /// On a ladder or vines, which is no fall either.
+    pub climbing: bool,
     /// Eyes under water, holding their breath.
     pub head_under: bool,
 }
@@ -108,7 +113,7 @@ impl Footing {
             *self = Self {
                 last: Some(at),
                 grounded: around.on_ground,
-                stood: around.on_ground || around.in_water,
+                stood: around.on_ground || around.in_water || around.climbing,
                 ..Self::default()
             };
             return moved;
@@ -121,7 +126,7 @@ impl Footing {
                 moved.sprinted = time;
             }
         }
-        if around.in_water {
+        if around.in_water || around.climbing {
             self.peak = None;
             self.stood = true;
         } else if around.on_ground {
@@ -141,13 +146,11 @@ impl Footing {
 /// What a body with its feet at `feet` is in, in `world`. Ground that isn't loaded holds nobody
 /// up here, unlike in movement: they're judged by what the server knows.
 pub(super) fn surroundings(world: &World, feet: Vec3) -> Surroundings {
+    let loaded = |at: I64Vec3| world.is_chunk_generated(ChunkCoordinate::containing(at));
     let block = |at: Vec3| {
         let at = at.floor().as_i64vec3();
-        world
-            .is_chunk_generated(ChunkCoordinate::containing(at))
-            .then(|| world.get_block_at(at))
+        loaded(at).then(|| world.get_block_at(at))
     };
-    let below = (feet.y - STANDING).floor();
     // the corners of the body's footprint, just inside it, as touching a block's side isn't
     // standing on it
     let (min, max) = (BODY.min + 1e-3, BODY.max - 1e-3);
@@ -157,14 +160,33 @@ pub(super) fn surroundings(world: &World, feet: Vec3) -> Surroundings {
         (max.x, min.z),
         (max.x, max.z),
     ];
-    let on_ground = (feet.y - (below + 1.0)).abs() < STANDING
-        && corners.into_iter().any(|(x, z)| {
-            block(Vec3::new(feet.x + x, below, feet.z + z)).is_some_and(|block| block.is_solid())
-        });
+    // the top of a box of what's under a corner, at most a cell down, or two for a fence's
+    let stands_on = |x: f32, z: f32| {
+        let corner = Vec3::new(feet.x + x, feet.y - STANDING, feet.z + z)
+            .floor()
+            .as_i64vec3();
+        (0..2).any(|down| {
+            let cell = corner - I64Vec3::Y * down;
+            loaded(cell)
+                && boxes_at(cell, Use::Collision, |at| world.get(at))
+                    .iter()
+                    .any(|part| {
+                        let (low, high) = (cell.as_vec3() + part.min, cell.as_vec3() + part.max);
+                        let (x, z) = (feet.x + x, feet.z + z);
+                        (low.x..=high.x).contains(&x)
+                            && (low.z..=high.z).contains(&z)
+                            && (feet.y - high.y).abs() < STANDING
+                    })
+        })
+    };
+    let on_ground = corners.into_iter().any(|(x, z)| stands_on(x, z));
     let water = |at: Vec3| block(at) == Some(BlockType::Water);
+    let climbable = |at: Vec3| block(at).is_some_and(|block| block.is_climbable());
+    let middle = feet + Vec3::Y * BODY.max.y / 2.0;
     Surroundings {
         on_ground,
-        in_water: water(feet) || water(feet + Vec3::Y * BODY.max.y / 2.0),
+        in_water: water(feet) || water(middle),
+        climbing: climbable(feet) || climbable(middle),
         head_under: water(feet + Vec3::Y * EYE_HEIGHT),
     }
 }
@@ -520,6 +542,7 @@ mod tests {
     const STILL: Surroundings = Surroundings {
         on_ground: true,
         in_water: false,
+        climbing: false,
         head_under: false,
     };
     const AIR: Surroundings = Surroundings {
@@ -563,6 +586,7 @@ mod tests {
         let water = Surroundings {
             on_ground: false,
             in_water: true,
+            climbing: false,
             head_under: true,
         };
         assert_eq!(None, drop(&mut footing, 40.0, 10.0, water));

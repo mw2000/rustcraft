@@ -710,8 +710,8 @@ mod tests {
         let local = ChunkCoordinate::local_block(here);
         assert_eq!(
             vec![
-                (local, BlockType::Air),
-                (local + U16Vec3::X, BlockType::Planks)
+                (local, BlockType::Air.into()),
+                (local + U16Vec3::X, BlockType::Planks.into())
             ],
             blocks
         );
@@ -793,7 +793,10 @@ mod tests {
         assert_eq!((5, 2), (file.seed, file.format));
         let chunk = ChunkCoordinate(I64Vec3::new(0, 28, 0));
         let blocks: Vec<_> = edits.in_chunk(chunk).collect();
-        assert_eq!(vec![(U16Vec3::new(7, 0, 0), BlockType::Furnace)], blocks);
+        assert_eq!(
+            vec![(U16Vec3::new(7, 0, 0), BlockType::Furnace.into())],
+            blocks
+        );
         // and its world.toml's written in the new format, its regions as they change
         let snapshot = save.snapshot(
             &mut edits,

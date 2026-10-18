@@ -64,7 +64,7 @@ impl Container {
     pub fn new(block: BlockType) -> Option<Self> {
         let slots = match block {
             BlockType::Furnace => 3,
-            BlockType::Chest => 27,
+            BlockType::Chest | BlockType::Barrel => 27,
             _ => return None,
         };
         Some(Self {
@@ -408,7 +408,10 @@ mod tests {
 
     #[test]
     fn test_nothing_burns_without_something_to_smelt_or_room_for_it() {
-        let mut idle = furnace(stack(Item::Block(BlockType::Dirt), 4), stack(Item::Coal, 2));
+        let mut idle = furnace(
+            stack(Item::Block(BlockType::Gravel), 4),
+            stack(Item::Coal, 2),
+        );
         assert!(!idle.run(100.0));
         assert_eq!(stack(Item::Coal, 2), idle.slots[FUEL]);
 

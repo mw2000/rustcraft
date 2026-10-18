@@ -26,7 +26,7 @@ hilltop = true                   # climb from its spot to the top of the hill
 size = [7, 20, 7]                # x, layers, z
 floor = 1                        # the layer at ground level; those under it are sunk
 foundation = "cobblestone"       # fills under it down to the ground
-palette = { c = "cobblestone", s = "stone_bricks" }   # one character a block name
+palette = { c = "cobblestone", s = "stone_brick_stairs[facing=east,half=top]" }   # one character a block
 markers = { loot = [[3, 18, 3]] }                     # template x, y, z by kind
 layers = [
   '''
@@ -38,6 +38,21 @@ ccccccc
 
 - `.` leaves the world as it is and `-` clears it to air, which carves interiors out of the
   ground. Neither can be in the palette.
+- A palette entry is a block's name, with its state in brackets if it has one, as saves and
+  `/structure save` write it: `log[axis=x]`, `stone_brick_stairs[facing=east,half=top]`,
+  `door[facing=north,hinge=right]` (the lower block; write its upper one `half=top` above it),
+  `lantern[hanging=true]`, `ladder[facing=south]` (it faces out of the wall it's on, south
+  for one on a wall to its north), `barrel[facing=up]`. Properties left out take their first
+  value (`facing=north`, `half=bottom`, `axis=y`, `open=false`, `hinge=left`), so a plain
+  name is the block upright, facing north, shut. Each block takes only the properties its
+  render style has (`RenderStyle::state_properties`); loading refuses others. Turning a
+  structure turns `facing` and swaps `axis` x and z with it, so write it as it stands unturned
+  (north up the page, -z). Fences, walls and panes join their neighbours by themselves, and
+  have no state. The building blocks to use are in `src/block.rs`'s table: stairs, slabs and
+  walls of planks, dark planks, cobblestone, stone bricks, bricks and sandstone; mossy
+  cobblestone, mossy and cracked stone bricks, polished stone, terracotta in five colours,
+  dark and light planks, glass and panes, doors, trapdoors, ladders, vines, lanterns,
+  bookshelves and barrels.
 - Inside the footprint, the ground above the floor is cleared down to it and the ground below
   filled up to it with `foundation`, so `.` there is air above the floor. Trees keep clear of the
   footprint. Plants under it are cleared with the ground.

@@ -8,8 +8,9 @@ use super::allowances::Allowances;
 use super::containers::fill_loot;
 use super::drops::{Chance, DroppedItem};
 use super::sync::BlockChanges;
-use crate::block::BlockType;
+use crate::block::{Block, BlockType, Direction};
 use crate::breaking::{break_time, harvests};
+use crate::building::{needs_support, other_half, supported, toggled};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::clock::TimeOfDay;
 use crate::collision::overlaps;
@@ -19,7 +20,7 @@ use crate::game_mode::GameMode;
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::items::{ItemStack, ToolKind};
 use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT, REACH};
-use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking};
+use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking, UseBlock};
 use crate::world::World;
 
 // How much further than `REACH` from the eye an edit can be, in blocks, for a player who's
@@ -100,9 +101,10 @@ type Players<'w, 's> = Query<
 /// is taken from the player's hotbar, and one broken leaves its items to pick up if it was broken
 /// with a tool of the tier it needs, and wears the tool held. A container broken in either mode
 /// leaves what was in it, as items are never lost with their container, and a chest the world
-/// generated leaves its loot. Dirt or grass made
-/// farmland is tilled with the hoe held, which wears it in survival, and a crop placed is
-/// planted, to grow from then (`farming`).
+/// generated leaves its loot. Dirt or grass made farmland is tilled with the hoe held, which
+/// wears it in survival, and a crop placed is planted, to grow from then (`farming`). A door
+/// placed puts its upper block over it, and one broken takes its other block with it; and what
+/// an edit leaves with nothing to hold it up, a plant on the ground or a ladder on a wall, goes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_edits(
     mut requests: MessageReader<FromClient<RequestEdit>>,
@@ -129,7 +131,7 @@ pub(super) fn receive_edits(
             },
     } in requests.read()
     {
-        let was = world.get_block_at(block);
+        let was = world.get(block);
         // a chest the world generated is filled before it can be broken, so it leaves its loot;
         // it comes up the same whether that's now or when it's opened
         fill_loot(&world, &mut containers, block);
@@ -149,7 +151,7 @@ pub(super) fn receive_edits(
             Some("too many edits")
         };
         if let Some(why) = why_not {
-            debug!("refused {client}'s edit of {block} to {}: {why}", to.name());
+            debug!("refused {client}'s edit of {block} to {to}: {why}");
             rejected.write(ToClients {
                 targets: SendTargets::Single(client),
                 message: EditRejected {
@@ -172,7 +174,8 @@ pub(super) fn receive_edits(
         let slot = usize::from(slot);
         let placed_from = held(&inventory, slot).map(|stack| stack.item);
         let tool = placed_from.and_then(|item| item.tool());
-        if to == BlockType::Air {
+        let broken = to.kind == BlockType::Air;
+        if broken {
             // the time it was held for is spent, so a block put back there takes as long
             commands.entity(player).remove::<BreakingStarted>();
         }
@@ -181,7 +184,7 @@ pub(super) fn receive_edits(
             commands.spawn((DroppedItem::from_block(stack, block), Replicated));
         }
         crops.remove(block);
-        if to.is_crop() {
+        if to.kind.is_crop() {
             crops.plant(block, clock.0);
         }
         let drops = mode.drops_broken_blocks();
@@ -193,40 +196,82 @@ pub(super) fn receive_edits(
             }
         };
         // what breaks at a touch doesn't wear a tool, nor does anything in creative
-        if to == BlockType::Air {
-            leave(was, block);
-            if tool.is_some() && !mode.breaks_at_once() && was.hardness() > 0.0 {
+        if broken {
+            leave(was.kind, block);
+            if tool.is_some() && !mode.breaks_at_once() && was.kind.hardness() > 0.0 {
                 inventory.wear(slot);
             }
-        } else if tilled(was) == Some(to) {
+        } else if tilled(was.kind) == Some(to.kind) {
             if !mode.breaks_at_once() {
                 inventory.wear(slot);
             }
         } else if let Some(item) = placed_from.filter(|_| !mode.has_every_block()) {
             inventory.use_one(slot, item);
         }
-        // a plant or a torch goes with the ground it stood on, as a crop does with its farmland
-        let above = block + I64Vec3::Y;
-        let standing = world.get_block_at(above);
-        if standing.needs_ground() && !standing.stands_on(to) {
-            world.edit(above, BlockType::Air);
-            crops.remove(above);
-            leave(standing, above);
-            changed.write(BlockChanged {
-                block: above,
-                to: BlockType::Air,
-                by: None,
-            });
+        let mut set = |world: &mut World, at: I64Vec3, to: Block| {
+            if world.edit(at, to) {
+                changed.write(BlockChanged {
+                    block: at,
+                    to,
+                    by: None,
+                });
+            }
+        };
+        // a door's two blocks are placed and broken together, and the item comes from one
+        let door = if broken { was } else { to };
+        if let Some((other, half)) = other_half(block, door) {
+            set(&mut world, other, if broken { Block::AIR } else { half });
+        }
+        // what was held up by it goes, as a crop does with its farmland, leaving its item
+        for side in Direction::ALL {
+            let at = block + side.offset().as_i64vec3();
+            let held_up = world.get(at);
+            if needs_support(held_up.kind) && !supported(at, held_up, |at| world.get(at)) {
+                set(&mut world, at, Block::AIR);
+                crops.remove(at);
+                leave(held_up.kind, at);
+                if let Some((other, _)) = other_half(at, held_up) {
+                    set(&mut world, other, Block::AIR);
+                }
+            }
         }
         // and farmland built on is packed back into dirt
         let below = block - I64Vec3::Y;
-        if to.is_solid() && world.get_block_at(below) == BlockType::Farmland {
-            world.edit(below, BlockType::Dirt);
-            changed.write(BlockChanged {
-                block: below,
-                to: BlockType::Dirt,
-                by: None,
-            });
+        if to.kind.is_solid() && world.get_block_at(below) == BlockType::Farmland {
+            set(&mut world, below, BlockType::Dirt.into());
+        }
+    }
+}
+
+/// Opens or shuts the door or trapdoor each player uses in reach, a door's two blocks together,
+/// in either game mode.
+pub(super) fn use_doors(
+    mut uses: MessageReader<FromClient<UseBlock>>,
+    mut world: ResMut<World>,
+    players: Query<(&PlayerOwner, &Transform)>,
+    mut changed: BlockChanges,
+) {
+    for &FromClient {
+        client_id,
+        message: UseBlock { block },
+    } in uses.read()
+    {
+        let reaches = players
+            .iter()
+            .any(|(owner, body)| owner.0 == client_id && in_reach(body.translation, block));
+        let was = world.get(block);
+        let Some(to) = toggled(was).filter(|_| reaches) else {
+            continue;
+        };
+        let other = other_half(block, was).map(|(at, half)| (at, toggled(half).unwrap()));
+        for (at, to) in std::iter::once((block, to)).chain(other) {
+            if world.edit(at, to) {
+                changed.write(BlockChanged {
+                    block: at,
+                    to,
+                    by: None,
+                });
+            }
         }
     }
 }
@@ -251,7 +296,7 @@ fn refusal(
     players: &Players,
     client: ClientId,
     block: I64Vec3,
-    to: BlockType,
+    to: Block,
     slot: usize,
     now: Duration,
 ) -> Option<&'static str> {
@@ -272,7 +317,7 @@ fn refusal(
         return Some("it's out of reach");
     }
     let was = world.get_block_at(block);
-    if to == BlockType::Air && !mode.breaks_at_once() {
+    if to.kind == BlockType::Air && !mode.breaks_at_once() {
         let tool = held(inventory, slot).and_then(|stack| stack.item.tool());
         let takes = break_time(was, tool);
         let held_for = started
@@ -282,7 +327,7 @@ fn refusal(
             return Some("it's broken sooner than it takes");
         }
     }
-    if tilled(was) == Some(to) {
+    if tilled(was) == Some(to.kind) {
         let tool = held(inventory, slot).and_then(|stack| stack.item.tool());
         if tool.is_none_or(|tool| tool.kind != ToolKind::Hoe) {
             return Some("they aren't holding a hoe");
@@ -292,23 +337,37 @@ fn refusal(
         }
         return None;
     }
-    if to != BlockType::Air {
+    if to.kind != BlockType::Air {
         if !was.is_replaceable() {
             return Some("it's into a solid block");
         }
-        if !mode.can_place(to) {
+        if !mode.can_place(to.kind) {
             return Some("they can't place that");
         }
         let held = held(inventory, slot);
-        if !mode.has_every_block() && held.is_none_or(|stack| stack.item.places() != Some(to)) {
+        if !mode.has_every_block() && held.is_none_or(|stack| stack.item.places() != Some(to.kind))
+        {
             return Some("they aren't holding that");
         }
-        if to.needs_ground() && !to.stands_on(world.get_block_at(block - I64Vec3::Y)) {
-            return Some("it can't stand on what's under it");
+        if needs_support(to.kind) && !supported(block, to, |at| world.get(at)) {
+            return Some("there's nothing to hold it up");
         }
-        let into_player = players
-            .iter()
-            .any(|(_, body, ..)| overlaps(BODY, body.translation, block));
+        // a door is placed by its lower block, which puts its upper one over it
+        let mut cells = vec![block];
+        if let Some((upper, _)) = other_half(block, to) {
+            if to.state.top() {
+                return Some("it's the top of a door");
+            }
+            if !world.get_block_at(upper).is_replaceable() {
+                return Some("there's no room for the door");
+            }
+            cells.push(upper);
+        }
+        let into_player = players.iter().any(|(_, body, ..)| {
+            cells
+                .iter()
+                .any(|&cell| overlaps(BODY, body.translation, cell))
+        });
         if into_player {
             return Some("it's into a player");
         }
@@ -336,7 +395,9 @@ mod tests {
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
     use crate::player::{Player, PlayerOwner};
-    use crate::protocol::{BlockChanged, EditRejected, ProtocolPlugin, RequestEdit, StartBreaking};
+    use crate::protocol::{
+        BlockChanged, EditRejected, ProtocolPlugin, RequestEdit, StartBreaking, UseBlock,
+    };
     use crate::server::drops::DroppedItem;
     use crate::server::ServerPlugin;
     use crate::world::World;
@@ -391,7 +452,7 @@ mod tests {
         for (seq, &(block, to)) in edits.iter().enumerate() {
             app.world_mut().write_message(RequestEdit {
                 block,
-                to,
+                to: to.into(),
                 slot: 0,
                 seq: seq as u32,
             });
@@ -419,7 +480,7 @@ mod tests {
         let refusal = EditRejected {
             seq: 0,
             block,
-            actual: before,
+            actual: before.into(),
         };
         assert_eq!(vec![refusal], rejected);
         assert_eq!(before, block_at(app, block));
@@ -440,7 +501,7 @@ mod tests {
             .zip(edits)
             .map(|(seq, (block, to))| BlockChanged {
                 block,
-                to,
+                to: to.into(),
                 by: Some((ClientId::Server, seq)),
             })
             .collect();
@@ -506,7 +567,7 @@ mod tests {
         let (changed, _) = request(&mut app, &[(FLOOR, BlockType::Air)]);
         let gone = BlockChanged {
             block: above,
-            to: BlockType::Air,
+            to: BlockType::Air.into(),
             by: None,
         };
         assert_eq!(2, changed.len());
@@ -542,6 +603,81 @@ mod tests {
             vec![one(BlockType::Cobblestone), one(BlockType::Torch)],
             items
         );
+    }
+
+    // Asks for `block` at `at`, by its text, and returns the changes the server sent.
+    fn place(app: &mut App, at: I64Vec3, block: &str) -> Vec<BlockChanged> {
+        app.world_mut().write_message(RequestEdit {
+            block: at,
+            to: block.parse().unwrap(),
+            slot: 0,
+            seq: 0,
+        });
+        app.update();
+        drain::<EditRejected>(app);
+        drain(app)
+    }
+
+    fn block_with_state(app: &App, at: I64Vec3) -> String {
+        app.world().resource::<World>().get(at).to_string()
+    }
+
+    #[test]
+    fn test_a_door_is_placed_with_its_upper_block_and_broken_and_opened_whole() {
+        let mut app = server(GameMode::Creative);
+        let (lower, upper) = (FLOOR + I64Vec3::Y, FLOOR + I64Vec3::new(0, 2, 0));
+        // only its lower block can be asked for
+        assert!(place(&mut app, lower, "door[half=top]").is_empty());
+        let changed = place(&mut app, lower, "door[facing=east]");
+        assert_eq!(2, changed.len());
+        assert_eq!("door[facing=east,half=top]", block_with_state(&app, upper));
+        app.world_mut().write_message(UseBlock { block: upper });
+        app.update();
+        assert_eq!(2, drain::<BlockChanged>(&mut app).len());
+        assert_eq!("door[facing=east,open=true]", block_with_state(&app, lower));
+        assert_eq!(
+            "door[facing=east,half=top,open=true]",
+            block_with_state(&app, upper)
+        );
+        let changed = place(&mut app, upper, "air");
+        assert_eq!(2, changed.len());
+        assert_eq!(BlockType::Air, block_at(&app, lower));
+        // and a door doesn't fit under a block
+        app.world_mut()
+            .resource_mut::<World>()
+            .edit(upper, BlockType::Stone);
+        assert!(place(&mut app, lower, "door").is_empty());
+    }
+
+    #[test]
+    fn test_ladders_need_a_wall_and_lanterns_a_floor_or_ceiling_and_go_with_them() {
+        let mut app = server(GameMode::Survival);
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Block(BlockType::Ladder), 4));
+        let beside = FLOOR + I64Vec3::new(0, 1, 1);
+        {
+            let mut world = app.world_mut().resource_mut::<World>();
+            world.edit(FLOOR + I64Vec3::Y, BlockType::Planks);
+        }
+        // against the planks to its north, not floating with nothing behind it
+        assert!(place(&mut app, beside, "ladder[facing=north]").is_empty());
+        assert_eq!(1, place(&mut app, beside, "ladder[facing=south]").len());
+        // the wall broken, the ladder goes and leaves itself
+        holding(&mut app, Item::WoodenAxe);
+        hold_and_break(&mut app, FLOOR + I64Vec3::Y, 1.0);
+        assert_eq!(BlockType::Air, block_at(&app, beside));
+        let items: Vec<_> = dropped(&mut app).into_iter().map(|(s, _)| s.item).collect();
+        assert!(items.contains(&Item::Block(BlockType::Ladder)), "{items:?}");
+        let mut app = server(GameMode::Creative);
+        let over = FLOOR + I64Vec3::Y;
+        assert!(place(&mut app, over + I64Vec3::Y, "lantern").is_empty());
+        assert_eq!(1, place(&mut app, over, "lantern").len());
+        let ceiling = FLOOR + I64Vec3::new(1, 3, 0);
+        app.world_mut()
+            .resource_mut::<World>()
+            .edit(ceiling, BlockType::Stone);
+        let under = ceiling - I64Vec3::Y;
+        assert!(place(&mut app, under, "lantern").is_empty());
+        assert_eq!(1, place(&mut app, under, "lantern[hanging=true]").len());
     }
 
     fn inventory(app: &mut App) -> Mut<'_, Inventory> {

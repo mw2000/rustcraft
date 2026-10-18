@@ -46,15 +46,18 @@ def sprite(rows, colours):
     return [(y, x, colours[ch]) for y, row in enumerate(rows) for x, ch in enumerate(row) if ch != "."]
 
 
-def planks(rng):
-    wood = shades("LogEnd")[:3]
-    seam = shades("LogBark")[-1]  # the bark's lightest brown, dark against the boards
+def boards(rng, wood, seam):
+    """Four boards across the tile in three shades of `wood`, darkest first, with `seam` between them."""
     grain = levels(noise(rng, (0, 4)) + np.repeat(rng.random(4) * 0.4, 4)[:, None], 3)  # streaks along each board
-    out = wood[grain]
+    out = np.asarray(wood, float)[grain]
     out[3::4] = seam  # four boards, four rows each
     for board, x in enumerate([4, 12, 1, 9]):  # board ends staggered, as laid
         out[board * 4:board * 4 + 3, x] = seam
     return out
+
+
+def planks(rng):
+    return boards(rng, shades("LogEnd")[:3], shades("LogBark")[-1])  # the bark's lightest brown, dark against the boards
 
 
 def cobblestone(rng):
@@ -283,10 +286,17 @@ def crafting_table_side(rng):
 
 
 def furnace_side(rng):
+    """The furnace's sides and back: cobblestone with the dressed stone panel its front has round the mouth."""
     out = cobblestone(rng)
     stone = shades("Stone", 1.6)
-    out[6:15, 3:13] = stone[3]  # a dressed stone surround
+    out[6:15, 3:13] = stone[3]  # a dressed stone panel, lit round its rim
     out[7:14, 4:12] = stone[2]
+    return out
+
+
+def furnace_front(rng):
+    """The side's panel with the furnace's dark mouth in it."""
+    out = furnace_side(rng)
     out[8:13, 5:11] = (26, 25, 25)  # the dark mouth, with a sooty floor
     out[12, 5:11] = (44, 40, 38)
     return out
@@ -518,14 +528,278 @@ def loot_marker(rng):
     return out
 
 
+def glass(rng):
+    """A clear pane in a thin pale frame, so a wall of glass shows a grid of them, with a glint or two on it. The
+    shader cuts at half alpha, so every texel is either drawn or clear."""
+    out = clear()
+    for i in range(16):
+        for y, x in [(0, i), (i, 0)]:
+            paint(out, y, x, (226, 238, 240))  # lit along the top and left, shaded along the bottom and right
+        for y, x in [(15, i), (i, 15)]:
+            paint(out, y, x, (196, 214, 220))
+    for y, x in [(5, 2), (4, 3), (3, 4), (2, 5), (7, 3), (6, 4), (12, 10), (11, 11), (10, 12)]:
+        paint(out, y, x, (236, 246, 248))
+    return out
+
+
+def vines(rng):
+    """Greyscale tendrils hanging down the tile, tinted per climate like tall grass, whose shades they take: each
+    sways in a whole wave over the tile and puts out a leaf to alternate sides, so a wall of vines tiles both ways."""
+    grey = shades("GrassTop", 1.4)
+    stem = shades("GrassTop", 2.4)[0]  # darker than the leaves, so the tendrils show through them
+    out = clear()
+    for x0 in [2, 7, 12]:
+        phase = rng.uniform(0, 2 * np.pi)
+        xs = [int(round(x0 + 0.8 * np.sin(2 * np.pi * y / 16 + phase))) % 16 for y in range(16)]
+        for y, x in enumerate(xs):  # a stem no more than a texel off the one above, so it reads as one
+            paint(out, y, x, stem)
+        start = rng.integers(0, 4)
+        for n, y in enumerate(range(start, start + 16, 4)):  # a leaf every four rows, to one side then the other
+            side = 1 if n % 2 else -1
+            x = xs[y % 16]
+            leaf = [(0, side, grey[-1]), (0, 2 * side, grey[-1]), (1, side, grey[2]), (1, 2 * side, grey[1]), (2, side, grey[1]),
+                    (1, 0, grey[2])]  # the last where it joins the stem
+            for dy, dx, shade in leaf:  # lit on top, drooping
+                paint(out, (y + dy) % 16, (x + dx) % 16, shade)
+    return out
+
+
+DOOR_SEAMS = [5, 10]  # three boards across a door's face, between its frame's sides
+
+
+def door_face(rng, seams, ends):
+    """Vertical boards between `seams`, in a frame two texels wide down the tile's sides and across the `ends`
+    ("top", "bottom") it has. A door's and a trapdoor's thin edges show their outer three rows and columns, so
+    those keep to plain wood."""
+    wood = shades("Planks")
+    edge = shades("LogBark")
+    board = np.searchsorted(seams, np.arange(16))
+    out = wood[1:][levels(noise(rng, (4, 0)) + (rng.random(len(seams) + 1) * 0.4)[board][None, :], 3)]
+    out[:, seams] = wood[0]
+    out[:, [1, 14]] = edge[-1]
+    out[:, [0, 15]] = edge[-2]  # the frame's outer edge, darker, so neighbouring doors part
+    for end in ends:
+        frame, outer, inner = ([1], 0, 2) if end == "top" else ([14], 15, 13)
+        out[frame, 1:15] = edge[-1]
+        out[outer] = edge[-2]
+        out[inner, seams] = wood[2]  # the seams stop short of the frame, so the edge it shows is plain
+    return out
+
+
+def door_bottom(rng):
+    """The lower half of a door: boards with a cross rail, and an iron latch at the top on the right, which is
+    the door's middle."""
+    out = door_face(rng, DOOR_SEAMS, ["bottom"])
+    out[8:10, 3:13] = shades("LogBark")[-1]  # a cross rail, short of the sides the door's edges show
+    out[8, 3:13] = shades("Planks")[2]
+    iron = sprite(["lg", "gd", "kd", "dd"], dict(l=(206, 206, 210), g=(168, 168, 174), d=(118, 118, 126), k=(46, 44, 48)))
+    for dy, dx, c in iron:
+        out[1 + dy, 11 + dx] = c
+    return out
+
+
+def door_top(rng):
+    """The upper half of a door: boards with a window of four small clear panes in their upper middle."""
+    out = np.dstack([door_face(rng, DOOR_SEAMS, ["top"]), np.full((16, 16), 255)])
+    edge = shades("LogBark")
+    out[3:11, 3:13, :3] = edge[-1]  # the window's frame and mullions
+    for y, x in [(4, 4), (4, 9), (8, 4), (8, 9)]:
+        out[y:y + 2, x:x + 3] = 0
+    out[3, 3:13, :3] = edge[-2]  # its frame lit along the top and shaded at the sill
+    out[10, 3:13, :3] = edge[-2]
+    return out
+
+
+def trapdoor(rng):
+    """A wooden hatch seen from above: boards in a plain frame, with a few small square holes through them."""
+    out = np.dstack([door_face(rng, [6, 9], ["top", "bottom"]), np.full((16, 16), 255)])
+    out[2, 2:14, :3] = out[13, 2:14, :3] = out[2:14, 2, :3] = out[2:14, 13, :3] = shades("Planks")[1]  # the frame's lit inner edge
+    for y in (4, 10):
+        for x in (4, 10):
+            out[y:y + 2, x:x + 2] = 0
+    return out
+
+
+def ladder(rng):
+    """Two rails up the tile, at the columns a ladder's box shows, with a rung every four rows, on transparency."""
+    wood = shades("Planks")
+    out = clear()
+    for y in range(16):
+        grain = rng.integers(0, 2)
+        for x, shade in [(2, wood[2 + grain]), (3, wood[1]), (12, wood[2 + grain]), (13, wood[1])]:  # lit on the left
+            paint(out, y, x, shade)
+    for y in (1, 5, 9, 13):
+        for x in range(4, 12):
+            paint(out, y, x, wood[3])  # lit on top, shaded underneath
+            paint(out, y + 1, x, wood[0])
+    return out
+
+
+IRON = [(38, 38, 44), (58, 58, 66), (84, 84, 92), (116, 116, 124)]  # dark worked iron, darkest first
+
+
+def lantern(rng):
+    """An iron lantern unwrapped onto the boxes the mesher builds it from, each in its own rectangle (x0, y0)-(x1, y1),
+    x right and y down, half-open: the body's sides (0, 9)-(6, 16), a frame round glowing glass, drawn at full
+    brightness like the torch's flame; its top and bottom (0, 2)-(6, 8); the cap's top (6, 10)-(10, 14) and sides
+    (6, 14)-(10, 16); and the chain it hangs by (11, 0)-(14, 16)."""
+    out = clear()
+
+    def box(x0, y0, x1, y1, inside, rim):
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                paint(out, y, x, rim if x in (x0, x1 - 1) or y in (y0, y1 - 1) else inside)
+
+    box(0, 9, 6, 16, IRON[1], IRON[1])
+    glow = sprite(["oyyo", "yffy", "yFFy", "yffy", "oyyo"], dict(o=(232, 146, 52), y=(250, 188, 78), f=(255, 216, 112), F=(255, 242, 176)))
+    for dy, dx, c in glow:  # the flame bright in the middle of the glass
+        paint(out, 10 + dy, 1 + dx, c)
+    box(0, 2, 6, 8, IRON[0], IRON[2])
+    box(6, 10, 10, 14, IRON[1], IRON[2])
+    box(6, 14, 10, 16, IRON[1], IRON[1])
+    # the chain's links in turn face on, a ring, and edge on, a bar, lit on the left
+    for dy, dx, c in sprite([".l.", "l.d", "l.d", ".l.", ".l.", ".d.", ".d.", ".l."] * 2, dict(l=IRON[3], d=IRON[1])):
+        paint(out, dy, 11 + dx, c)
+    return out
+
+
+MOSS = np.array([(62, 84, 40), (80, 104, 48), (100, 124, 58)], float)  # not tinted, darkest first
+
+
+def mossy(rng, out, gaps, amount):
+    """Moss grown over `out`, in most of its `gaps` and in patches over the rest, which `amount` widens."""
+    grow = noise(rng)
+    moss = (gaps & (grow > 0.5 - amount)) | (grow > 1 - amount)
+    out[moss] = MOSS[levels(noise(rng), 3)][moss]
+    return out
+
+
+def mossy_cobblestone(rng):
+    """Cobblestone with moss grown over it, most thickly in the mortar between the stones."""
+    out = cobblestone(rng)
+    return mossy(rng, out, (out @ LUM) < (out @ LUM).min() + 1, 0.2)
+
+
+def cracked_stone_bricks(rng):
+    """Stone bricks with cracks running across them and a corner or two chipped away into the mortar."""
+    out = stone_bricks(rng)
+    mortar = shades("Stone", 1.6)[0] * 0.7
+    for top in (0, 8, rng.choice([0, 8])):  # a crack or two across each course of bricks
+        y, x, step = top + rng.integers(2, 5), rng.integers(0, 16), rng.choice([-1, 1])
+        for _ in range(rng.integers(5, 8)):  # wandering sideways, up and down a little, within the course
+            out[y, x % 16] = mortar
+            y, x = np.clip(y + rng.integers(-1, 2) * (rng.random() < 0.5), top + 1, top + 5), x + step
+    # a brick's top right corner and another's bottom left, knocked off
+    for y, x, dy, dx in [(0, 14, 1, -1), (14, 8, -1, 1)]:
+        out[y, x] = out[y + dy, x] = out[y, x + dx] = mortar
+    return out
+
+
+def mossy_stone_bricks(rng):
+    """Stone bricks with moss in their mortar lines and a patch or two over the bricks."""
+    out = stone_bricks(rng)
+    return mossy(rng, out, (out @ LUM) < (out @ LUM).min() + 1, 0.15)
+
+
+def polished_stone(rng):
+    """Smooth dressed stone, lighter and flatter than stone, with a slightly darker bevel round each block."""
+    stone = shades("Stone", 0.6) * 1.3
+    out = stone[1:][levels(noise(rng, (3, 3)), 3)]
+    out[[0, 15]] = out[:, [0, 15]] = stone[0] * 0.92
+    return out
+
+
+def terracotta(colour):
+    """Baked clay of a colour: flat and matte, with faint mottling from the firing."""
+    def draw(rng):
+        return np.array(colour, float) * np.array([0.96, 1.0, 1.035])[levels(noise(rng), 3)][..., None]
+    return draw
+
+
+def dark_planks(rng):
+    """Planks of a dark brown wood."""
+    return boards(rng, [(74, 50, 30), (84, 57, 34), (94, 65, 40)], (50, 33, 20))
+
+
+def light_planks(rng):
+    """Planks of a pale wood, like birch."""
+    return boards(rng, [(190, 170, 122), (202, 183, 134), (214, 196, 148)], (150, 128, 88))
+
+
+BOOKS = [(118, 40, 36), (52, 70, 108), (62, 94, 52), (142, 108, 52), (88, 58, 98), (106, 72, 48), (58, 92, 94)]
+
+
+def bookshelf(rng):
+    """A bookshelf's side: shelves at the top, middle and bottom, and two rows of books of mixed colours and
+    heights between them, the shelf's dark back showing above the shorter ones."""
+    out = planks(rng)
+    rim = shades("LogBark")
+    for top in (0, 7, 14):
+        out[top:top + 2] = shades("LogEnd")[1:3][levels(noise(rng, (0, 3))[top:top + 2], 2)]
+        out[top + 1] = rim[-1]
+    for top in (2, 9):  # five rows of books on each shelf
+        out[top:top + 5] = rim[0]
+        x = 0
+        while x < 16:
+            width = min(16 - x, rng.integers(1, 3))
+            spine = np.array(BOOKS[rng.integers(len(BOOKS))], float)
+            short = rng.integers(0, 3)
+            out[top + short:top + 5, x:x + width] = spine
+            out[top + short:top + 5, x + width - 1] = spine * 0.8  # shaded down its right
+            out[top + 1 + short, x:x + width] = spine * 1.2  # a band across the spine
+            x += width
+    return out
+
+
+def barrel_wood():
+    """A barrel's staves and lid, in the planks' wood darkened, and the seams between them."""
+    return shades("LogEnd")[:3] * 0.78, shades("LogBark")[1]
+
+
+def barrel_end(rng):
+    """A barrel's lid or base: boards inside the ends of its staves, with an iron band just inside them."""
+    wood, seam = barrel_wood()
+    out = boards(rng, wood, seam)
+    out[[0, 15]] = out[:, [0, 15]] = wood[0] * 0.85
+    out[1, 1:15] = out[1:15, 1] = IRON[2]  # lit along the top and left, shaded along the bottom and right
+    out[14, 1:15] = out[1:15, 14] = IRON[1]
+    return out
+
+
+def barrel_top(rng):
+    """The barrel's lid, with a small dark bung hole."""
+    out = barrel_end(rng)
+    out[6:9, 9:12] = IRON[1]
+    out[7, 10] = (24, 18, 12)
+    return out
+
+
+def barrel_side(rng):
+    """A barrel's side, standing upright: four staves up the tile and two iron hoops across them."""
+    wood, seam = barrel_wood()
+    x = np.arange(16)
+    out = wood[levels(noise(rng, (4, 0)) + (rng.random(4) * 0.4)[x // 4][None, :], 3)]
+    out[:, 3::4] = seam
+    for top in (2, 12):
+        out[top] = IRON[2]
+        out[top + 1] = IRON[1]
+    return out
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
-            IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceSide=furnace_side,
+            IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceFront=furnace_front,
             TallGrass=tall_grass, Poppy=poppy, Dandelion=dandelion, Cornflower=cornflower, Torch=torch, BedTop=bed_top,
             BedSide=bed_side, FarmlandTop=farmland_top, **{f"Wheat{stage}": wheat(stage) for stage in range(7)},
             RipeWheat=wheat(7), ChestTop=chest_top, ChestSide=chest_side, StructureVoid=structure_void,
             LootMarker=loot_marker, Fern=fern, GoldOre=gold_ore, FrostCrystalOre=frost_crystal_ore, JadeOre=jade_ore,
             EmberOre=ember_ore, GoldBlock=gold_block, FrostCrystalBlock=frost_crystal_block, PolishedJade=polished_jade,
-            BrightSteelBlock=bright_steel_block, EmberLamp=ember_lamp)
+            BrightSteelBlock=bright_steel_block, EmberLamp=ember_lamp,
+            FurnaceSide=furnace_side, Glass=glass, Vines=vines, DoorBottom=door_bottom, DoorTop=door_top,
+            Trapdoor=trapdoor, Ladder=ladder, Lantern=lantern, MossyCobblestone=mossy_cobblestone,
+            CrackedStoneBricks=cracked_stone_bricks, MossyStoneBricks=mossy_stone_bricks, PolishedStone=polished_stone,
+            Terracotta=terracotta((152, 94, 67)), RedTerracotta=terracotta((143, 61, 47)), YellowTerracotta=terracotta((186, 133, 35)),
+            BlueTerracotta=terracotta((70, 62, 94)), GreenTerracotta=terracotta((76, 83, 42)), DarkPlanks=dark_planks,
+            LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":
@@ -536,6 +810,6 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     for name in a.tiles or DRAW:
         rgb = DRAW[name](np.random.default_rng([a.seed, list(DRAW).index(name)]))
-        # plants and the torch are drawn as RGBA, on transparency, and every other tile as RGB
+        # plants, the torch and the other cut-outs are drawn as RGBA, on transparency, and every other tile as RGB
         Image.fromarray(np.clip(np.asarray(rgb).round(), 0, 255).astype("uint8")).convert("RGBA").save(OUT / f"{name}.png")
         print("drew", name)

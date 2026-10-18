@@ -12,7 +12,7 @@ use super::generator::ground_top;
 use super::noise::NoiseGenerator;
 use super::trees::{hash, Tree, TREE_REACH};
 use super::WATER_LEVEL;
-use crate::block::BlockType;
+use crate::block::{Block, BlockType};
 pub use template::{Placement, Structure, Template, LOOT, STRUCTURE_DEPTH, STRUCTURE_HEIGHT};
 
 // Each structure type's file, built into the game.
@@ -98,16 +98,16 @@ impl Placed {
     // What the block `at` in its footprint becomes, over ground `height` high, if the structure
     // changes it: its own blocks and the air it clears; under its floor, the foundation up from
     // the ground; and over it, air down to the floor, clearing the ground and what grows on it.
-    fn stamp(&self, at: I64Vec3, height: i64) -> Option<BlockType> {
+    fn stamp(&self, at: I64Vec3, height: i64) -> Option<Block> {
         let template = self.template();
         if let Some(block) = template.cell(self.rotation, at - self.corner()) {
             return Some(block);
         }
         let ground = ground_top(height);
         if at.y < self.min.y {
-            (at.y >= ground).then_some(template.foundation)
+            (at.y >= ground).then_some(template.foundation.into())
         } else {
-            (at.y <= ground).then_some(BlockType::Air)
+            (at.y <= ground).then_some(Block::AIR)
         }
     }
 
@@ -123,7 +123,7 @@ impl Placed {
         size: i64,
         (first, last): (IVec3, IVec3),
         mut height_at: impl FnMut(i64, i64) -> i64,
-        mut place: impl FnMut(IVec3, BlockType),
+        mut place: impl FnMut(IVec3, Block),
     ) {
         let (low, high) = self.bounds();
         let cell_of = |block: I64Vec3| (block - origin).div_euclid(I64Vec3::splat(size)).as_ivec3();
@@ -150,7 +150,9 @@ impl Placed {
                                 *heights[column as usize].get_or_insert_with(|| height_at(bx, bz));
                             for by in min.y..min.y + size {
                                 match self.stamp(I64Vec3::new(bx, by, bz), height) {
-                                    Some(BlockType::Air) => cleared += 1,
+                                    Some(Block::AIR) => cleared += 1,
+                                    // cells wider than a block draw only its type
+                                    Some(block) if size > 1 => blocks.add(block.kind.into()),
                                     Some(block) => blocks.add(block),
                                     None => {}
                                 }
@@ -161,7 +163,7 @@ impl Placed {
                     if let Some(block) = blocks.commonest().filter(|_| 2 * built >= volume) {
                         place(cell, block);
                     } else if 2 * (built + cleared) >= volume {
-                        place(cell, BlockType::Air);
+                        place(cell, Block::AIR);
                     }
                 }
             }
@@ -190,15 +192,15 @@ impl Placed {
                     for x in 0..footprint.x {
                         let at = I64Vec3::new(x, y, z);
                         let block = template.cell(self.rotation, at);
-                        if let Some(block) = block.filter(|&b| b != BlockType::Air) {
+                        if let Some(block) = block.filter(|&b| b != Block::AIR) {
                             (low, high) = (low.min(at), high.max(at));
-                            blocks.add(block);
+                            blocks.add(block.kind.into());
                         }
                     }
                 }
             }
             if let Some(block) = blocks.commonest() {
-                boxes.push((corner + low, corner + high + 1, block));
+                boxes.push((corner + low, corner + high + 1, block.kind));
             }
         }
         boxes
@@ -231,10 +233,10 @@ pub fn clear_trees(trees: &mut Vec<Tree>, structures: &[Placed]) {
 
 // How many of each block, in the order they're first seen.
 #[derive(Default)]
-struct Tally(Vec<(BlockType, i64)>);
+struct Tally(Vec<(Block, i64)>);
 
 impl Tally {
-    fn add(&mut self, block: BlockType) {
+    fn add(&mut self, block: Block) {
         match self.0.iter_mut().find(|(b, _)| *b == block) {
             Some((_, count)) => *count += 1,
             None => self.0.push((block, 1)),
@@ -246,7 +248,7 @@ impl Tally {
     }
 
     // the first seen of those seen most
-    fn commonest(&self) -> Option<BlockType> {
+    fn commonest(&self) -> Option<Block> {
         let most = self.0.iter().map(|(_, count)| *count).max()?;
         self.0.iter().find(|(_, c)| *c == most).map(|(b, _)| *b)
     }
@@ -413,9 +415,9 @@ mod tests {
         assert_eq!(1, loot.len());
         let at = loot[0].1;
         assert!(at.xz().cmpgt(I64Vec2::ZERO).all() && at.xz().cmplt(size.xz() - 1).all());
-        let solid = |at: I64Vec3| template.cell(0, at).is_some_and(|b| b != BlockType::Air);
+        let solid = |at: I64Vec3| template.cell(0, at).is_some_and(|b| b != Block::AIR);
         assert!(solid(at - I64Vec3::Y) && !solid(at + I64Vec3::Y));
-        assert_eq!(Some(BlockType::Chest), template.cell(0, at));
+        assert_eq!(Some(BlockType::Chest.into()), template.cell(0, at));
         // its walls stand on a footing all the way round
         for x in 0..size.x {
             for z in 0..size.z {

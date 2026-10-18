@@ -99,7 +99,7 @@ fn draw_authoring_blocks(
                 let coord = ChunkCoordinate(centre + I64Vec3::new(x, y, z));
                 let origin = coord.0 * CHUNK_SIZE as i64;
                 for (local, block) in world.edits().in_chunk(coord) {
-                    let (size, colour) = match block {
+                    let (size, colour) = match block.kind {
                         BlockType::StructureVoid => (VOID_SIZE, VOID_COLOUR),
                         BlockType::LootMarker => (MARKER_SIZE, MARKER_COLOUR),
                         _ => continue,

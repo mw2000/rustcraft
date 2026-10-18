@@ -122,7 +122,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
         Some(ItemStack::new(bricks, 2));
     app.world_mut().write_message(RequestEdit {
         block: below,
-        to: BlockType::Bricks,
+        to: BlockType::Bricks.into(),
         slot: 0,
         seq: 1,
     });
@@ -142,7 +142,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
     let coord = ChunkCoordinate::containing(below);
     let local = ChunkCoordinate::local_block(below);
     let saved_edits: Vec<_> = saved_edits.in_chunk(coord).collect();
-    assert_eq!(vec![(local, BlockType::Bricks)], saved_edits);
+    assert_eq!(vec![(local, BlockType::Bricks.into())], saved_edits);
     assert!(saved.time_of_day > started);
 
     // and the next server spawns the player as they were saved
@@ -182,7 +182,7 @@ fn test_a_server_alone_keeps_the_chunks_near_its_player_loaded() {
     assert!(!app.world().resource::<World>().is_under_ground(under));
     app.world_mut().write_message(RequestEdit {
         block: below,
-        to: BlockType::Bricks,
+        to: BlockType::Bricks.into(),
         seq: 1,
         slot: 0,
     });
@@ -214,7 +214,7 @@ fn walk(
     let block = |at| {
         world
             .is_chunk_generated(ChunkCoordinate::containing(at))
-            .then(|| world.get_block_at(at))
+            .then(|| world.get(at))
     };
     for (mut body, mut player, look) in &mut players {
         body.translation = step(
