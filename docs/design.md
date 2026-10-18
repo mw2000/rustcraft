@@ -64,7 +64,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Biomes | Climate-driven desert, savanna, jungle, forest, taiga, glacier, and foothills round the mountains; grass and leaves tinted by climate and biome (§5.7) | `src/chunks/generate/biome/` |
 | Trees | Broadleaf, pine, jungle giants and acacias, by biome, placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Plants | Tall grass, ferns and flowers on the grass, by climate and biome, drawn as crossed quads at full detail (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
-| Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); so far a ruined watchtower on hilltops | `src/chunks/generate/structures/`, `assets/structures/` |
+| Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); seven so far, from watchtowers on hilltops to temples, ruins, lodges and mineshafts and dungeons underground | `src/chunks/generate/structures/`, `assets/structures/` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
@@ -1320,7 +1320,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   as the machine was too loaded to time). The checksum samples two more layers, so they take
   in gold under the spawn's savanna and embers, besides frost crystal and jade under the taiga
   and jungle columns.
-- Underground structures (mineshafts, dungeons) come with §5.6.
+- Underground structures (mineshafts, dungeons) are built into the rock where caves may cross
+  them, and LODs leave them out as they do caves (§5.6, Built M2.4b).
 
 ### 5.5 Survival
 
@@ -1528,8 +1529,8 @@ landmarks visible from far away (P1).
     nearest the spawn rolls the same from a fresh world as from one that's generated it, and
     which the server fills once on first opening and keeps through closing and reloading.
     Putting the chest there changed the golden checksum, which samples that structure's chunks.
-- **First structures, proposed:** desert temple, forest ruin, glacier outpost, mountain
-  watchtower, mineshaft, dungeon, then villages.
+- **First structures** (M2.4b, built below): desert temple, jungle temple, forest ruin,
+  glacier outpost, watchtower, mineshaft, dungeon; then villages.
 - New biomes come with the structures that need them, such as a jungle for jungle temples.
 - **Built (M2.1): the system, with one structure** (`src/chunks/generate/structures/`).
   - **Templates** are TOML files in `assets/structures/`, one a type, read once into
@@ -1635,6 +1636,91 @@ landmarks visible from far away (P1).
   - All of these are operators' commands (`USAGES`). Generation is untouched: the new blocks
     never generate, and the golden checksum is as it was.
   - Later: copying and pasting a box, and undo, if building in the game asks for them.
+
+- **Built (M2.4b): the first structures** (`assets/structures/`, each written by a script in
+  `.claude/skills/structures/` on a small helper library, `build.py`, for walls, roofs, doors and
+  ladders), each to the style guide below, reviewed in screenshots of the real game from the
+  front, from above, inside and from over a hundred blocks away:
+  - **Watchtower** (reworked, placement kept): an 11 × 11 tower 26 blocks tall, a shaft of
+    weathered stone brick on a sloping cobblestone plinth with a string course of turned-over
+    stairs, arrow slits, vines up its north face, a ladder past a middle floor, and a timber
+    lookout overhanging on stone corbels: log posts, plank walls with a band of glass, a hipped
+    dark plank roof with a flagpole, a bed, a barrel, lanterns and the chest.
+  - **Desert temple** (desert): three tiers of sandstone, each with a sloping skirt and a cornice,
+    banded in terracotta (orange or red for each temple) inlaid with blue, a pyramid-roofed
+    shrine on top, two crenellated towers with lanterns on their corners flanking a portico of
+    four columns, a recessed doorway, and a stair up the east side and the second tier's face.
+    Inside, a pillared hall laid in terracotta with a blue aisle, lit by hanging lanterns and
+    braziers, and an altar; behind it a hatch over a ladder down to a crypt sunk six layers
+    under the temple, with a sarcophagus and three chests. Sand drifts against its foot.
+  - **Jungle temple** (jungle): four tiers of mossy cobblestone and weathered stone brick, each
+    edged with a slope of stairs and grown over with leaves and vines, a broad stair standing
+    out from its face between stepped balustrades to a shrine with jade masks over its door, a
+    corbelled roof and a crest. Under it a dark pillared chamber, a few lanterns, reached by a
+    ladder down from the shrine or a low passage from the north, a chest in each.
+  - **Forest ruin** (forest, the base terrain, taiga): a cottage with a log frame on a cobble
+    footing, cobble below and planks above, a chimney and hearth at its west end; its
+    south-east corner has fallen in with half the dark plank roof, which lies as rubble in the
+    room. A bookshelf, a barrel, a bed, a table and the chest inside, moss, vines, ferns and a
+    bush, and a broken fence round the yard.
+  - **Glacier outpost** (glacier, taiga): a lodge on a stone base standing out from timber walls
+    (dark, plain or light planks for each lodge) in a log frame, under a steep roof, two layers
+    to each step, patched with snow and capped with a snowy ridge, a stone chimney and a
+    woodshed of stacked logs. A porch and a lantern at the door; inside, beds, furnaces in the
+    hearth, a crafting table, barrels, a bookshelf, a table and the chest, lit by lanterns hung
+    from a tie beam. Snow is drifted up its north wall.
+  - **Mineshaft** (underground under any land): two levels of timbered tunnels three wide and
+    three high, framed every four blocks with fence posts and a beam (dark planks or planks for
+    each), boarded floors patched with cobble and gravel, lanterns on posts, a hub with a ladder
+    joining the levels, a second shaft, and three side rooms with barrels, a crafting table, a
+    furnace, heaps of ore and the chests. 48 × 48 and 13 layers.
+  - **Dungeon** (underground, deep): a mossy cobblestone vault nine blocks square, a ring of
+    stone brick under its ceiling, pillars of cobblestone wall, two chests, one lantern, short
+    passages out into the rock, and a `spawner` marker in its middle for M3.3.
+  - **Seeded variation.** A palette entry can be a weighted choice, made afresh for each cell
+    (`stone_bricks*6|mossy_stone_bricks*2|cracked_stone_bricks*2`, weathering, holes with
+    `air`, vines here and there) or once for the whole structure (`terracotta/red_terracotta`),
+    from a seed each placement has, `Placed::variant`, hashed from its cell's (INV-2), so every
+    level of detail chooses the same (INV-5). Every whole-structure choice draws the same number,
+    so entries with the same weights choose alike (a roof's stairs and slabs). `/structure
+    place` chooses from the world's seed and where it's placed, and saving writes what it chose.
+    Templates keep a palette of choices and their cells index it.
+  - **Underground placement.** A placement with `depth = [least, most]` is underground: its
+    floor is that many blocks under the lowest ground over it, sampled every 4 blocks across its
+    footprint, and its top at least 8 under that, under ground over the sea by `min_above_sea`
+    and rising no more than `max_rise`. It's built into the rock as it stands, its `-` cells
+    cleared and its `.` cells left, so where a cave crosses a tunnel the two meet; it doesn't
+    clear or fill the ground, keep trees off, or keep caves under it. LODs leave it out, as they
+    leave caves out, and the chunks round it stay roofed, so they're sealed and meshed only near
+    (§5.4), but not opaque, so they are meshed. Biomes name the base terrain `base`.
+  - **Several types.** Where two types on the same level (surface or underground) would come
+    within a clearing of each other, the one listed later in `FILES` gives way, decided from the
+    earlier types' placements nearby, so it stays local (INV-3); new types go at the end.
+    `STRUCTURE_DEPTH` is 6, for the desert temple's crypt, so a box saved is at most 64 × 33 × 64.
+  - **Rarity**, round the spawns of seeds 3, 42 and 7 over 24 km square: watchtowers 0.1–0.3 a
+    km², forest ruins about 0.3 a km² where there's forest, jungle temples and desert temples one
+    or two every 10 km² of their biomes (a cell 512 square, chance 0.9, ground rising no more
+    than 10 under them), glacier outposts as often on the glaciers, which lie 12 km and more from
+    the spawns; mineshafts 1–2 and dungeons 2–5 a km², under ground, found by caving.
+  - **Loot** (`src/loot.rs`): each structure's chests roll the table of its name: `watchtower`,
+    `desert_temple`, `jungle_temple` (new, jade, iron and gold), `forest_ruin`,
+    `glacier_outpost` (the old `temple`, `ruin` and `outpost` renamed), `mineshaft` and
+    `dungeon`; a test checks every table is a structure's and every structure with chests has one.
+  - **Tests:** every template loads with its chests on floors with room over them whatever it
+    chooses, the dungeon keeps air at its spawner; choices are by weight, the same for a seed
+    and alike for a whole structure, written back as read; instances differ; each type stands
+    where its placement says (biome, rise, depth under every column, hilltops), types keep out
+    of each other's clearings, every type is placed; underground ones are built as their
+    templates into the rock, meet caves, keep their chunks roofed and stay out of LODs, the same
+    in any chunk order; surface ones keep the LOD agreement tests.
+  - **Cost** (INV-7): placing an underground structure samples the ground every 4 blocks over
+    its footprint, some 170 samples (about 250 µs) for a mineshaft, once a cell, remembered as
+    others are; a type giving way asks only the types on its level before it. A/B against the
+    commit before on the bench (alternating, four pairs, on a loaded machine), generation and
+    LOD meshing are within noise; chunk meshing varies ±40% between runs either way, and
+    vertex counts change only by the reworked watchtower near the bench's spawn.
+  - **Determinism:** the golden checksum changed, as the structure nearest seed 3's spawn is
+    the reworked watchtower, and it now samples the nearest structure underground too.
 
 **Style guide for structures (M2.4b on).** Every structure is reviewed in screenshots from
 several angles, near and far, before it lands. It should have:
@@ -2139,9 +2225,9 @@ start.**
     nearest cube far away) and the creative picker all know the shapes.
   - Built: §4.1 (state, shapes, light, LODs, cost), §4.3 (format 5), §4.4 (protocol 15), §5.1
     (placing, doors, climbing, stepping up) and §5.3 (recipes).
-- ☐ **M2.4b First structures,** to the style guide in the `structures` skill (§5.6): desert
+- ☑ **M2.4b First structures,** to the style guide in the `structures` skill (§5.6): desert
   temple, jungle temple, forest ruin, glacier outpost, mineshaft, dungeon, alongside the
-  watchtower, each reworked with the new blocks (§5.6).
+  watchtower, each reworked with the new blocks (§5.6). With it M2.4 is done.
 - ☑ **M2.5 Regional ores and higher tiers.** (§5.3, §5.4)
 - ☑ **M2.6 New biomes.** Starting with the ones structures need (§5.7).
 - ☑ **M2.7 Landmarks.** Great peaks, volcanoes and giant trees (§5.7).

@@ -53,7 +53,7 @@ const fn block(block: BlockType) -> Item {
 
 use Item::*;
 
-// One for each structure planned (§5.6), better the deeper or further out it's found: those near
+// One for each structure (§5.6), better the deeper or further out it's found: those near
 // the surface and the start give food, coal and torches with a little metal, and only now and
 // then a tool, and those deep down or far away iron and iron tools, and what the far climates'
 // ores give (§5.3): each far structure what's found under its own climate, and the deepest
@@ -61,7 +61,7 @@ use Item::*;
 pub const TABLES: &[LootTable] = &[
     // a forest ruin, found early
     LootTable {
-        name: "ruin",
+        name: "forest_ruin",
         rolls: 3..=6,
         entries: &[
             entry(Coal, 2..=6, 10),
@@ -92,9 +92,9 @@ pub const TABLES: &[LootTable] = &[
             entry(IronShovel, 1..=1, 1),
         ],
     },
-    // a camp on a glacier, far out and stocked for the cold
+    // a lodge on a glacier, far out and stocked for the cold
     LootTable {
-        name: "outpost",
+        name: "glacier_outpost",
         rolls: 4..=7,
         entries: &[
             entry(Bread, 2..=5, 10),
@@ -146,9 +146,26 @@ pub const TABLES: &[LootTable] = &[
             entry(BrightSteelPickaxe, 1..=1, 1),
         ],
     },
+    // a temple overgrown by the jungle, holding what's mined under it
+    LootTable {
+        name: "jungle_temple",
+        rolls: 5..=8,
+        entries: &[
+            entry(Jade, 2..=6, 10),
+            entry(IronIngot, 2..=6, 8),
+            entry(Apple, 2..=5, 6),
+            entry(CopperIngot, 2..=6, 5),
+            entry(block(BlockType::Torch), 4..=8, 4),
+            entry(IronAxe, 1..=1, 3),
+            entry(IronPickaxe, 1..=1, 2),
+            entry(GoldIngot, 1..=4, 3),
+            entry(block(BlockType::PolishedJade), 1..=2, 2),
+            entry(BrightSteelIngot, 1..=2, 1),
+        ],
+    },
     // a desert temple, the furthest out and the richest
     LootTable {
-        name: "temple",
+        name: "desert_temple",
         rolls: 5..=9,
         entries: &[
             entry(IronIngot, 3..=8, 10),
@@ -260,16 +277,13 @@ mod tests {
                 assert!(*entry.count.end() <= item.max_stack(), "{item:?}");
             }
         }
-        // one for each structure planned
-        for name in [
-            "ruin",
-            "watchtower",
-            "outpost",
-            "mineshaft",
-            "dungeon",
-            "temple",
-        ] {
-            assert!(LootTable::named(name).is_some(), "{name}");
+        // each one a structure's, so none is left unrolled
+        for table in TABLES {
+            assert!(
+                STRUCTURES.iter().any(|s| s.name == table.name),
+                "{} is no structure's",
+                table.name
+            );
         }
         assert!(LootTable::named("treasure").is_none());
     }

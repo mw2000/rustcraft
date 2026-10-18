@@ -148,8 +148,9 @@ impl ChunkColumns {
         let size = CHUNK_SIZE as i64;
         let cells = (size * size) as usize;
         let mut cave_tops = noise.caves().column_tops(heights, x, z);
-        // caves stay under the ground below a structure, as if there were no mouth there
-        for placed in &structures {
+        // caves stay under the ground below a structure, as if there were no mouth there; those
+        // underground meet the caves where they cross them
+        for placed in structures.iter().filter(|p| !p.is_underground()) {
             for cx in 0..size {
                 for cz in (0..size).filter(|&cz| placed.covers(x * size + cx, z * size + cz)) {
                     let top = &mut cave_tops[Self::index(cx, cz)];

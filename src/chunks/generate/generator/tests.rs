@@ -2525,7 +2525,7 @@ fn test_plants_grow_on_the_grass_at_full_detail_and_never_in_lods() {
     assert!(plants > 20, "{plants} plants");
 }
 
-// The `count` structures nearest seed 3's spawn.
+// The `count` structures on the surface nearest seed 3's spawn.
 fn structures_near_spawn(
     regions: &RegionStore,
     count: usize,
@@ -2534,6 +2534,7 @@ fn structures_near_spawn(
     let (x, z, _) = regions.noise().find_spawn();
     let spawn = I64Vec2::new(x, z);
     let mut found = regions.structures_near(spawn - 3000, spawn + 3000);
+    found.retain(|p| !p.is_underground());
     found.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
     found.truncate(count);
     assert_eq!(count, found.len());
@@ -2571,7 +2572,11 @@ fn test_structures_stand_on_their_foundations_cleared_inside_with_no_trees_or_pl
                 let ground = world.ground(cx, cz)(column.x.rem_euclid(16), column.z.rem_euclid(16));
                 let wanted = |y: i64| {
                     template
-                        .cell(placed.rotation, I64Vec3::new(x, y - corner.y, z))
+                        .cell(
+                            placed.rotation,
+                            I64Vec3::new(x, y - corner.y, z),
+                            placed.variant,
+                        )
                         .map(|cell| cell.kind)
                 };
                 // filled from the ground up to its floor
@@ -2598,13 +2603,17 @@ fn test_structures_stand_on_their_foundations_cleared_inside_with_no_trees_or_pl
                 }
             }
         }
-        // the clearing round it has no trees reaching into it
+        // the clearing round it has no trees reaching into it, though it may have logs and
+        // leaves of its own
         for x in -2..footprint.x + 2 {
             for z in -2..footprint.y + 2 {
                 for y in placed.min.y..top + 8 {
-                    let block = world.block(corner + I64Vec3::new(x, y - corner.y, z));
+                    let at = I64Vec3::new(x, y - corner.y, z);
+                    let block = world.block(corner + at);
+                    let own = template.cell(placed.rotation, at, placed.variant);
                     assert!(
-                        !matches!(block, BlockType::Leaves | BlockType::Log),
+                        own.is_some_and(|b| b.kind == block)
+                            || !matches!(block, BlockType::Leaves | BlockType::Log),
                         "{block:?}"
                     );
                 }
@@ -2675,12 +2684,26 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
                         {
                             continue;
                         }
-                        let solid = (0..8)
-                            .map(|i| min + I64Vec3::new(i & 1, (i >> 1) & 1, i >> 2))
-                            .filter(|&b| is_solid(world.block(b)))
-                            .count();
+                        // the commonest of its blocks in the cell, in the order they're built,
+                        // where they're at least half of it
+                        let mut kinds: Vec<(BlockType, usize)> = Vec::new();
+                        for i in 0..8 {
+                            let b = min + I64Vec3::new(i >> 2, i & 1, (i >> 1) & 1);
+                            let block = world.block(b);
+                            if !placed.covers(b.x, b.z) || block == BlockType::Air {
+                                continue;
+                            }
+                            match kinds.iter_mut().find(|(k, _)| *k == block) {
+                                Some((_, n)) => *n += 1,
+                                None => kinds.push((block, 1)),
+                            }
+                        }
+                        let built: usize = kinds.iter().map(|(_, n)| n).sum();
+                        let most = kinds.iter().map(|(_, n)| *n).max().unwrap_or(0);
+                        let commonest = kinds.iter().find(|(_, n)| *n == most);
+                        let solid = built >= 4 && commonest.is_some_and(|(k, _)| is_solid(*k));
                         let cell = lod.raw(IVec3::new(x as i32, y as i32, z as i32));
-                        assert_eq!(solid >= 4, is_solid(cell), "cell at {min} has {solid} of 8");
+                        assert_eq!(solid, is_solid(cell), "cell at {min} has {kinds:?}");
                         solid_cells += is_solid(cell) as usize;
                     }
                 }
@@ -2695,13 +2718,24 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
                 (0..template.size.x).any(|x| {
                     (0..template.size.z).any(|z| {
                         template
-                            .cell(0, I64Vec3::new(x, y, z))
+                            .cell(0, I64Vec3::new(x, y, z), placed.variant)
                             .is_some_and(|b| b.kind != BlockType::Air)
                     })
                 })
             })
             .max()
             .unwrap();
+        // what it's built of, which a forest's canopy boxes aren't
+        let mut built_of = vec![template.foundation];
+        for y in 0..template.size.y {
+            for z in 0..template.size.z {
+                for x in 0..template.size.x {
+                    let at = I64Vec3::new(x, y, z);
+                    built_of.extend(template.cell(0, at, placed.variant).map(|b| b.kind));
+                }
+            }
+        }
+        built_of.retain(|&b| b != BlockType::Air && b != BlockType::Leaves);
         let chunk = ChunkCoordinate::containing(placed.min);
         for level in 2..=6 {
             let key = LodKey::containing(chunk, level);
@@ -2710,7 +2744,7 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
             let boxes: Vec<_> = lod
                 .boxes
                 .iter()
-                .filter(|b| matches!(b.block, BlockType::Cobblestone | BlockType::StoneBricks))
+                .filter(|b| built_of.contains(&b.block))
                 .map(|b| ((b.min + 0.5) * cell + base, (b.max + 0.5) * cell + base))
                 // a coarse node can hold another structure besides
                 .filter(|(min, max)| {
@@ -3201,4 +3235,71 @@ fn test_shapes_cut_their_holes_out_of_their_shadows() {
         panic!("missing how faces draw");
     };
     assert!(!draws.is_empty() && draws.iter().all(|d| d[1] == super::buffers::CUTOUT));
+}
+
+#[test]
+fn test_structures_underground_are_built_into_the_rock_meeting_caves_and_left_out_of_lods() {
+    use crate::chunks::chunk::ColumnSet;
+    use bevy::math::I64Vec2;
+    let mut world = Generated::new(3);
+    let regions = world.regions.clone();
+    let (x, z, _) = regions.noise().find_spawn();
+    let spawn = I64Vec2::new(x, z);
+    let mut under = regions.structures_near(spawn - 1500, spawn + 1500);
+    under.retain(|p| p.is_underground());
+    under.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
+    let mut caves_met = 0;
+    for name in ["mineshaft", "dungeon"] {
+        for placed in under.iter().filter(|p| p.structure().name == name).take(3) {
+            let template = &placed.structure().template;
+            let (low, high) = placed.bounds();
+            let size = high - low;
+            let mut open = 0;
+            assert_eq!(
+                size,
+                I64Vec3::new(placed.footprint().x, template.size.y, placed.footprint().y)
+            );
+            for x in 0..size.x {
+                for y in 0..size.y {
+                    for z in 0..size.z {
+                        let at = I64Vec3::new(x, y, z);
+                        let block = world.block(low + at);
+                        match template.cell(placed.rotation, at, placed.variant) {
+                            // its own blocks, the tunnels cleared through the rock
+                            Some(cell) => assert_eq!(cell.kind, block, "{name} at {}", low + at),
+                            // and the rock round them as it was, caves and all
+                            None => caves_met += (block == BlockType::Air) as usize,
+                        }
+                    }
+                }
+            }
+            for coord in chunks_over(low, high) {
+                let chunk = world.chunk(coord).clone();
+                // under ground all over, so sealed off from the sky and only meshed near
+                assert_eq!(ColumnSet::ALL, chunk.roofed, "{coord}");
+                open += !chunk.opaque() as usize;
+                // LODs leave it out, as they do caves
+                let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord }, None);
+                for i in 0..CELLS as i64 {
+                    let at = I64Vec3::new(i % 16, i / 16 % 16, i / 256);
+                    let cell = lod.raw(at.as_ivec3());
+                    let built =
+                        template.cell(placed.rotation, coord * 16 + at - low, placed.variant);
+                    if built == Some(crate::block::Block::AIR) {
+                        assert_ne!(BlockType::Air, cell, "{}", coord * 16 + at);
+                    }
+                }
+            }
+            // but its tunnels keep chunks from being opaque, so they're meshed at all
+            assert!(open > 0);
+            // the same whichever order its chunks come in
+            let mut backwards = Generated::new(3);
+            for coord in chunks_over(low, high).into_iter().rev() {
+                let (a, b) = (world.chunk(coord).clone(), backwards.chunk(coord));
+                assert!(a.iter_non_air().eq(b.iter_non_air()), "chunk {coord}");
+            }
+        }
+    }
+    // where caves cross them, they meet
+    assert!(caves_met > 0);
 }

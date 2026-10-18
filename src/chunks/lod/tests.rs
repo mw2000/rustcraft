@@ -474,6 +474,7 @@ fn test_nodes_drawing_a_structure_are_not_known_empty() {
     let (x, z, _) = regions.noise().find_spawn();
     let spawn = I64Vec2::new(x, z);
     let mut structures = regions.structures_near(spawn - 3000, spawn + 3000);
+    structures.retain(|p| !p.is_underground());
     structures.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
     for placed in structures.iter().take(4) {
         let top = placed.bounds().1 - 1;

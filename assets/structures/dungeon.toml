@@ -1,0 +1,117 @@
+# A small vault of mossy cobblestone deep underground. Written by .claude/skills/structures/dungeon.py.
+name = "dungeon"
+
+[placement]
+cell = 256
+chance = 0.5
+biomes = ["forest", "base", "foothills", "taiga", "savanna", "jungle", "desert", "glacier"]
+min_above_sea = 2
+max_rise = 48
+hilltop = false
+depth = [40, 120]
+
+[template]
+size = [13, 6, 13]
+floor = 0
+foundation = "cobblestone"
+palette = { b = "cobblestone|air*2", c = "cobblestone_slab", g = "gravel|air*2", h = "torch|air", l = "lantern[hanging=true]", m = "mossy_cobblestone", o = "cobblestone_wall", r = "torch", s = "mossy_cobblestone*3|cobblestone*2", t = "stone_bricks|mossy_stone_bricks|cracked_stone_bricks", y = "mossy_cobblestone*3|cobblestone*2|gravel" }
+markers = { loot = [[6, 1, 3], [9, 1, 7]], spawner = [[6, 1, 6]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+.............
+.............
+..sssssssss..
+..syyyyyyys..
+..syyyyyyys..
+..syyyyyyys..
+..syyyyyyys..
+..syyyyyyys..
+..syyyyyyys..
+..syyyyyyys..
+..sssssssss..
+.............
+.............
+''',
+  # 1
+  '''
+.............
+.............
+..sssssssss..
+..so-c---os..
+..s------hs..
+..s-------s..
+-g--------s..
+..s-------s..
+..s-------s..
+..sor----os..
+..ssss-ssss..
+......-......
+......b......
+''',
+  # 2
+  '''
+.............
+.............
+..sssssssss..
+..so-----os..
+..s-------s..
+..s-------s..
+----------s..
+..s-------s..
+..s-------s..
+..so-----os..
+..ssss-ssss..
+......-......
+......-......
+''',
+  # 3
+  '''
+.............
+.............
+..sssssssss..
+..so-----os..
+..s-------s..
+..s-------s..
+..sl------s..
+..s-------s..
+..s-------s..
+..so-----os..
+..sssssssss..
+.............
+.............
+''',
+  # 4
+  '''
+.............
+.............
+..ttttttttt..
+..to-----ot..
+..t-------t..
+..t-------t..
+..tm------t..
+..t-------t..
+..t-------t..
+..to-----ot..
+..ttttttttt..
+.............
+.............
+''',
+  # 5
+  '''
+.............
+.............
+..sssssssss..
+..sssssssss..
+..sssssssss..
+..sssssssss..
+..sssssssss..
+..sssssssss..
+..sssssssss..
+..sssssssss..
+..sssssssss..
+.............
+.............
+''',
+]

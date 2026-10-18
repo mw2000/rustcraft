@@ -18,6 +18,7 @@ use crate::authoring::{Selection, MARKERS, MAX_SIZE};
 use crate::block::{Block, BlockType};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::generate::structures::{Placement, Structure, Template, STRUCTURES};
+use crate::chunks::generate::trees::hash;
 use crate::collision::looked_at;
 use crate::containers::Containers;
 use crate::farming::Crops;
@@ -155,9 +156,9 @@ impl Authoring<'_, '_> {
 
     /// Builds the structure `name` turned `rotation` quarter turns with its floor on the block
     /// that `player`, whose feet are at `feet`, looks at, or else where they stand, centred on
-    /// it as generation centres one on its spot, and selects it. Cells it leaves as the world has
-    /// them become structure voids and its markers marker blocks, so saving it again gives the
-    /// same template back.
+    /// it as generation centres one on its spot, its choices made from the seed and where it
+    /// is, and selects it. Cells it leaves as the world has them become structure voids and its
+    /// markers marker blocks, so saving it again gives the template back as it chose.
     pub(super) fn place(
         &mut self,
         world: &mut World,
@@ -175,6 +176,7 @@ impl Authoring<'_, '_> {
         let footprint = template.footprint(rotation);
         let size = I64Vec3::new(footprint.x, template.size.y, footprint.y);
         let min = ground - I64Vec3::new(footprint.x / 2, template.floor, footprint.y / 2);
+        let variant = variant(world.seed(), min);
         let marked: Vec<(I64Vec3, BlockType)> = template
             .markers
             .iter()
@@ -190,7 +192,7 @@ impl Authoring<'_, '_> {
                     let block = match marked.iter().find(|(marker, _)| *marker == at) {
                         Some(&(_, marker)) => marker.into(),
                         None => template
-                            .cell(rotation, at)
+                            .cell(rotation, at, variant)
                             .unwrap_or(BlockType::StructureVoid.into()),
                     };
                     self.edit(world, min + at, block);
@@ -228,6 +230,12 @@ impl Authoring<'_, '_> {
         }
         self.crops.remove(at);
     }
+}
+
+// The seed a structure placed with its lowest corner at `min` makes its choices from, so each
+// one placed comes out weathered differently, as generated ones do.
+fn variant(seed: u32, min: I64Vec3) -> u64 {
+    hash(hash(seed.into(), min.x, min.y), min.z, 0)
 }
 
 /// The structures there are to place: those built in and those saved in the world's
@@ -441,6 +449,11 @@ mod tests {
             *self.app.world().get::<Selection>(self.host).unwrap()
         }
 
+        // The seed a structure placed from `min` chooses its blocks by.
+        fn variant(&self, min: I64Vec3) -> u64 {
+            super::variant(self.app.world().resource::<World>().seed(), min)
+        }
+
         fn saved(&self, name: &str) -> Structure {
             let path = self.dir.join(STRUCTURES_DIR).join(format!("{name}.toml"));
             toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
@@ -488,8 +501,8 @@ mod tests {
             "{too_big}"
         );
         let refused = server.run("/structure save hut").unwrap_err();
-        assert!(refused.contains("at most 64 by 31 by 64"), "{refused}");
-        server.run("/pos2 ~ 31 ~").unwrap();
+        assert!(refused.contains("at most 64 by 33 by 64"), "{refused}");
+        server.run("/pos2 ~ 33 ~").unwrap();
         let refused = server.run("/structure save hut").unwrap_err();
         assert!(refused.contains("at most"), "{refused}");
         // one wide enough, but reaching out of the chunks loaded
@@ -497,8 +510,8 @@ mod tests {
         let refused = server.run("/structure save hut").unwrap_err();
         assert!(refused.contains("isn't loaded"), "{refused}");
         // and a floor deeper than structures sink isn't saved
-        server.run("/pos2 0 5 0").unwrap();
-        let refused = server.run("/structure save hut 5").unwrap_err();
+        server.run("/pos2 0 8 0").unwrap();
+        let refused = server.run("/structure save hut 7").unwrap_err();
         assert!(refused.contains("wouldn't load"), "{refused}");
     }
 
@@ -523,7 +536,7 @@ mod tests {
         assert_eq!(BlockType::Stone, template.foundation);
         let cell = |x, y, z| {
             template
-                .cell(0, I64Vec3::new(x, y, z))
+                .cell(0, I64Vec3::new(x, y, z), 0)
                 .map(|cell| cell.kind)
         };
         assert_eq!(Some(BlockType::Stone), cell(1, 0, 1));
@@ -534,7 +547,11 @@ mod tests {
         assert_eq!(loot, template.markers);
 
         let list = server.run("/structure list").unwrap();
-        assert_eq!("Built in: watchtower\nSaved in this world: hut", list);
+        assert_eq!(
+            "Built in: watchtower, desert_temple, jungle_temple, forest_ruin, glacier_outpost, \
+             mineshaft, dungeon\nSaved in this world: hut",
+            list
+        );
     }
 
     #[test]
@@ -542,21 +559,22 @@ mod tests {
         let mut server = Server::new("place");
         let placed = server.run("/structure place watchtower 90").unwrap();
         assert_eq!(
-            "Placed watchtower, 7 by 20 by 7, from -3, 0, -3, turned 90 degrees, and selected it",
+            "Placed watchtower, 11 by 27 by 11, from -5, 0, -5, turned 90 degrees, and selected it",
             placed
         );
         let template = &watchtower().template;
         let (_, loot) = template.markers[0];
-        let min = I64Vec3::new(-3, 0, -3);
-        for y in 0..20 {
-            for z in 0..7 {
-                for x in 0..7 {
+        let min = I64Vec3::new(-5, 0, -5);
+        let variant = server.variant(min);
+        for y in 0..27 {
+            for z in 0..11 {
+                for x in 0..11 {
                     let at = I64Vec3::new(x, y, z);
                     let wanted = if at == template.turn(1, loot) {
                         BlockType::LootMarker
                     } else {
                         template
-                            .cell(1, at)
+                            .cell(1, at, variant)
                             .map_or(BlockType::StructureVoid, |cell| cell.kind)
                     };
                     assert_eq!(wanted, server.block_at(min + at), "{at}");
@@ -566,7 +584,7 @@ mod tests {
         // its floor on the block looked at, over its footing sunk into it
         assert_eq!(
             Selection {
-                corners: [Some(min), Some(I64Vec3::new(3, 19, 3))],
+                corners: [Some(min), Some(I64Vec3::new(5, 26, 5))],
                 floor: Some(1),
             },
             server.selection()
@@ -578,22 +596,35 @@ mod tests {
     }
 
     #[test]
-    fn test_the_watchtower_placed_and_saved_again_is_the_same_turned_or_not() {
+    fn test_the_watchtower_placed_and_saved_again_is_the_same_as_it_chose_turned_or_not() {
         let mut server = Server::new("round-trip");
         server.run("/structure place watchtower").unwrap();
         server.run("/structure save watchtower").unwrap();
-        // placement and all, as it's kept by name
-        assert_eq!(*watchtower(), server.saved("watchtower"));
+        // placement and all, as it's kept by name, with the blocks it chose
+        let (saved, template) = (server.saved("watchtower"), &watchtower().template);
+        assert_eq!(watchtower().placement, saved.placement);
+        let variant = server.variant(I64Vec3::new(-5, 0, -5));
+        let size = template.size;
+        assert_eq!((size, 1), (saved.template.size, saved.template.floor));
+        for y in 0..size.y {
+            for z in 0..size.z {
+                for x in 0..size.x {
+                    let at = I64Vec3::new(x, y, z);
+                    assert_eq!(template.cell(0, at, variant), saved.template.cell(0, at, 0));
+                }
+            }
+        }
+        assert_eq!(template.markers, saved.template.markers);
 
         server.run("/structure place watchtower 270").unwrap();
         server.run("/structure save turned").unwrap();
-        let (turned, template) = (server.saved("turned").template, &watchtower().template);
+        let turned = server.saved("turned").template;
         assert_eq!((template.size.zyx(), 1), (turned.size, turned.floor));
-        for y in 0..20 {
-            for z in 0..7 {
-                for x in 0..7 {
+        for y in 0..size.y {
+            for z in 0..size.z {
+                for x in 0..size.x {
                     let at = I64Vec3::new(x, y, z);
-                    assert_eq!(template.cell(3, at), turned.cell(0, at), "{at}");
+                    assert_eq!(template.cell(3, at, variant), turned.cell(0, at, 0), "{at}");
                 }
             }
         }

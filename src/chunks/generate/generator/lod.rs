@@ -210,7 +210,7 @@ impl LodBlocks {
         let structures = if (real_trees || cell <= STRUCTURE_MAX_CELL)
             && structures_may_reach(base.y - cell, base.y + span, lowest, highest)
         {
-            regions.structures_near(min - STRUCTURE_REACH, min + span + cell + STRUCTURE_REACH)
+            surface_structures(regions, min, span + cell)
         } else {
             Vec::new()
         };
@@ -371,8 +371,7 @@ impl LodBlocks {
         let min = I64Vec2::new(base.x, base.z) - cell;
         let mut structures = Vec::new();
         if structures_may_reach(base.y - cell, base.y + span, lowest, highest) {
-            structures =
-                regions.structures_near(min - STRUCTURE_REACH, min + span + cell + STRUCTURE_REACH);
+            structures = surface_structures(regions, min, span + cell);
             for placed in &structures {
                 placed.build(
                     base,
@@ -666,6 +665,15 @@ pub fn generate_lod_mesh(
         &light,
     );
     meshes.has_geometry().then_some(meshes)
+}
+
+// The structures on the surface whose footprints, or the clearings round them, reach into the
+// columns `width` wide from `min`: LODs leave out those underground, as they do caves.
+fn surface_structures(regions: &RegionStore, min: I64Vec2, width: i64) -> Vec<Placed> {
+    let mut structures =
+        regions.structures_near(min - STRUCTURE_REACH, min + width + STRUCTURE_REACH);
+    structures.retain(|placed| !placed.is_underground());
+    structures
 }
 
 // The boxes `placed` is drawn as in a coarse node with its lowest block and cell size at `base`,

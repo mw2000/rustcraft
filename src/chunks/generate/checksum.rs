@@ -24,14 +24,14 @@ const FAR_COLUMNS: [I64Vec2; 4] = [
 // cavern's depth, near the bottom where ores are richest, where embers are, halfway between,
 // and where gold is under the spawn's savanna.
 const DEEP_LAYERS: [i64; 5] = [1, 3, 6, 12, 20];
-// The nearest structure to the spawn within this many blocks each way is sampled too, its floor
-// and the chunk over it, so the structures a world builds are checked like its terrain, and so
-// is the nearest landmark, at its middle.
+// The nearest structures to the spawn within this many blocks each way, on the surface and
+// underground, are sampled too, each its floor and the chunk over it, so the structures a world
+// builds are checked like its terrain, and so is the nearest landmark, at its middle.
 const STRUCTURE_SEARCH: i64 = 4096;
 
 /// The checksum of the sample chunks `seed` generates: a few at the spawn and a few thousands
 /// of blocks away, from the surface with its plants and trees down through caves and ores, a
-/// structure and a landmark.
+/// structure on the surface and one underground, and a landmark.
 /// FNV-1a over each block's name and each column's roof, so it's the same on every machine and
 /// in every version that generates the same blocks, whatever the block table's order.
 pub fn world_checksum(seed: u32) -> u64 {
@@ -58,13 +58,26 @@ fn samples(seed: u32) -> Vec<ChunkData> {
         let ground = ChunkCoordinate::containing(I64Vec3::new(at.x, ground, at.y));
         [ground, ChunkCoordinate(ground.0 + I64Vec3::Y)]
     });
-    let structure = regions
-        .structures_near(spawn - STRUCTURE_SEARCH, spawn + STRUCTURE_SEARCH)
+    // looking further only as far as it must, as there are many underground
+    let mut search = STRUCTURE_SEARCH / 8;
+    let near = loop {
+        let near = regions.structures_near(spawn - search, spawn + search);
+        let found = |under: bool| near.iter().any(|placed| placed.is_underground() == under);
+        if search >= STRUCTURE_SEARCH || found(false) && found(true) {
+            break near;
+        }
+        search *= 2;
+    };
+    let structures = [false, true]
         .into_iter()
-        .min_by_key(|placed| (placed.min.xz() - spawn).length_squared())
+        .filter_map(|underground| {
+            near.iter()
+                .filter(|placed| placed.is_underground() == underground)
+                .min_by_key(|placed| (placed.min.xz() - spawn).length_squared())
+        })
         .map(|placed| ChunkCoordinate::containing(placed.min))
-        .into_iter()
-        .flat_map(|floor| [floor, ChunkCoordinate(floor.0 + I64Vec3::Y)]);
+        .flat_map(|floor| [floor, ChunkCoordinate(floor.0 + I64Vec3::Y)])
+        .collect::<Vec<_>>();
     std::iter::once(spawn)
         .chain(FAR_COLUMNS)
         .flat_map(|column| {
@@ -75,7 +88,7 @@ fn samples(seed: u32) -> Vec<ChunkData> {
                 .chain(DEEP_LAYERS)
                 .map(move |layer| ChunkCoordinate(ground.0.with_y(layer)))
         })
-        .chain(structure)
+        .chain(structures)
         .chain(landmark)
         .map(|coord| generate_chunk(regions.clone(), coord))
         .collect()
@@ -123,10 +136,12 @@ mod tests {
     // update it deliberately, knowing that worlds will generate differently from before, so a
     // game of the version before can't join one of this version, and saved edits sit on new
     // terrain. CI runs this on Linux, Windows and macOS to see whether they agree (D-3).
-    // Last changed by M2.7, which raised great peaks and volcanoes and grew giant trees, kept
-    // structures and caves out of them, and sampled the landmark nearest the spawn, a volcano
-    // with its crater's magma, moving a far column there that had fallen inside one.
-    const GOLDEN: u64 = 0x1d28_6dd7_c575_1b75;
+    // Last changed by M2.4b, as the structure nearest the spawn is the reworked watchtower,
+    // and the samples now take in the structure underground nearest it too, a dungeon. Before
+    // that by M2.7, which raised great peaks and volcanoes and grew giant trees, kept structures
+    // and caves out of them, and sampled the landmark nearest the spawn, a volcano with its
+    // crater's magma, moving a far column there that had fallen inside one.
+    const GOLDEN: u64 = 0x35c1_61de_777e_80f9;
 
     #[test]
     fn test_generation_matches_its_golden_checksum() {
@@ -142,9 +157,14 @@ mod tests {
             .collect();
         assert!(blocks.iter().any(BlockType::is_plant));
         assert!(blocks.contains(&BlockType::Leaves));
+        // the watchtower's stone and a mineshaft's or dungeon's timber or cobble
         assert!(blocks.contains(&BlockType::StoneBricks));
         // the volcano nearest the spawn's crater
         assert!(blocks.contains(&BlockType::Magma));
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            BlockType::MossyCobblestone | BlockType::DarkPlanksFence | BlockType::PlanksFence
+        )));
         // and the far climates' ores, under the spawn's savanna and the taiga and jungle
         // columns, and the deepest
         for ore in [

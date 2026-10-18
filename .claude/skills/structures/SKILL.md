@@ -6,8 +6,28 @@ description: Author or change rustcraft's structure templates (watchtowers, ruin
 # Structures
 
 Each structure type is one TOML file in `assets/structures/`, built into the game with
-`include_str!` in the `STRUCTURES` list in `src/chunks/generate/structures/mod.rs`, so add a new
-file there too. Generation, placement and LODs are described in `docs/design.md` §5.6.
+`include_str!` in the `FILES` list in `src/chunks/generate/structures/mod.rs`, so add a new
+file there too, at the end: where two types would stand together the later one gives way, so a
+type added earlier would move those after it. Generation, placement and LODs are described in
+`docs/design.md` §5.6.
+
+## The style guide
+
+Every structure follows the style guide in `docs/design.md` §5.6, and is checked in screenshots
+of the real game before it lands. A checklist:
+
+- [ ] **Silhouette:** varied heights, an overhanging roof, a tower, chimney or crest; never a
+  flat-topped box.
+- [ ] **Depth:** recessed doors and windows, pillars, posts, beams, corbels, string courses and
+  cornices standing out, walls thicker at the base (a plinth or skirt), steps up to the door.
+- [ ] **Palette:** a main material, a trim and an accent suited to the biome: sandstone,
+  terracotta bands and blue inlay; mossy cobble, stone brick and jade; stone, logs and planks.
+- [ ] **Weathering and variety:** per-cell choices of mossy and cracked blocks, holes, vines and
+  drifts; a whole-structure choice or two (a wall's planks, a band's colour); broken corners.
+- [ ] **Inside:** furnished (beds, barrels, bookshelves, tables of a fence and a slab, furnaces)
+  and lit with lanterns or torches, the chests where they make sense.
+- [ ] **Screenshots** from the front, from above, inside and from 100+ blocks away, read and
+  iterated on.
 
 ## The format
 
@@ -21,6 +41,7 @@ biomes = ["forest", "foothills"] # by `Biome::name`
 min_above_sea = 12               # its floor, in blocks over the sea
 max_rise = 4                     # most the ground may rise and fall under its footprint
 hilltop = true                   # climb from its spot to the top of the hill
+# depth = [24, 64]               # underground: its floor this far under the lowest ground
 
 [template]
 size = [7, 20, 7]                # x, layers, z
@@ -38,6 +59,20 @@ ccccccc
 
 - `.` leaves the world as it is and `-` clears it to air, which carves interiors out of the
   ground. Neither can be in the palette.
+- **Seeded variation:** a palette entry can be a choice of blocks, by weight (`*n`, 1 if left
+  out). `|` chooses afresh for each cell, for weathering: `stone_bricks*6|mossy_stone_bricks*2|cracked_stone_bricks*2`,
+  `vines[facing=north]|air*3` for vines here and there, `barrel[facing=up]|air` for a barrel some
+  have. `/` chooses once for the whole structure, for a variant: `terracotta/red_terracotta`.
+  Every whole choice draws the same number, so entries with the same weights in the same order
+  choose alike (`dark_planks_fence/planks_fence` with `dark_planks/planks`). Each placed
+  structure chooses from its own seed, the same at every level of detail; `/structure place`
+  from the world's seed and where it's placed, so saving it writes the blocks it chose.
+- Biomes are named as `Biome::name` has them, and `base` is the base terrain no biome owns.
+- **Underground:** with `depth`, the structure's floor is that many blocks (a number hashed
+  in the range) under the lowest ground over its footprint, its top at least 8 under it; the
+  ground over it must be `min_above_sea` over the sea and rise and fall no more than `max_rise`.
+  It's built into the rock as it is, with no foundation or clearing: `-` carves tunnels and `.`
+  leaves the rock, so caves crossing it meet it. LODs leave it out, as they leave out caves.
 - A palette entry is a block's name, with its state in brackets if it has one, as saves and
   `/structure save` write it: `log[axis=x]`, `stone_brick_stairs[facing=east,half=top]`,
   `door[facing=north,hinge=right]` (the lower block; write its upper one `half=top` above it),
@@ -57,11 +92,11 @@ ccccccc
   filled up to it with `foundation`, so `.` there is air above the floor. Trees keep clear of the
   footprint. Plants under it are cleared with the ground.
 - Keep the height over the floor within `STRUCTURE_HEIGHT` (27) and the sunk layers within
-  `STRUCTURE_DEPTH` (4); loading refuses a template that doesn't fit, or whose layers don't match
+  `STRUCTURE_DEPTH` (6); loading refuses a template that doesn't fit, or whose layers don't match
   its size.
 - A `loot` marker is a chest, which rolls the loot table named after the structure (in
   `src/loot.rs`) the first time it's opened, so add a table for a new structure with chests.
-  Other marker kinds are kept for later milestones.
+  Other marker kinds are kept for later milestones, such as the dungeon's `spawner` (M3.3).
 
 ## Authoring
 
@@ -92,11 +127,26 @@ structure.
 ### By script
 
 A shape that's easier to describe than to build, or one drawn from a seed, can be written by a
-script here, so a change is a small diff. `watchtower.py` writes
-`assets/structures/watchtower.toml` from a fixed seed: edit it and rerun.
+script here, so a change is a small diff. Every built-in structure is: `watchtower.py`,
+`desert_temple.py`, `jungle_temple.py`, `forest_ruin.py`, `glacier_outpost.py`, `mineshaft.py`
+and `dungeon.py` each write their file in `assets/structures/`; edit one and rerun it.
 
 ```
-python3 .claude/skills/structures/watchtower.py
+cd .claude/skills/structures && python3 desert_temple.py
+```
+
+They're written with `build.py`, a small library: a `Build` box of cells holding block text
+(`AIR` clears, None leaves), `fill`, `walls`, `corners`, `hollow`, `gable` and `hip` roofs of
+any stairs, `door`, `ladder`, `mark` for markers, `stairs(material, facing, top)` and
+`slab(material, top)` for the names, and `write`, which gives out palette keys by name. Facing:
+north is up the page (-z); a stair climbs towards its facing, so a roof's south slope faces
+north; ladders and vines face out of the wall they're on.
+
+For a quick look before running the game, `preview.py` sketches a template from its four sides
+and cut away at the layers given, coloured by the atlas (Pillow and NumPy):
+
+```
+python3 .claude/skills/structures/preview.py assets/structures/desert_temple.toml /tmp/t.png 1 3,9
 ```
 
 ## Checking
@@ -106,7 +156,10 @@ python3 .claude/skills/structures/watchtower.py
 - Changing a template or placement changes generation, so the golden checksum
   (`src/chunks/generate/checksum.rs`) changes when the structure nearest seed 3's spawn does:
   update it deliberately (CLAUDE.md).
-- Density: `RegionStore::structures_near` over a square of the world counts them. The
-  watchtower comes to about 3 per 10 km² round seed 3's spawn, fewer where forest and foothills
-  are scarce.
-- To see one in the game, find its position with `structures_near` and fly there with `/tp`.
+- Density: `RegionStore::structures_near` over a square of the world counts them; §5.6 (Built
+  M2.4b) has each type's. Aim for a few surface structures in a player's first hour (some
+  15 km walked), and more underground, where caves find them. The far climates' structures
+  are further out, as their biomes are.
+- To see one in the game, find its position with `structures_near` and fly there with `/tp`, or
+  write a world whose `world.toml` puts a creative player looking at it and run the game with
+  `RC_WORLD` set to it (headless under Xvfb, `BEVY_ASSET_ROOT` set to the repository).
