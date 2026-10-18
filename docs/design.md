@@ -1537,6 +1537,30 @@ Done when: **the world feels inhabited, and night is dangerous.**
   little music — inspired by packs like Enhanced Audio, from CC0 sources or made by our own
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
   silent and audio-free.
+- ☐ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
+  every setting lives in menus rather than environment variables:
+  - **Title screen:** Singleplayer, Multiplayer, Settings, Quit, over a slowly panning view of a
+    world in the distance (the horizon is the game's best feature, P1).
+  - **Worlds:** a list of saved worlds (name, seed, game mode, last played, a small map preview
+    from M2.9 if cheap); create a world (name, seed or random, game mode), play, rename,
+    duplicate, delete with a confirmation. Replaces `RC_WORLD` and `RC_SEED` for players
+    (they stay for development).
+  - **Multiplayer:** a saved list of servers (name, address) with a ping and player count where
+    the protocol allows; join by address; your player name (replacing `RC_NAME`). Replaces
+    `RC_JOIN`.
+  - **Settings**, saved per player, applied live where possible:
+    - *Video:* render distance and full-detail distance (`settings.toml`'s renderer options),
+      field of view, fullscreen/windowed, vsync and a frame cap, UI scale, shadows, clouds, and a
+      low/medium/high preset.
+    - *Controls:* mouse sensitivity and inversion, and rebindable keys for every action.
+    - *Audio:* the volumes from M-A3.
+    - *Accessibility:* view bobbing and hurt tilt off, larger text, a crosshair choice.
+  - **Pause menu:** Back to Game, Settings, Open to Friends (with the address to share and who's
+    joined), Save and Quit to Title.
+  - **Death and loading screens** in the same style: a loading screen with progress while the
+    world around the spawn generates, instead of hanging in the air.
+  - Consistent look across all of them (one set of shared widgets: buttons, sliders, toggles,
+    text fields, lists, tabs), keyboard and mouse navigation, and Escape always going back.
 
 ---
 
