@@ -24,6 +24,7 @@ use crate::clock::{TimeOfDay, START_TIME};
 use crate::edits::Edits;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
+use crate::inventory::Inventory;
 use crate::player::{Player, PlayerLook, PlayerOwner};
 use crate::world::World;
 use region::{ChunkEdits, Region};
@@ -217,6 +218,7 @@ struct Savable<'w, 's> {
             &'static PlayerLook,
             &'static GameMode,
             &'static Hotbar,
+            &'static Inventory,
             &'static PlayerOwner,
         ),
     >,
@@ -230,8 +232,8 @@ impl Savable<'_, '_> {
             .players
             .iter()
             .find(|(.., owner)| owner.0 == ClientId::Server)
-            .map(|(body, player, look, mode, hotbar, _)| {
-                PlayerState::of(body, *look, player.movement, *mode, *hotbar)
+            .map(|(body, player, look, mode, hotbar, inventory, _)| {
+                PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory)
             });
         save.snapshot(self.world.edits_mut(), file)
     }
@@ -300,6 +302,8 @@ mod tests {
     use crate::edits::Edits;
     use crate::game_mode::GameMode;
     use crate::hotbar::Hotbar;
+    use crate::inventory::Inventory;
+    use crate::items::{Item, ItemStack};
     use crate::player::{Movement, Player, PlayerLook};
     use crate::protocol::ProtocolPlugin;
     use crate::server::{ServerPlugin, WorldToOpen};
@@ -454,6 +458,7 @@ mod tests {
         // no time passes, so the clock stays where it's set
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
         let at = Vec3::new(100.0, 480.0, -50.0);
+        let ore = ItemStack::new(Item::Block(BlockType::IronOre), 7);
         let looking = PlayerLook {
             yaw: 4.0,
             pitch: -0.5,
@@ -469,14 +474,15 @@ mod tests {
                 &mut Player,
                 &mut GameMode,
                 &mut Hotbar,
+                &mut Inventory,
             )>();
-            let (mut transform, mut look, mut player, mut mode, mut hotbar) =
+            let (mut transform, mut look, mut player, mut mode, mut hotbar, mut inventory) =
                 players.single_mut(world).unwrap();
             transform.translation = at;
             *look = looking;
             player.movement = Movement::Walk;
             *mode = GameMode::Survival;
-            hotbar.slots[2] = Some(BlockType::IronOre);
+            inventory.slots[2] = Some(ore);
             hotbar.selected = 2;
         }
         app.world_mut().write_message(AppExit::Success);
@@ -490,13 +496,13 @@ mod tests {
             (transform.translation, look, movement)
         );
         assert_eq!(3.5, app.world().resource::<TimeOfDay>().0);
-        let (mode, hotbar) = app
+        let (mode, hotbar, inventory) = app
             .world_mut()
-            .query::<(&GameMode, &Hotbar)>()
+            .query::<(&GameMode, &Hotbar, &Inventory)>()
             .single(app.world())
             .unwrap();
         assert_eq!(GameMode::Survival, *mode);
-        assert_eq!(Some(BlockType::IronOre), hotbar.held());
+        assert_eq!(Some(ore), hotbar.held(inventory));
         let mut world = app.world_mut().resource_mut::<crate::world::World>();
         world.insert_chunk(ChunkCoordinate::containing(built), ChunkData::default());
         assert_eq!(BlockType::Furnace, world.get_block_at(built));

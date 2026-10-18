@@ -6,15 +6,14 @@ use crate::player::{Movement, Player};
 
 /// How a player plays (§4.5), one each so players in a world can differ.
 ///
-/// What the modes change is asked of here and nowhere else. Survival has no inventory,
-/// breaking times or health yet, so for now it differs only in not flying and having no block
-/// picker; M1.1 and M1.2 give it a finite inventory and breaking that takes time and drops what
-/// was broken.
+/// What the modes change is asked of here and nowhere else. Survival can't fly, and places only
+/// what it carries, which it gets from what it breaks; it has no breaking times or health yet
+/// (M1.2, M1.8).
 #[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameMode {
     Survival,
-    // until survival has the inventory and breaking that make it a game
+    // until survival has the breaking times and crafting that make it a game
     #[default]
     Creative,
 }
@@ -33,15 +32,20 @@ impl GameMode {
     }
 
     /// Whether the player has every block to build with, chosen from the block picker or by
-    /// middle-clicking one in the world, and never used up by placing it.
+    /// middle-clicking one in the world, and never used up by placing it. Otherwise a block is
+    /// placed from the hotbar, and used up.
     pub fn has_every_block(self) -> bool {
         self == GameMode::Creative
     }
 
-    /// Whether the player may place `block`: any but air and water in either mode, until M1.1
-    /// has survival place only what it carries.
+    /// Whether the player may place `block` at all: any but air and water, in either mode.
     pub fn can_place(self, block: BlockType) -> bool {
         block.is_tangible()
+    }
+
+    /// Whether what the player breaks drops an item to pick up.
+    pub fn drops_broken_blocks(self) -> bool {
+        self == GameMode::Survival
     }
 }
 

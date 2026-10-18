@@ -68,7 +68,8 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Light | Sky light (0–15) spread through each chunk; no block light | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival and creative modes | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
-| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel), creative block picker (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/picker.rs`, `src/debug.rs` |
+| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), debug overlay (F1) | `src/menu.rs`, `src/commands.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/debug.rs` |
+| Items | Every placeable block as an item, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Settings | Render distance, LOD scale, shadows | `assets/settings.toml`, `src/settings.rs` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile` and `block-textures` skills | `examples/`, `.claude/skills/` |
 
@@ -81,7 +82,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/interaction.rs`), as requests the server checks (`src/protocol.rs`, `src/server/`,
 `src/client/`). Worlds are saved as their edits and the player (`src/save/`).
 
-Not there yet: inventory, crafting, health, block light, structures, mobs, networking.
+Not there yet: crafting, breaking times, health, block light, structures, mobs, networking.
 
 ---
 
@@ -124,8 +125,9 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
 - A row declares a `BlockType` variant with its properties: its name, whether it's solid,
   whether it's replaceable (a block placed into it takes its place: air, water, plants), its
   `light_opacity` and occlusion weight, its render style, and its tiles per face and for LODs.
-  Properties are added to the row as the features that use them land (hardness, drops, emitted
-  light).
+  Properties are added to the row as the features that use them land (hardness, emitted light).
+  Since M1.1 a row says what the block `drops` when broken in survival: `Nothing`, `Itself`
+  (its own block item) or another block's item (§5.2).
 - Render styles (`RenderStyle`): `None` (air), `Cube` (faces, culled against opaque neighbours
   and greedy-merged), `Liquid` (water's own mesh) and `Cross` (two diagonal quads, double-sided
   and alpha cut out, at full detail only). A `Cross` block is a plant: not solid, lets all light
@@ -181,12 +183,14 @@ The world's state beyond the seed (INV-1).
   `RC_WORLD` (default `world`). A missing world is made with `RC_SEED` or a random seed, and its
   `world.toml` written at once; an existing one keeps its seed, and a disagreeing `RC_SEED` is
   ignored with a log line.
-  - `world.toml` holds the format version (`FORMAT_VERSION`, now 1), the game version that wrote
+  - `world.toml` holds the format version (`FORMAT_VERSION`, now 2), the game version that wrote
     it, the seed, the time of day, and a `[player]` table with the one local player's position,
-    look (yaw and pitch), movement, game mode and hotbar (its blocks by name, `""` for an empty
-    slot, and the selected slot; saves without them get a new player's). Players move out to `players/` when there's more than
-    one (M0.6). A world from a newer format is refused with an error saying so; there's nothing
-    older to migrate yet.
+    look (yaw and pitch), movement, game mode, hotbar (the selected slot) and inventory (each
+    stack's slot, item name and count, and the stack on the cursor if the inventory screen was
+    open). Saves without them get a new player's: format 1's hotbar blocks are ignored, and its
+    players start with an empty inventory in survival and the creative kit in creative. Players
+    move out to `players/` when there's more than one (M0.6). A world from a newer format is
+    refused with an error saying so. Dropped items aren't saved (§5.2).
   - `edits/r.<x>.<z>.edits` holds a region's edits in postcard (D-6): a palette of block names,
     then each edited chunk's coordinates and its edits as a block index and a palette index.
     A palette name the game doesn't know, from a newer version, fails the load rather than
@@ -235,20 +239,22 @@ The world's state beyond the seed (INV-1).
   headless `ServerPlugin` App in M0.5, and two Apps over renet2's memory transport in M0.6.
 - **Server:** `World` authority (validates and applies edits; keeps chunks near each player
   generated for collision and validation, never meshed), `Edits` and saving, the clock, players
-  (spawned from saves, game modes), commands, and later movement plausibility and inventories.
-  Until M1.1 the hotbar is client-driven but saved by the server; that's harmless in creative and
-  not an INV-4 breach.
+  (spawned from saves, game modes), commands, inventories and dropped items (since M1.1, §5.2),
+  and later movement plausibility. The hotbar's selection is the client's, as it only says what's
+  asked for.
 - **Client:** meshing, LODs, fade, sky, clouds and every other renderer, the camera, input and UI,
   moving its own player (decided client-side, §4.4), interpolating other players (M0.6), and its
   own copy of `World` (the seed plus edits it's sent) for collision, raycasts and meshing.
 - **Shared:** blocks, generation, `World`, `Edits`, collision, the movement step as a pure
   function, `GameMode`, `raycast` and `overlaps`, and the protocol in `src/protocol.rs`.
 - **Protocol.** Blocks travel by name, or by a palette sent on joining (§4.1). Client to server:
-  `RequestEdit { block, to, seq }`, `RunCommand`, `Chat`, and from M0.6 `PlayerState` (unreliable,
-  ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
+  `RequestEdit { block, to, slot, seq }`, `RunCommand`, `Chat`, the inventory's requests
+  (`InventoryClick`, `CloseInventory`, `DropItem`, `PickBlock`, §5.2), and from M0.6
+  `PlayerState` (unreliable, ~20 Hz). Server to client: `Welcome { game_version, protocol, seed, palette, samples, player,
   time_of_day }`, `ChunkEdits` (edits of chunks near the player, on joining and as they move),
   `BlockChanged { block, to, by }`, `EditRejected { seq, block, actual }`, `TimeSync`, `Teleport`,
-  `CommandOutput`, `ChatLine`. Players are replicated entities; poses go out as unreliable messages
+  `CommandOutput`, `ChatLine`. Players are replicated entities, their `Inventory` to their owner
+  alone, and so are dropped items; poses go out as unreliable messages
   to everyone but their owner, so the server never overwrites a player's own movement.
 - **Edits** become request, validate, broadcast: `use_target` sends `RequestEdit`; the server
   checks the block's in the world and loaded, within reach of the requester's eye, not placed into
@@ -293,7 +299,8 @@ The world's state beyond the seed (INV-1).
     ~15 clicks a second anyone manages, and counting refused requests), the block is beyond the
     world's layers or in a chunk not loaded, the block's nearest point is further than `REACH`
     plus 1 from the requester's eye, a place is into a solid block, of a block the player's
-    `GameMode::can_place` refuses (any solid block, in either mode until M1.1), or into any
+    `GameMode::can_place` refuses (air and water), in survival of a block not held in the
+    hotbar slot the request names (since M1.1), or into any
     player's body (`overlaps`), or the block's already what's asked for. Otherwise it calls
     `World::edit` (which records the edit for saving, as before) and sends
     `BlockChanged { block, to, by: Some((client, seq)) }` to every client.
@@ -375,12 +382,15 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 
 - **Built (M0.4):** `GameMode` (`src/game_mode.rs`) is a component on the player, so each player
   can have their own, saved with them (§4.3). It's **creative by default for now**, since
-  survival has no inventory, breaking times or health yet. Everything the modes change asks
-  `GameMode`'s methods (`can_fly`, `has_every_block`), so M1.1 and M1.2 add theirs there.
-  Creative flies (F toggles), breaks at once, has the block picker and never uses blocks up.
-  Survival can't fly, and switching to it drops a flying player into walking; it breaks and
-  places as creative does until M1.1 and M1.2, but middle click only selects a block already in
-  the hotbar. `/gamemode survival|creative` (or `s`/`c`) switches.
+  survival has no breaking times, crafting or health yet: with only instant breaking and
+  nothing to make, a new world in survival would be a slower creative. Everything the modes
+  change asks `GameMode`'s methods (`can_fly`, `has_every_block`, `drops_broken_blocks`), so
+  M1.2 adds its own there. Creative flies (F toggles), breaks at once, has the block picker and
+  never uses blocks up. Survival can't fly, and switching to it drops a flying player into
+  walking; it breaks at once until M1.2, but **since M1.1** places only what's in the hotbar
+  slot held, using it up, and what it breaks drops its item (§5.2). Middle click only selects
+  a block already in the hotbar. `/gamemode survival|creative` (or `s`/`c`) switches, keeping
+  the inventory as it is.
 
 ---
 
@@ -393,14 +403,15 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   cracks drawn on the block.
 - Right mouse places the held block against the face looked at, unless it would overlap a player,
   or uses a block (opening a chest, a door, a crafting table).
-- Mouse wheel and 1–9 pick the hotbar slot.
+- Mouse wheel and 1–9 pick the hotbar slot. Q throws one of the held item, Ctrl+Q the stack.
 - **Built (M0.2):** `src/interaction.rs` steps a ray from the eye through the blocks it crosses
   (a DDA), stopping at the first solid one or plant within 5 blocks, so it passes through air and water,
   and outlines it with a gizmo. Left click breaks it at once, right click places the hotbar's
   selected block against the face looked at, or in place of a replaceable block looked at (tall
   grass), into air, water or a plant but not into the player's body
-  (checked by the server since M0.5b, §4.4), and middle click picks the block looked at into the hotbar (§5.2). None of it happens while
-  paused, in the block picker or with the command bar open.
+  (checked by the server since M0.5b, §4.4), and middle click picks the block looked at into the
+  hotbar (§5.2). None of it happens while paused, in the inventory or with the command bar open.
+  Since M1.1 survival places from the hotbar slot held, and breaking drops items (§5.2).
 
 ### 5.2 Inventory and items
 
@@ -420,7 +431,58 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   puts it in the selected slot. It's the `GameState::Inventory` state, which M1.1 makes the
   inventory too: the game runs on behind it, but the player, looking and breaking only run in
   `Playing`, the cursor's free, E or Escape closes it, and the command bar can't open over it
-  (nor over the pause menu). In survival E does nothing yet.
+  (nor over the pause menu).
+- **Built (M1.1):**
+  - **Items** are `Item` in `src/items.rs`: `Item::Block(BlockType)` for every tangible block,
+    which isn't a row of its own, so the item table can't fall out of step with `blocks!`, and a
+    variant for each row of the `items!` table, which is empty until crafting and smelting
+    bring sticks, tools, coal and ingots. A row has a stable snake_case name and columns
+    (`max_stack` so far, 64 for blocks); tools' tier, durability and speed, and food's hunger,
+    join them as columns, and non-block items get tiles of their own to draw them with. Items
+    are saved by name, as blocks are, and drawn in the UI by their block's tile
+    (`inventory::icons`). A block row's `drops` (§4.1) says what breaking it leaves: grass
+    leaves dirt, stone cobblestone, leaves and plants nothing for now, ores and the rest
+    themselves.
+  - **Stacks and inventories:** `ItemStack { item, count }` holds 1 up to the item's
+    `max_stack`. `Inventory` (`src/inventory/`) is a component on the player: 36 slots, 0–8 the
+    hotbar and 9–35 the main inventory, and the stack on the cursor in the inventory screen.
+    Items picked up top up the stacks of them there are first and then fill the first empty
+    slot, the hotbar's before the rest. `Hotbar` is now only the selected slot, a view of slots
+    0–8, still chosen by the client; its strip draws each slot's icon and, in survival, the
+    count of a stack of more than one in its corner, redrawn only when the inventory, the
+    selection or the game mode changes. Creative starts with full stacks of nine building
+    blocks, survival with nothing.
+  - **The server changes them (INV-4)**, as clients ask (`src/server/inventory.rs`, beside
+    `receive_edits`, so in one App in the frame it's asked): `InventoryClick { slot, click }`,
+    `click` being `Left` (pick up, put down, top up or swap), `Right` (pick up half, rounding
+    up, or put down one) or `Shift` (move the stack between the hotbar and the main inventory,
+    topping up stacks first); `CloseInventory`, which puts the cursor's stack back or throws
+    what doesn't fit; `DropItem { slot, all }`, from Q and Ctrl+Q; and `PickBlock { slot,
+    block }`, a full stack of a block in a hotbar slot for a player with every block, from the
+    picker or middle click. A request for a slot there isn't changes nothing. `RequestEdit`
+    names the hotbar slot it places from, and in survival the server refuses a place unless
+    that slot holds the block, and takes one from it when it's made; creative never uses
+    blocks up. From M0.6 the server replicates each player's `Inventory` to its owner; nothing
+    needs predicting, as clicks are answered within a round trip.
+  - **Dropped items** (`src/server/drops.rs`) are `DroppedItem { stack, .. }` entities the
+    server moves: a broken block's item hops out of where it was, a thrown one leaves the eye
+    the way the player looks, and both fall under gravity, colliding with blocks through
+    `collision::move_and_collide` (ground not loaded holds them, as it does players), sliding
+    to a stop, and rising out of a block placed over them. Two of the same item within a block
+    of each other gather into the older, up to a full stack (every pair is looked at, which is
+    fine for the few dozen there are). A player within 1.5 blocks of one picks up what their
+    inventory has room for, after half a second for a block's item and two for one thrown, so
+    the thrower can get it away. They go after five minutes, and aren't saved: a world reopened
+    has none. The client draws each as a cube a quarter of a block across with its block's
+    tiles, spinning and bobbing over the spot (`src/client/drops.rs`): one mesh per item and
+    one `StandardMaterial` on the block atlas for all, so they batch. They're lit by the sun
+    even underground until block light (M1.7) gives them something better.
+  - **The inventory screen** (`src/inventory/screen.rs`): E opens `GameState::Inventory` in
+    either mode, now from the menu's key handling, and it shows the block picker in creative
+    and the inventory screen in survival, which hides the hotbar strip. It has the 27 main
+    slots over the 9 hotbar slots, buttons like the picker's, the hovered stack's name under
+    them, and the stack carried following the mouse. Left, right and shift-click send
+    `InventoryClick`, and closing it (E or Escape) sends `CloseInventory`.
 
 ### 5.3 Crafting and progression
 
@@ -525,7 +587,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   sparse where it's dry or cold, and flowers in patches of one kind, rarer. Deserts, glaciers and
   snow have no grass, so no plants. Trees grow over them. The server lets plants go only on solid
   ground and removes a plant whose ground is broken, as a `BlockChanged` of its own; it simply
-  goes, until M1.2 gives drops (seeds from tall grass come with farming).
+  goes, dropping nothing until seeds from tall grass come with farming.
 
 ### 5.6 Structures
 
@@ -635,8 +697,9 @@ and loads.**
 
 Done when: **you can start with nothing and make iron tools.**
 
-- ☐ **M1.1 Hotbar, inventory and items.** Data-driven items, stacks, dropped items (§5.2).
-- ☐ **M1.2 Survival breaking.** Break time from hardness and tool, drops (§5.1).
+- ☑ **M1.1 Hotbar, inventory and items.** Data-driven items, stacks, dropped items (§5.2).
+- ☐ **M1.2 Survival breaking.** Break time from hardness and tool (§5.1). Drops came with M1.1;
+  M1.2 makes some need the right tool.
 - ☑ **M1.3 Caves.** 3D carving underground, cave mouths, buried-chunk skipping updated (§5.4).
 - ☑ **M1.4 Ores.** Coal, copper, iron by depth, in veins (§5.4).
 - ☐ **M1.5 Crafting.** Recipes as data, crafting by hand and at a crafting table; wood, stone,

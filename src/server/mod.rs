@@ -4,7 +4,9 @@
 mod chunks;
 mod clock;
 mod commands;
+pub mod drops;
 mod edits;
+mod inventory;
 
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
@@ -29,7 +31,14 @@ impl Plugin for ServerPlugin {
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
             .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
-            .add_systems(Update, run_clock.run_if(is_authority))
+            .add_systems(
+                Update,
+                (
+                    run_clock,
+                    (drops::fall, drops::merge, drops::pick_up).chain(),
+                )
+                    .run_if(is_authority),
+            )
             .add_systems(
                 PostUpdate,
                 // after the client's loader has taken the chunks it wants this frame, so in
@@ -47,6 +56,7 @@ impl Plugin for ServerPlugin {
                 // asked for
                 (
                     edits::receive_edits,
+                    inventory::receive_inventory_requests,
                     commands::run_commands,
                     (clock::wind_clock, clock::sync_clock).chain(),
                 )
@@ -102,6 +112,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
         arrival.look(),
         arrival.game_mode,
         arrival.hotbar,
+        arrival.inventory(),
         arrival.body(),
     ));
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));

@@ -5,10 +5,13 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
+use super::drops::DroppedItem;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::game_mode::GameMode;
 use crate::interaction::{overlaps, REACH};
+use crate::inventory::{Inventory, HOTBAR_SLOTS};
+use crate::items::{Item, ItemStack};
 use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT};
 use crate::protocol::{BlockChanged, EditRejected, RequestEdit};
 use crate::world::World;
@@ -51,28 +54,47 @@ impl EditAllowances {
     }
 }
 
-type Players<'w, 's> =
-    Query<'w, 's, (&'static Transform, &'static GameMode, &'static PlayerOwner), With<Player>>;
+type Players<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Transform,
+        &'static GameMode,
+        &'static PlayerOwner,
+        &'static mut Inventory,
+    ),
+    With<Player>,
+>;
 
 /// Makes the edits clients ask for that pass the checks, telling every client, and tells the
-/// client asking for one that doesn't what's there instead.
+/// client asking for one that doesn't what's there instead. In survival a block placed is taken
+/// from the player's hotbar, and one broken leaves its item to pick up.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn receive_edits(
     mut requests: MessageReader<FromClient<RequestEdit>>,
     mut world: ResMut<World>,
     mut allowances: ResMut<EditAllowances>,
     time: Res<Time>,
-    players: Players,
+    mut players: Players,
     mut changed: MessageWriter<ToClients<BlockChanged>>,
     mut rejected: MessageWriter<ToClients<EditRejected>>,
+    mut commands: Commands,
 ) {
     for &FromClient {
         client_id: client,
-        message: RequestEdit { block, to, seq },
+        message:
+            RequestEdit {
+                block,
+                to,
+                slot,
+                seq,
+            },
     } in requests.read()
     {
+        let was = world.get_block_at(block);
         // every request counts, so a flood of bad ones is stopped too
         let why_not = if allowances.take(client, time.elapsed()) {
-            refusal(&world, &players, client, block, to)
+            refusal(&world, &players, client, block, to, slot.into())
                 .or_else(|| (!world.edit(block, to)).then_some("it's already that block"))
         } else {
             Some("too many edits")
@@ -84,42 +106,60 @@ pub(super) fn receive_edits(
                 message: EditRejected {
                     seq,
                     block,
-                    actual: world.get_block_at(block),
+                    actual: was,
                 },
             });
-        } else {
+            continue;
+        }
+        changed.write(ToClients {
+            targets: SendTargets::All,
+            message: BlockChanged {
+                block,
+                to,
+                by: Some((client, seq)),
+            },
+        });
+        let (_, mode, _, mut inventory) = players
+            .iter_mut()
+            .find(|(_, _, owner, _)| owner.0 == client)
+            .expect("an edit allowed has a player making it");
+        let drops = mode.drops_broken_blocks();
+        let mut leave = |broken: BlockType, at: I64Vec3| {
+            if let Some(item) = broken.drops().filter(|_| drops) {
+                commands.spawn(DroppedItem::from_block(ItemStack::new(item, 1), at));
+            }
+        };
+        if to == BlockType::Air {
+            leave(was, block);
+        } else if !mode.has_every_block() {
+            inventory.use_one(slot.into(), Item::Block(to));
+        }
+        // a plant goes with the ground it stood on
+        let above = block + I64Vec3::Y;
+        let plant = world.get_block_at(above);
+        if !to.is_solid() && plant.is_plant() {
+            world.edit(above, BlockType::Air);
+            leave(plant, above);
             changed.write(ToClients {
                 targets: SendTargets::All,
                 message: BlockChanged {
-                    block,
-                    to,
-                    by: Some((client, seq)),
+                    block: above,
+                    to: BlockType::Air,
+                    by: None,
                 },
             });
-            // a plant goes with the ground it stood on, until M1.2 has it drop
-            let above = block + I64Vec3::Y;
-            if !to.is_solid() && world.get_block_at(above).is_plant() {
-                world.edit(above, BlockType::Air);
-                changed.write(ToClients {
-                    targets: SendTargets::All,
-                    message: BlockChanged {
-                        block: above,
-                        to: BlockType::Air,
-                        by: None,
-                    },
-                });
-            }
         }
     }
 }
 
-// Why `client` can't change `block` to `to`, if it can't.
+// Why `client` can't change `block` to `to`, placing it from hotbar slot `slot`, if it can't.
 fn refusal(
     world: &World,
     players: &Players,
     client: ClientId,
     block: I64Vec3,
     to: BlockType,
+    slot: usize,
 ) -> Option<&'static str> {
     let coord = ChunkCoordinate::containing(block);
     if !World::layers(world.height).contains(&coord.0.y) {
@@ -128,7 +168,9 @@ fn refusal(
     if !world.is_chunk_generated(coord) {
         return Some("its chunk isn't loaded");
     }
-    let Some((feet, mode)) = player_of(client, players) else {
+    let Some((feet, mode, _, inventory)) =
+        players.iter().find(|(_, _, owner, _)| owner.0 == client)
+    else {
         return Some("they have no player");
     };
     let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
@@ -143,6 +185,10 @@ fn refusal(
         if !mode.can_place(to) {
             return Some("they can't place that");
         }
+        let held = inventory.slots[..HOTBAR_SLOTS].get(slot).copied().flatten();
+        if !mode.has_every_block() && held.is_none_or(|stack| stack.item != Item::Block(to)) {
+            return Some("they aren't holding that");
+        }
         if to.is_plant() && !world.get_block_at(block - I64Vec3::Y).is_solid() {
             return Some("it's a plant with nothing solid under it");
         }
@@ -154,14 +200,6 @@ fn refusal(
         }
     }
     None
-}
-
-// The player `client` plays as. A search, as there are only ever a few players.
-fn player_of<'a>(client: ClientId, players: &'a Players) -> Option<(&'a Transform, &'a GameMode)> {
-    players
-        .iter()
-        .find(|(.., owner)| owner.0 == client)
-        .map(|(body, mode, _)| (body, mode))
 }
 
 #[cfg(test)]
@@ -179,8 +217,11 @@ mod tests {
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
     use crate::game_mode::GameMode;
+    use crate::inventory::Inventory;
+    use crate::items::{Item, ItemStack};
     use crate::player::{Player, PlayerOwner};
     use crate::protocol::{BlockChanged, EditRejected, ProtocolPlugin, RequestEdit};
+    use crate::server::drops::DroppedItem;
     use crate::server::ServerPlugin;
     use crate::world::World;
 
@@ -235,6 +276,7 @@ mod tests {
             app.world_mut().write_message(RequestEdit {
                 block,
                 to,
+                slot: 0,
                 seq: seq as u32,
             });
         }
@@ -362,11 +404,84 @@ mod tests {
         assert_eq!(BlockType::Stone, block_at(&app, FLOOR));
     }
 
+    fn inventory(app: &mut App) -> Mut<'_, Inventory> {
+        let mut query = app.world_mut().query::<&mut Inventory>();
+        query.single_mut(app.world_mut()).unwrap()
+    }
+
+    fn dropped(app: &mut App) -> Vec<(ItemStack, Vec3)> {
+        let mut query = app.world_mut().query::<(&DroppedItem, &Transform)>();
+        query
+            .iter(app.world())
+            .map(|(item, at)| (item.stack, at.translation))
+            .collect()
+    }
+
     #[test]
-    fn test_survival_places_blocks_as_creative_does_for_now() {
+    fn test_survival_places_what_it_holds_and_uses_it_up() {
         let mut app = server(GameMode::Survival);
-        let (changed, _) = request(&mut app, &[(FLOOR + I64Vec3::Y, BlockType::Bricks)]);
+        let above = FLOOR + I64Vec3::Y;
+        // with nothing in the hotbar slot placed from, or something else
+        assert_refused(&mut app, above, BlockType::Bricks);
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Block(BlockType::Sand), 2));
+        assert_refused(&mut app, above, BlockType::Bricks);
+
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Block(BlockType::Bricks), 2));
+        let (changed, _) = request(&mut app, &[(above, BlockType::Bricks)]);
         assert_eq!(1, changed.len());
+        assert_eq!(1, inventory(&mut app).slots[0].unwrap().count);
+        request(&mut app, &[(above + I64Vec3::Y, BlockType::Bricks)]);
+        assert_eq!(None, inventory(&mut app).slots[0]);
+        assert_refused(&mut app, above + I64Vec3::Y * 2, BlockType::Bricks);
+    }
+
+    #[test]
+    fn test_creative_places_anything_and_never_runs_out() {
+        let mut app = server(GameMode::Creative);
+        *inventory(&mut app) = Inventory::starting(GameMode::Creative);
+        let before = inventory(&mut app).clone();
+        // the first slot holds stone, which this isn't
+        let (changed, _) = request(&mut app, &[(FLOOR + I64Vec3::Y, BlockType::Furnace)]);
+        assert_eq!(1, changed.len());
+        request(&mut app, &[(FLOOR + I64Vec3::Y * 2, BlockType::Stone)]);
+        assert_eq!(before, *inventory(&mut app));
+    }
+
+    #[test]
+    fn test_breaking_in_survival_drops_what_the_block_drops() {
+        let mut app = server(GameMode::Survival);
+        let poppy = FLOOR + I64Vec3::new(1, 1, 0);
+        {
+            let mut world = app.world_mut().resource_mut::<World>();
+            world.edit(FLOOR + I64Vec3::X, BlockType::Grass);
+            world.edit(poppy, BlockType::Poppy);
+        }
+        // stone leaves cobblestone, grass dirt, and the poppy on it nothing
+        request(
+            &mut app,
+            &[
+                (FLOOR, BlockType::Air),
+                (FLOOR + I64Vec3::X, BlockType::Air),
+            ],
+        );
+        let mut items: Vec<_> = dropped(&mut app);
+        items.sort_unstable_by(|a, b| a.1.x.total_cmp(&b.1.x));
+        let one = |block| ItemStack::new(Item::Block(block), 1);
+        assert_eq!(
+            vec![one(BlockType::Cobblestone), one(BlockType::Dirt)],
+            items.iter().map(|(stack, _)| *stack).collect::<Vec<_>>()
+        );
+        // from where the block was
+        assert_eq!(Vec3::new(3.5, 0.375, 0.5), items[0].1);
+        assert_eq!(BlockType::Air, block_at(&app, poppy));
+    }
+
+    #[test]
+    fn test_breaking_in_creative_drops_nothing() {
+        let mut app = server(GameMode::Creative);
+        let (changed, _) = request(&mut app, &[(FLOOR, BlockType::Air)]);
+        assert_eq!(1, changed.len());
+        assert!(dropped(&mut app).is_empty());
     }
 
     #[test]

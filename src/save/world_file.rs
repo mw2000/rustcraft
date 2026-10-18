@@ -7,10 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
+use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
-pub const FORMAT_VERSION: u32 = 1;
+/// Format 2 moved the hotbar's blocks into the player's inventory (M1.1).
+pub const FORMAT_VERSION: u32 = 2;
 
 /// A world's `world.toml`: everything about it but its edits.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -26,8 +28,8 @@ pub struct WorldFile {
     pub player: Option<PlayerState>,
 }
 
-/// Where a player is, how they're moving and playing, and what they hold.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+/// Where a player is, how they're moving and playing, and what they carry.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PlayerState {
     /// Their feet, in blocks.
     pub position: [f32; 3],
@@ -35,11 +37,13 @@ pub struct PlayerState {
     pub yaw: f32,
     pub pitch: f32,
     pub movement: Movement,
-    // saves from before game modes and the hotbar get the ones a new player has
+    // saves from before game modes, the hotbar and the inventory get the ones a new player has
     #[serde(default)]
     pub game_mode: GameMode,
     #[serde(default)]
     pub hotbar: Hotbar,
+    #[serde(default)]
+    inventory: Option<Inventory>,
 }
 
 impl PlayerState {
@@ -52,16 +56,18 @@ impl PlayerState {
             movement: Movement::default(),
             game_mode: GameMode::default(),
             hotbar: Hotbar::default(),
+            inventory: None,
         }
     }
 
-    /// The state of a player with the body and look given.
+    /// The state of a player with the body, look and inventory given.
     pub fn of(
         body: &Transform,
         look: PlayerLook,
         movement: Movement,
         game_mode: GameMode,
         hotbar: Hotbar,
+        inventory: &Inventory,
     ) -> Self {
         Self {
             position: body.translation.into(),
@@ -70,7 +76,16 @@ impl PlayerState {
             movement,
             game_mode,
             hotbar,
+            inventory: Some(inventory.clone()),
         }
+    }
+
+    /// What they carry, or what a new player in their game mode starts with if they're new or
+    /// saved before inventories.
+    pub fn inventory(&self) -> Inventory {
+        self.inventory
+            .clone()
+            .unwrap_or_else(|| Inventory::starting(self.game_mode))
     }
 
     pub fn body(&self) -> Transform {
@@ -129,20 +144,18 @@ mod tests {
     use crate::block::BlockType;
     use crate::game_mode::GameMode;
     use crate::hotbar::Hotbar;
+    use crate::inventory::Inventory;
+    use crate::items::{Item, ItemStack};
     use crate::player::{Movement, PlayerLook};
 
     #[test]
     fn test_world_files_round_trip() {
         let mut file = WorldFile::new(1234, 2.75);
         assert_eq!(file, WorldFile::from_toml(&file.to_toml()).unwrap());
-        file.player = Some(PlayerState {
-            position: [10.5, 470.0, -3000.25],
-            yaw: 1.5,
-            pitch: -0.25,
-            movement: Movement::Walk,
-            game_mode: GameMode::Survival,
-            hotbar: Hotbar::default(),
-        });
+        let mut player = PlayerState::arriving_at(Vec3::new(10.5, 470.0, -3000.25));
+        player.movement = Movement::Walk;
+        player.game_mode = GameMode::Survival;
+        file.player = Some(player);
         let text = file.to_toml();
         assert!(text.contains("movement = \"walk\""), "{text}");
         assert!(text.contains("game_mode = \"survival\""), "{text}");
@@ -150,19 +163,30 @@ mod tests {
     }
 
     #[test]
-    fn test_hotbars_round_trip_by_block_name() {
+    fn test_inventories_and_the_selected_slot_round_trip_by_item_name() {
         let mut file = WorldFile::new(1, 0.5);
-        let mut player = PlayerState::arriving_at(Vec3::ZERO);
-        player.hotbar.slots[1] = None;
-        player.hotbar.slots[4] = Some(BlockType::CraftingTable);
-        player.hotbar.selected = 4;
-        file.player = Some(player);
+        let mut inventory = Inventory::default();
+        let tables = ItemStack::new(Item::Block(BlockType::CraftingTable), 3);
+        inventory.slots[4] = Some(tables);
+        inventory.slots[30] = Some(ItemStack::new(Item::Block(BlockType::Dirt), 64));
+        let state = PlayerState::of(
+            &Transform::default(),
+            PlayerLook::default(),
+            Movement::Walk,
+            GameMode::Survival,
+            Hotbar { selected: 4 },
+            &inventory,
+        );
+        file.player = Some(state);
         let text = file.to_toml();
-        assert!(text.contains(r#""stone", "", "stone_bricks""#), "{text}");
-        assert!(text.contains(r#""crafting_table""#), "{text}");
-        assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+        assert!(text.contains("item = \"crafting_table\""), "{text}");
+        let read = WorldFile::from_toml(&text).unwrap();
+        assert_eq!(file, read);
+        let player = read.player.unwrap();
+        assert_eq!(inventory, player.inventory());
+        assert_eq!(Some(tables), player.hotbar.held(&inventory));
 
-        // a block or slot this game doesn't have is refused, as an edit's is
+        // an item or slot this game doesn't have is refused, as an edit's block is
         let unknown = text.replace("crafting_table", "loom");
         assert!(WorldFile::from_toml(&unknown).is_err());
         let off_the_end = text.replace("selected = 4", "selected = 9");
@@ -179,6 +203,35 @@ mod tests {
         let player = WorldFile::from_toml(older).unwrap().player.unwrap();
         assert_eq!(GameMode::Creative, player.game_mode);
         assert_eq!(Hotbar::default(), player.hotbar);
+        assert_eq!(Inventory::starting(GameMode::Creative), player.inventory());
+    }
+
+    #[test]
+    fn test_saves_from_before_inventories_start_survival_with_nothing() {
+        // as format 1 had it, with the hotbar's blocks in the hotbar
+        let format_1 = r#"
+            format = 1
+            game_version = "0.1.0"
+            seed = 1
+            time_of_day = 0.5
+
+            [player]
+            position = [0.0, 470.0, 0.0]
+            yaw = 0.0
+            pitch = 0.0
+            movement = "walk"
+            game_mode = "survival"
+
+            [player.hotbar]
+            slots = ["stone", "", "", "", "", "", "", "", "furnace"]
+            selected = 8
+        "#;
+        let player = WorldFile::from_toml(format_1).unwrap().player.unwrap();
+        assert_eq!(Hotbar { selected: 8 }, player.hotbar);
+        assert_eq!(Inventory::default(), player.inventory());
+        let creative = format_1.replace("\"survival\"", "\"creative\"");
+        let player = WorldFile::from_toml(&creative).unwrap().player.unwrap();
+        assert_eq!(Inventory::starting(GameMode::Creative), player.inventory());
     }
 
     #[test]
@@ -194,6 +247,7 @@ mod tests {
             Movement::Fly,
             GameMode::Creative,
             Hotbar::default(),
+            &Inventory::default(),
         );
         assert_eq!(body, state.body());
         assert_eq!(look, state.look());

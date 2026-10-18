@@ -1,4 +1,9 @@
 //! What clients and the server send each other (§4.4). Blocks travel by name (§4.1).
+//!
+//! A player's inventory changes only on the server (INV-4): clients ask with `InventoryClick`,
+//! `CloseInventory`, `DropItem` and `PickBlock`, and placing a block in survival takes it from
+//! the slot `RequestEdit` names. In one App the change is made in the frame it's asked for, to
+//! the same `Inventory`; from M0.6 the server replicates each player's to its owner.
 
 use bevy::math::I64Vec3;
 use bevy::prelude::*;
@@ -6,6 +11,7 @@ use bevy_replicon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
+use crate::inventory::Click;
 
 /// Registers the messages, on the server and clients alike. Replicon tells messages apart by the
 /// order they're registered in, so it's all done here, in one order. Needs `RepliconPlugins`.
@@ -22,16 +28,23 @@ impl Plugin for ProtocolPlugin {
             .add_client_message::<RunCommand>(Channel::Ordered)
             .add_server_message::<CommandOutput>(Channel::Ordered)
             .add_client_message::<WindClock>(Channel::Ordered)
-            .add_server_message::<TimeSync>(Channel::Ordered);
+            .add_server_message::<TimeSync>(Channel::Ordered)
+            // in order, as each click starts from where the last left the inventory
+            .add_client_message::<InventoryClick>(Channel::Ordered)
+            .add_client_message::<CloseInventory>(Channel::Ordered)
+            .add_client_message::<DropItem>(Channel::Ordered)
+            .add_client_message::<PickBlock>(Channel::Ordered);
     }
 }
 
-/// A client asking for the block at `block` to become `to`, air to break it. `seq` counts the
-/// client's requests, so it can tell which one an answer is to.
+/// A client asking for the block at `block` to become `to`, air to break it, placing it from
+/// hotbar slot `slot` in survival. `seq` counts the client's requests, so it can tell which one
+/// an answer is to.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestEdit {
     pub block: I64Vec3,
     pub to: BlockType,
+    pub slot: u8,
     pub seq: u32,
 }
 
@@ -74,6 +87,33 @@ pub struct WindClock(pub i8);
 pub struct TimeSync {
     pub time: f32,
     pub rate: f32,
+}
+
+/// A click on inventory slot `slot` in the inventory screen, see `Inventory::click`.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InventoryClick {
+    pub slot: u8,
+    pub click: Click,
+}
+
+/// The inventory screen closing, which puts the stack on the cursor back, or drops what
+/// doesn't fit.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloseInventory;
+
+/// Throwing one item from inventory slot `slot`, or `all` of its stack.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropItem {
+    pub slot: u8,
+    pub all: bool,
+}
+
+/// A player with every block to hand (creative) putting a stack of `block` in hotbar slot
+/// `slot`, from the block picker or by middle-clicking it.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PickBlock {
+    pub slot: u8,
+    pub block: BlockType,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself

@@ -4,6 +4,7 @@ use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 
 const TOGGLE_KEY: KeyCode = KeyCode::Escape;
+const INVENTORY_KEY: KeyCode = KeyCode::KeyE;
 
 // Minecraft's: grey stone buttons, lighter with a white edge under the pointer.
 pub(crate) const BUTTON_COLOR: Color = Color::srgb(0.42, 0.42, 0.42);
@@ -15,8 +16,8 @@ pub(crate) const TEXT_SHADOW: TextShadow = TextShadow {
     color: Color::srgb(0.24, 0.24, 0.24),
 };
 
-/// Whether the game's being played, paused under the menu, or carrying on under the creative
-/// block picker, which M1.1 makes the inventory too.
+/// Whether the game's being played, paused under the menu, or carrying on under the inventory:
+/// the block picker in creative, and the inventory screen in survival.
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameState {
     #[default]
@@ -26,7 +27,8 @@ pub enum GameState {
 }
 
 /// Escape opens a menu over the game, like Minecraft's, and pauses it: the clock stops, the
-/// player can't move and the cursor's let go. Escape again, or Back to Game, carries on.
+/// player can't move and the cursor's let go. Escape again, or Back to Game, carries on. E opens
+/// and closes the inventory, which Escape closes too.
 pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
@@ -123,11 +125,17 @@ fn toggle_menu(
     mut next: ResMut<NextState<GameState>>,
 ) {
     if keys.just_pressed(TOGGLE_KEY) {
-        // which closes the block picker rather than pausing over it
+        // which closes the inventory rather than pausing over it
         next.set(match state.get() {
             GameState::Playing => GameState::Paused,
             GameState::Paused | GameState::Inventory => GameState::Playing,
         });
+    } else if keys.just_pressed(INVENTORY_KEY) {
+        match state.get() {
+            GameState::Playing => next.set(GameState::Inventory),
+            GameState::Inventory => next.set(GameState::Playing),
+            GameState::Paused => {}
+        }
     }
 }
 

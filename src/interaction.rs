@@ -8,10 +8,11 @@ use crate::collision::Aabb;
 use crate::commands::command_bar_closed;
 use crate::game_mode::GameMode;
 use crate::hotbar::Hotbar;
+use crate::inventory::Inventory;
 use crate::menu::GameState;
 use crate::player::input::{player_look, player_move};
 use crate::player::{PlayerLook, EYE_HEIGHT};
-use crate::protocol::RequestEdit;
+use crate::protocol::{PickBlock, RequestEdit};
 use crate::world::World;
 
 /// How far from the eye a block can be reached, in blocks.
@@ -135,36 +136,39 @@ fn outline_target(target: Res<Target>, mut gizmos: Gizmos) {
 
 // Left click breaks the block looked at, right click places the selected block in the hotbar
 // against the face looked at, or in place of a block that's replaceable, such as tall grass,
-// and middle click picks the block looked at into the hotbar. The server decides whether a
-// block can go where it's placed: into a replaceable block, and never into a player.
+// and middle click selects the hotbar slot holding the block looked at, or in creative asks
+// for it in the selected slot. The server decides whether a block can go where it's placed:
+// into a replaceable block, never into a player, and in survival only if it's held.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut player: Query<(&GameMode, &mut Hotbar), With<LocalPlayer>>,
+    mut player: Query<(&GameMode, &mut Hotbar, &Inventory), With<LocalPlayer>>,
     mut requests: MessageWriter<RequestEdit>,
+    mut picks: MessageWriter<PickBlock>,
     mut seq: Local<u32>,
 ) {
     let Some(hit) = target.0 else {
         return;
     };
-    let (mode, mut hotbar) = player.single_mut().expect("player does not exist");
+    let (mode, mut hotbar, inventory) = player.single_mut().expect("player does not exist");
+    let slot = hotbar.selected as u8;
     let mut request = |block, to| {
         *seq = seq.wrapping_add(1);
         requests.write(RequestEdit {
             block,
             to,
+            slot,
             seq: *seq,
         });
     };
-    // at once in either mode, until M1.2 gives survival breaking times and drops
+    // at once in either mode, until M1.2 gives survival breaking times
     if mouse.just_pressed(MouseButton::Left) {
         request(hit.block, BlockType::Air);
     }
     let replaceable = world.get_block_at(hit.block).is_replaceable();
     if mouse.just_pressed(MouseButton::Right) && (replaceable || hit.face != I64Vec3::ZERO) {
-        // never used up, until M1.1 has survival take it from the slot
-        if let Some(held) = hotbar.held() {
+        if let Some(held) = hotbar.held(inventory).and_then(|stack| stack.item.block()) {
             let at = if replaceable {
                 hit.block
             } else {
@@ -174,7 +178,10 @@ fn use_target(
         }
     }
     if mouse.just_pressed(MouseButton::Middle) {
-        hotbar.pick(world.get_block_at(hit.block), mode.has_every_block());
+        let block = world.get_block_at(hit.block);
+        if !hotbar.pick(block, inventory) && mode.has_every_block() {
+            picks.write(PickBlock { slot, block });
+        }
     }
 }
 
@@ -301,8 +308,10 @@ mod tests {
         use crate::client::ClientPlugin;
         use crate::game_mode::GameMode;
         use crate::hotbar::Hotbar;
+        use crate::inventory::Inventory;
+        use crate::items::{Item, ItemStack};
         use crate::player::{Player, PlayerOwner};
-        use crate::protocol::{EditRejected, ProtocolPlugin, RequestEdit};
+        use crate::protocol::{EditRejected, PickBlock, ProtocolPlugin, RequestEdit};
         use crate::server::ServerPlugin;
 
         // Looking down at the top of a block of sand at the origin, from `feet`.
@@ -313,6 +322,7 @@ mod tests {
             let mut app = App::new();
             app.add_plugins(MinimalPlugins)
                 .add_message::<RequestEdit>()
+                .add_message::<PickBlock>()
                 .init_resource::<ButtonInput<MouseButton>>()
                 .insert_resource(world)
                 .insert_resource(Target(Some(Hit {
@@ -325,6 +335,7 @@ mod tests {
                 PlayerOwner(ClientId::Server),
                 LocalPlayer,
                 mode,
+                Inventory::starting(mode),
                 Transform::from_translation(feet),
             ));
             app
@@ -332,8 +343,8 @@ mod tests {
 
         // The same, played in singleplayer, with the server and client in the App and the
         // group of chunks at the origin drawn.
-        fn played(feet: Vec3) -> App {
-            let mut app = app(feet, GameMode::Creative);
+        fn played(feet: Vec3, mode: GameMode) -> App {
+            let mut app = app(feet, mode);
             app.add_plugins((
                 StatesPlugin,
                 RepliconPlugins,
@@ -380,10 +391,24 @@ mod tests {
                 .unwrap()
         }
 
+        fn inventory(app: &mut App) -> Mut<'_, Inventory> {
+            app.world_mut()
+                .query::<&mut Inventory>()
+                .single_mut(app.world_mut())
+                .unwrap()
+        }
+
         #[test]
         fn test_left_click_asks_to_break_and_right_click_to_place_against_the_face() {
             let mut app = app(AWAY, GameMode::Creative);
-            let at = |block, to, seq| vec![RequestEdit { block, to, seq }];
+            let at = |block, to, seq| {
+                vec![RequestEdit {
+                    block,
+                    to,
+                    slot: 0,
+                    seq,
+                }]
+            };
             assert_eq!(
                 at(I64Vec3::ZERO, BlockType::Air, 1),
                 click(&mut app, MouseButton::Left)
@@ -417,13 +442,13 @@ mod tests {
                 to(click(&mut app, MouseButton::Right))
             );
             // and an empty slot places nothing
-            hotbar(&mut app).slots[3] = None;
+            inventory(&mut app).slots[3] = None;
             assert!(click(&mut app, MouseButton::Right).is_empty());
         }
 
         #[test]
         fn test_a_click_changes_the_world_and_queues_its_redraw_in_the_same_frame() {
-            let mut app = played(AWAY);
+            let mut app = played(AWAY, GameMode::Creative);
             press(&mut app, MouseButton::Right);
             // the request, the server's checks and the start of rebuilding the meshes all
             // happen in the click's frame
@@ -441,7 +466,7 @@ mod tests {
 
         #[test]
         fn test_nothing_is_placed_where_the_player_stands() {
-            let mut app = played(Vec3::new(0.5, 1.0, 0.5));
+            let mut app = played(Vec3::new(0.5, 1.0, 0.5), GameMode::Creative);
             press(&mut app, MouseButton::Right);
             app.update();
             let world = app.world().resource::<crate::world::World>();
@@ -452,16 +477,32 @@ mod tests {
         }
 
         #[test]
-        fn test_middle_click_picks_the_block_into_the_selected_slot_or_selects_it() {
-            let mut app = app(AWAY, GameMode::Creative);
+        fn test_survival_placing_uses_up_the_block_held() {
+            let mut app = played(AWAY, GameMode::Survival);
+            let dirt = ItemStack::new(Item::Block(BlockType::Dirt), 1);
+            inventory(&mut app).slots[0] = Some(dirt);
+            press(&mut app, MouseButton::Right);
+            app.update();
+            let world = app.world().resource::<crate::world::World>();
+            assert_eq!(BlockType::Dirt, world.get_block_at(I64Vec3::Y));
+            assert_eq!(None, inventory(&mut app).slots[0]);
+        }
+
+        #[test]
+        fn test_middle_click_in_creative_picks_the_block_into_the_selected_slot_or_selects_it() {
+            let mut app = played(AWAY, GameMode::Creative);
             hotbar(&mut app).selected = 2;
-            assert!(click(&mut app, MouseButton::Middle).is_empty());
-            assert_eq!(Some(BlockType::Sand), hotbar(&mut app).slots[2]);
+            press(&mut app, MouseButton::Middle);
+            app.update();
+            let sand = Some(ItemStack::full(Item::Block(BlockType::Sand)));
+            assert_eq!(sand, inventory(&mut app).slots[2]);
             // already in the hotbar, it's selected rather than put in a second slot
             hotbar(&mut app).selected = 6;
-            click(&mut app, MouseButton::Middle);
+            press(&mut app, MouseButton::Middle);
+            app.update();
             assert_eq!(2, hotbar(&mut app).selected);
-            assert_eq!(Some(BlockType::Dirt), hotbar(&mut app).slots[6]);
+            let dirt = Some(ItemStack::full(Item::Block(BlockType::Dirt)));
+            assert_eq!(dirt, inventory(&mut app).slots[6]);
         }
 
         #[test]
@@ -469,6 +510,11 @@ mod tests {
             let mut app = app(AWAY, GameMode::Survival);
             click(&mut app, MouseButton::Middle);
             assert_eq!(Hotbar::default(), *hotbar(&mut app));
+            assert!(app.world().resource::<Messages<PickBlock>>().is_empty());
+            let sand = ItemStack::new(Item::Block(BlockType::Sand), 1);
+            inventory(&mut app).slots[4] = Some(sand);
+            click(&mut app, MouseButton::Middle);
+            assert_eq!(4, hotbar(&mut app).selected);
         }
     }
 }

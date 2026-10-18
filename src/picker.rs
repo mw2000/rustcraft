@@ -6,10 +6,12 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use crate::block::BlockType;
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
-use crate::hotbar::{load_icons, BlockIcons, Hotbar, SLOTS};
+use crate::hotbar::Hotbar;
+use crate::inventory::icons::{load_icons, ItemIcons};
+use crate::inventory::HOTBAR_SLOTS;
+use crate::items::Item;
 use crate::menu::{font, free_cursor, GameState, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
-
-const TOGGLE_KEY: KeyCode = KeyCode::KeyE;
+use crate::protocol::PickBlock;
 
 // In pixels: a grid as wide as the hotbar has slots, of buttons a little bigger than them.
 const TILE_SIZE: f32 = 48.0;
@@ -18,15 +20,15 @@ const TILE_GAP: f32 = 4.0;
 
 const HINT: &str = "Click a block to put it in the selected slot";
 
-/// In creative, E opens a panel of every block to build with, and clicking one puts it in the
-/// hotbar's selected slot. The game carries on behind it, but the player stands still and the
-/// cursor's let go. E or Escape closes it.
+/// In creative, the inventory (E) is a panel of every block to build with, and clicking one puts
+/// a stack of it in the hotbar's selected slot. The game carries on behind it, but the player
+/// stands still and the cursor's let go. E or Escape closes it.
 pub struct PickerPlugin;
 
 impl Plugin for PickerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_picker.after(load_icons))
-            .add_systems(Update, (toggle_picker, name_hovered_block))
+            .add_systems(Update, name_hovered_block)
             .add_systems(OnEnter(GameState::Inventory), open)
             .add_systems(OnExit(GameState::Inventory), close);
     }
@@ -41,7 +43,7 @@ struct Tile(BlockType);
 #[derive(Component)]
 struct BlockName;
 
-fn spawn_picker(mut commands: Commands, icons: Res<BlockIcons>) {
+fn spawn_picker(mut commands: Commands, icons: Res<ItemIcons>) {
     commands
         .spawn((
             Picker,
@@ -74,7 +76,7 @@ fn spawn_picker(mut commands: Commands, icons: Res<BlockIcons>) {
             picker
                 .spawn(Node {
                     display: Display::Grid,
-                    grid_template_columns: RepeatedGridTrack::px(SLOTS as u16, TILE_SIZE),
+                    grid_template_columns: RepeatedGridTrack::px(HOTBAR_SLOTS as u16, TILE_SIZE),
                     row_gap: Val::Px(TILE_GAP),
                     column_gap: Val::Px(TILE_GAP),
                     ..default()
@@ -83,7 +85,7 @@ fn spawn_picker(mut commands: Commands, icons: Res<BlockIcons>) {
                     // all but air and water
                     for block in BlockType::ALL.into_iter().filter(BlockType::is_tangible) {
                         grid.spawn(tile(block))
-                            .with_child(icons.icon(block))
+                            .with_child(icons.icon(Item::Block(block)))
                             .observe(put_in_hotbar);
                     }
                 });
@@ -119,45 +121,33 @@ fn tile(block: BlockType) -> impl Bundle {
     )
 }
 
+// The server puts the block there, as it does all changes to inventories (INV-4).
 fn put_in_hotbar(
     activate: On<Activate>,
     tiles: Query<&Tile>,
-    mut hotbar: Query<&mut Hotbar, With<LocalPlayer>>,
+    hotbar: Query<&Hotbar, With<LocalPlayer>>,
+    mut picks: MessageWriter<PickBlock>,
 ) {
-    if let (Ok(tile), Ok(mut hotbar)) = (tiles.get(activate.entity), hotbar.single_mut()) {
-        let selected = hotbar.selected;
-        hotbar.slots[selected] = Some(tile.0);
+    if let (Ok(tile), Ok(hotbar)) = (tiles.get(activate.entity), hotbar.single()) {
+        picks.write(PickBlock {
+            slot: hotbar.selected as u8,
+            block: tile.0,
+        });
     }
 }
 
-// Escape closes it too, see `toggle_menu`. In survival there's nothing to open until M1.1
-// makes this the inventory.
-fn toggle_picker(
-    keys: Res<ButtonInput<KeyCode>>,
-    state: Res<State<GameState>>,
-    mut next: ResMut<NextState<GameState>>,
-    player: Query<&GameMode, With<LocalPlayer>>,
-) {
-    if !keys.just_pressed(TOGGLE_KEY) {
-        return;
-    }
-    match state.get() {
-        GameState::Playing if player.single().is_ok_and(|mode| mode.has_every_block()) => {
-            next.set(GameState::Inventory)
-        }
-        GameState::Inventory => next.set(GameState::Playing),
-        _ => {}
-    }
-}
-
+// In survival the inventory is the inventory screen instead.
 fn open(
+    player: Query<&GameMode, With<LocalPlayer>>,
     mut picker: Query<&mut Node, With<Picker>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    for mut node in &mut picker {
-        node.display = Display::Flex;
+    if player.single().is_ok_and(|mode| mode.has_every_block()) {
+        for mut node in &mut picker {
+            node.display = Display::Flex;
+        }
+        free_cursor(&mut cursor, true);
     }
-    free_cursor(&mut cursor, true);
 }
 
 // The menu holds the cursor again as play resumes.
@@ -177,15 +167,11 @@ fn name_hovered_block(
     }
     let hovered = tiles.iter().find(|(_, hovered)| hovered.get());
     if let Ok(mut text) = name.single_mut() {
-        text.0 = hovered.map_or_else(|| HINT.into(), |(tile, _)| display_name(tile.0));
+        text.0 = hovered.map_or_else(
+            || HINT.into(),
+            |(tile, _)| Item::Block(tile.0).display_name(),
+        );
     }
-}
-
-// "stone_bricks" as "Stone bricks".
-fn display_name(block: BlockType) -> String {
-    let mut name = block.name().replace('_', " ");
-    name[..1].make_ascii_uppercase();
-    name
 }
 
 #[cfg(test)]
@@ -196,25 +182,24 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::ui_widgets::Activate;
     use bevy::window::WindowFocused;
+    use bevy_replicon::prelude::ClientId;
     use bevy_replicon::RepliconPlugins;
 
-    use super::{display_name, PickerPlugin, Tile};
+    use super::{Picker, PickerPlugin, Tile};
     use crate::block::BlockType;
     use crate::client::player::LocalPlayer;
     use crate::commands::{CommandBar, CommandPlugin};
     use crate::game_mode::GameMode;
     use crate::hotbar::{Hotbar, HotbarPlugin};
+    use crate::inventory::Inventory;
+    use crate::items::{Item, ItemStack};
     use crate::menu::{GameState, MenuPlugin};
-    use crate::player::Player;
+    use crate::player::{Player, PlayerOwner};
     use crate::protocol::ProtocolPlugin;
+    use crate::server::ServerPlugin;
+    use crate::world::World;
 
-    #[test]
-    fn test_display_names() {
-        assert_eq!("Stone", display_name(BlockType::Stone));
-        assert_eq!("Crafting table", display_name(BlockType::CraftingTable));
-    }
-
-    // The game's UI, headless, with a player in `mode`.
+    // The game's UI, headless, with the server and a player in `mode`.
     fn app(mode: GameMode) -> App {
         let mut app = App::new();
         app.add_plugins((
@@ -228,12 +213,18 @@ mod tests {
             CommandPlugin,
             HotbarPlugin,
             PickerPlugin,
+            ServerPlugin,
         ))
         .init_asset::<Image>()
         .init_asset::<TextureAtlasLayout>()
-        .add_message::<WindowFocused>();
-        app.world_mut()
-            .spawn((Player::default(), LocalPlayer, mode));
+        .add_message::<WindowFocused>()
+        .insert_resource(World::new(16));
+        app.world_mut().spawn((
+            Player::default(),
+            PlayerOwner(ClientId::Server),
+            LocalPlayer,
+            mode,
+        ));
         app.finish();
         app.update();
         app
@@ -284,11 +275,19 @@ mod tests {
         assert_eq!(GameState::Inventory, state(&app));
     }
 
+    fn shown(app: &mut App) -> bool {
+        let mut picker = app.world_mut().query_filtered::<&Node, With<Picker>>();
+        picker.single(app.world()).unwrap().display == Display::Flex
+    }
+
     #[test]
     fn test_survival_has_no_picker() {
-        let mut app = app(GameMode::Survival);
-        press(&mut app, KeyCode::KeyE);
-        assert_eq!(GameState::Playing, state(&app));
+        let mut creative = app(GameMode::Creative);
+        press(&mut creative, KeyCode::KeyE);
+        assert!(shown(&mut creative));
+        let mut survival = app(GameMode::Survival);
+        press(&mut survival, KeyCode::KeyE);
+        assert!(!shown(&mut survival));
     }
 
     #[test]
@@ -305,13 +304,15 @@ mod tests {
             .unwrap()
             .0;
         app.world_mut().trigger(Activate { entity: furnace });
-        let hotbar = app
+        app.update();
+        let (hotbar, inventory) = app
             .world_mut()
-            .query::<&Hotbar>()
+            .query::<(&Hotbar, &Inventory)>()
             .single(app.world())
             .unwrap();
-        assert_eq!(Some(BlockType::Furnace), hotbar.slots[2]);
-        assert_eq!(Some(BlockType::Furnace), hotbar.held());
+        let furnaces = Some(ItemStack::full(Item::Block(BlockType::Furnace)));
+        assert_eq!(furnaces, inventory.slots[2]);
+        assert_eq!(furnaces, hotbar.held(inventory));
     }
 
     #[test]

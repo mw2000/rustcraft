@@ -7,14 +7,15 @@ use std::f32::consts::TAU;
 use bevy::{
     ecs::component::Component,
     math::{Quat, Vec3},
+    transform::components::Transform,
 };
 use bevy_replicon::prelude::ClientId;
 
-use crate::{collision::Aabb, game_mode::GameMode, hotbar::Hotbar};
+use crate::{collision::Aabb, game_mode::GameMode, hotbar::Hotbar, inventory::Inventory};
 
 /// The player's body, at its feet, and how it's moving.
 #[derive(Component, Default)]
-#[require(GameMode, Hotbar, PlayerLook)]
+#[require(GameMode, Hotbar, Inventory, PlayerLook, Transform)]
 pub struct Player {
     pub movement: Movement,
     velocity: Vec3,

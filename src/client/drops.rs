@@ -1,0 +1,165 @@
+//! Drawing the items lying in the world, which the server moves (`server::drops`): each a little
+//! cube of its block, spinning and bobbing over the spot. Every one of an item shares a mesh, and
+//! all share a material, so Bevy draws them batched.
+
+use std::f32::consts::TAU;
+
+use bevy::asset::RenderAssetUsages;
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
+
+use crate::block::{BlockType, Face, TILE_COUNT};
+use crate::inventory::icons::{load_icons, ItemIcons};
+use crate::items::Item;
+use crate::server::drops::{DroppedItem, SIZE};
+
+// Turns a second, and how far, in blocks, and how fast, in bobs a second, it rises and falls.
+const SPIN_SPEED: f32 = 0.3;
+const BOB_HEIGHT: f32 = 0.08;
+const BOB_SPEED: f32 = 0.5;
+// Texels in from a tile's edge its faces sample, so they never take in the next tile's.
+const TILE_INSET: f32 = 0.5 / 16.0;
+
+/// Draws dropped items. Needs the renderer, and `HotbarPlugin` for the block atlas.
+pub struct DrawDropsPlugin;
+
+impl Plugin for DrawDropsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, make_material.after(load_icons))
+            .add_observer(draw_drop)
+            .add_systems(Update, spin_and_bob);
+    }
+}
+
+/// What dropped items are drawn with: the block atlas, and a cube for each item, made the first
+/// time one's dropped.
+#[derive(Resource)]
+struct DropLooks {
+    material: Handle<StandardMaterial>,
+    meshes: HashMap<Item, Handle<Mesh>>,
+    grass: LinearRgba,
+}
+
+// The cube drawn for a dropped item, a child of it so the server's `Transform` is left alone,
+// and where it is in its spin and bob.
+#[derive(Component)]
+struct Spinning {
+    phase: f32,
+}
+
+fn make_material(
+    mut commands: Commands,
+    icons: Res<ItemIcons>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let material = materials.add(StandardMaterial {
+        base_color_texture: Some(icons.atlas().clone()),
+        perceptual_roughness: 1.0,
+        // plants' tiles have holes
+        alpha_mode: AlphaMode::Mask(0.5),
+        ..default()
+    });
+    commands.insert_resource(DropLooks {
+        material,
+        meshes: HashMap::new(),
+        grass: icons.grass().into(),
+    });
+}
+
+fn draw_drop(
+    add: On<Add<DroppedItem>>,
+    items: Query<&DroppedItem>,
+    mut looks: ResMut<DropLooks>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+) {
+    let Ok(dropped) = items.get(add.entity) else {
+        return;
+    };
+    let item = dropped.stack.item;
+    let grass = looks.grass;
+    let mesh = looks
+        .meshes
+        .entry(item)
+        .or_insert_with(|| match item {
+            Item::Block(block) => meshes.add(cube(block, grass)),
+        })
+        .clone();
+    // the golden angle, so items dropped together don't spin and bob as one
+    let phase = (add.entity.index_u32() as f32 * 2.39996).rem_euclid(TAU);
+    let material = looks.material.clone();
+    commands
+        .entity(add.entity)
+        .insert(Visibility::default())
+        .with_child((
+            Spinning { phase },
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::default(),
+        ));
+}
+
+fn spin_and_bob(time: Res<Time>, mut cubes: Query<(&Spinning, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (spinning, mut transform) in &mut cubes {
+        let bob = (t * BOB_SPEED * TAU + spinning.phase).sin() * 0.5 + 0.5;
+        transform.translation.y = SIZE / 2.0 + bob * BOB_HEIGHT;
+        transform.rotation = Quat::from_rotation_y(t * SPIN_SPEED * TAU + spinning.phase);
+    }
+}
+
+// A cube `SIZE` across around its middle, its faces drawing `block`'s tiles from the atlas,
+// tinted as the terrain's are where the tile's greyscale.
+fn cube(block: BlockType, grass: LinearRgba) -> Mesh {
+    let half = SIZE / 2.0;
+    let (mut positions, mut normals, mut uvs, mut colours) = (vec![], vec![], vec![], vec![]);
+    let mut indices: Vec<u16> = vec![];
+    for normal in [
+        Vec3::X,
+        Vec3::NEG_X,
+        Vec3::Y,
+        Vec3::NEG_Y,
+        Vec3::Z,
+        Vec3::NEG_Z,
+    ] {
+        // across and down the tile as it's seen from outside, upright on the sides
+        let (across, down) = if normal.y == 0.0 {
+            (Vec3::Y.cross(normal), Vec3::NEG_Y)
+        } else {
+            (Vec3::X, Vec3::Z * normal.y)
+        };
+        let tile = block.tile(Face::of_normal_y(normal.y));
+        let colour = if tile.tinted() {
+            grass
+        } else {
+            LinearRgba::WHITE
+        };
+        let start = positions.len() as u16;
+        for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+            let corner = normal + across * (2.0 * u - 1.0) + down * (2.0 * v - 1.0);
+            positions.push((corner * half).to_array());
+            normals.push(normal.to_array());
+            let u = TILE_INSET + u * (1.0 - 2.0 * TILE_INSET);
+            let v = TILE_INSET + v * (1.0 - 2.0 * TILE_INSET);
+            uvs.push([(tile.atlas_cell() + u) / TILE_COUNT as f32, v]);
+            colours.push(colour.to_f32_array());
+        }
+        // wound anticlockwise as seen from outside
+        let quad = if across.cross(down).dot(normal) > 0.0 {
+            [0, 1, 2, 0, 2, 3]
+        } else {
+            [0, 2, 1, 0, 3, 2]
+        };
+        indices.extend(quad.map(|i| start + i));
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colours)
+    .with_inserted_indices(Indices::U16(indices))
+}

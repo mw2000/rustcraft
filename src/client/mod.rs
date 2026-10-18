@@ -2,6 +2,7 @@
 //! same App as the server.
 
 pub mod clock;
+pub mod drops;
 pub mod edits;
 pub mod player;
 

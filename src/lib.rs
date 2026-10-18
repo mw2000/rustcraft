@@ -12,6 +12,8 @@ pub mod game_mode;
 pub mod horizon;
 pub mod hotbar;
 pub mod interaction;
+pub mod inventory;
+pub mod items;
 pub mod menu;
 pub mod picker;
 pub mod player;

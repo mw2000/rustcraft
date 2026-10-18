@@ -14,6 +14,8 @@ use rustcraft::block::BlockType;
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::clock::TimeOfDay;
 use rustcraft::game_mode::{GameMode, GameModePlugin};
+use rustcraft::inventory::Inventory;
+use rustcraft::items::{Item, ItemStack};
 use rustcraft::player::{Movement, Player, PlayerLook, PlayerOwner, EYE_HEIGHT};
 use rustcraft::protocol::{BlockChanged, ProtocolPlugin, RequestEdit};
 use rustcraft::save::{SavePlugin, WorldSave};
@@ -109,10 +111,15 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
     let movement = app.world().get::<Player>(player).unwrap().movement;
     assert_eq!(Movement::Walk, movement);
 
-    // a player's edit, checked and made by the server, and sent on to the clients
+    // a player's edit, checked and made by the server, and sent on to the clients, taking the
+    // block from what they carry
+    let bricks = Item::Block(BlockType::Bricks);
+    app.world_mut().get_mut::<Inventory>(player).unwrap().slots[0] =
+        Some(ItemStack::new(bricks, 2));
     app.world_mut().write_message(RequestEdit {
         block: below,
         to: BlockType::Bricks,
+        slot: 0,
         seq: 1,
     });
     app.update();
@@ -121,6 +128,8 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
         app.world().resource::<World>().get_block_at(below)
     );
     assert_eq!(1, app.world().resource::<Messages<BlockChanged>>().len());
+    let carried = app.world().get::<Inventory>(player).unwrap().clone();
+    assert_eq!(Some(ItemStack::new(bricks, 1)), carried.slots[0]);
 
     app.world_mut().write_message(AppExit::Success);
     app.update();
@@ -140,6 +149,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
         GameMode::Survival,
         *app.world().get::<GameMode>(player).unwrap()
     );
+    assert_eq!(carried, *app.world().get::<Inventory>(player).unwrap());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -166,6 +176,7 @@ fn test_a_server_alone_keeps_the_chunks_near_its_player_loaded() {
         block: below,
         to: BlockType::Bricks,
         seq: 1,
+        slot: 0,
     });
     app.update();
     let mut world = app.world_mut().resource_mut::<World>();

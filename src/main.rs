@@ -15,6 +15,7 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::client::clock::{follow_clock, wind_clock};
+use rustcraft::client::drops::DrawDropsPlugin;
 use rustcraft::client::ClientPlugin;
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
@@ -24,6 +25,7 @@ use rustcraft::game_mode::GameModePlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::hotbar::HotbarPlugin;
 use rustcraft::interaction::InteractionPlugin;
+use rustcraft::inventory::screen::InventoryScreenPlugin;
 use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::picker::PickerPlugin;
 use rustcraft::player::input::{follow_look, player_look, player_move};
@@ -206,7 +208,13 @@ fn main() {
             InteractionPlugin,
             SavePlugin,
         ))
-        .add_plugins((GameModePlugin, HotbarPlugin, PickerPlugin))
+        .add_plugins((
+            GameModePlugin,
+            HotbarPlugin,
+            PickerPlugin,
+            InventoryScreenPlugin,
+            DrawDropsPlugin,
+        ))
         // singleplayer: the server and client in one App, with no transport between them, so
         // replicon passes their messages straight across (§4.4)
         .add_plugins((RepliconPlugins, ProtocolPlugin, ServerPlugin, ClientPlugin))
