@@ -432,10 +432,25 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 
 - Health with fall damage, drowning, and later mob damage. Death drops your inventory where you
   died and respawns you at your spawn point (a bed sets it).
-- Hunger is open (D-5).
+- Hunger (D-5): a food bar that drains slowly, faster while sprinting, jumping or healing.
+  Eating refills it; a fuller bar heals over time and an empty one hurts, down to half a heart.
+  No saturation or exhaustion arithmetic beyond that.
 - Day and night already exist; night brings hostile mobs (§5.8).
 - Block light from torches and other light blocks, alongside sky light, so caves and nights can be
   lit. Needs light to spread across chunk borders and update when blocks change.
+
+### 5.5a Farming and food
+
+- **Plants are a new kind of block**: drawn as two crossed quads rather than a cube, not solid,
+  broken in one hit, and resting on the block below (they pop off when it goes). Tall grass and
+  flowers use the same render style, which the meshers and LODs need to support (LODs can leave
+  small plants out or draw them as a tint).
+- **Farming:** a hoe tills dirt or grass into farmland; seeds (dropped by breaking tall grass)
+  planted on farmland grow through stages over time, faster near water; ripe wheat drops wheat and
+  seeds. Growth is server-side and deterministic in what it needs: a chunk's crops advance from the
+  time they were planted, so unloaded fields catch up when they load rather than ticking forever.
+- **Food:** bread from wheat at a crafting table; apples from leaves sometimes; meat from animals
+  once they exist (§5.8). Food items say how much hunger they fill.
 
 ### 5.6 Structures
 
@@ -554,7 +569,10 @@ Done when: **you can start with nothing and make iron tools.**
   copper and iron tools (§5.3).
 - ☐ **M1.6 Furnace.** Smelting ores, with containers (§5.2).
 - ☐ **M1.7 Block light.** Torches, light across chunk borders, updated on edits (§5.5).
-- ☐ **M1.8 Health.** Fall damage, drowning, death and respawn, beds (§5.5).
+- ☐ **M1.8 Health and hunger.** Fall damage, drowning, death and respawn, beds, the food bar
+  (§5.5).
+- ☐ **M1.9 Plants and farming.** Cross-shaped plant blocks, tall grass and flowers in the world,
+  hoes, farmland, wheat that grows, bread and apples (§5.5a).
 
 ### Phase 2: exploration
 
@@ -597,9 +615,12 @@ Done when: **the world feels inhabited, and night is dangerous.**
   checksums across platforms. If they differ, switch the noise to deterministic math.
 - **D-4 Crafting model.** Minecraft-style shaped grid, or ingredient lists at stations. Leaning
   towards ingredient lists: simpler, clearer, and less of a copy.
-- **D-5 Hunger.** Include it, simplify it, or leave it out. Decide before M1.8.
 
 ### Decided
+
+- **D-5 Hunger is in, kept simple** (§5.5): a food bar, eating to refill it, healing when it's
+  full enough and hurting when it's empty. Farming joins the plan as M1.9 to feed it.
+  Decided 2026-10-18.
 
 - **D-1 Networking: `bevy_replicon` (=0.45.2), with `bevy_replicon_renet2` (=1.0.0) as the
   transport from M0.6, and `bevy_replicon_quinnet` as the fallback.** On 2026-10-17 replicon was
