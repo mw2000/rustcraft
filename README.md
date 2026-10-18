@@ -18,7 +18,23 @@ cargo run --release
 
 ![Image of rustcraft](images/readme.jpg)
 
+## Menus
+
+The game opens on the title screen, over a view of a world's horizon:
+
+- **Singleplayer** lists your worlds, the last played first, with each one's seed, game mode and when you last played it. Double-click one, or select it and press Enter or Play Selected World, to play it. Create New World makes one, with a name, a seed (or leave it blank for a random one) and the game mode new players start in; Rename, Duplicate and Delete (which asks first) look after the rest. A loading screen shows while the land round you loads.
+- **Multiplayer** lists the servers you've saved: Add Server saves one by its name and address, Edit and Remove change them, and double-click or Join Server joins one. Or type an address under the list to join it once. Your name, shown over your head to others, is at the top. Whether a server's up shows as you join it: if it can't be joined, or the connection's lost, the menu says why.
+- **Settings**, saved for you under your data directory (`settings.toml`), in tabs:
+  - *Video:* a Low, Medium or High preset, how far the terrain's drawn and how far at full detail (which apply as you close Settings), field of view, UI scale, a frame cap, fullscreen, vsync, shadows and clouds.
+  - *Controls:* mouse sensitivity, inverting the mouse, and a key for every action: click one and press the key or mouse button it should be. Keys bound twice show in red, and Reset Keys puts them all back.
+  - *Audio:* the volume, and the effects, ambience and music each on their own.
+  - *Accessibility:* the view's tilt when you're hurt, larger text, and the crosshair's style.
+
+Escape in the game opens the game menu: Back to Game, Settings, Open to Friends (see below), and Save and Quit to Title, which saves the world and goes back to the title screen, ready to play another. Escape goes back a page anywhere in the menus, Tab and the arrow keys move between buttons, and Enter presses them.
+
 ## Controls
+
+These are the keys as they start; any can be changed in Settings, Controls.
 
 - WASD to move, Shift to sprint, mouse to look.
 - Space to jump, or to swim up in water.
@@ -36,7 +52,6 @@ cargo run --release
 - Farming: right-click dirt or grass with a hoe (2 planks, cobblestone or ingots and 2 sticks, at a crafting table) to till it into farmland, and right-click farmland with seeds, which tall grass sometimes drops, to plant wheat. It grows over two or three days, quicker with water within four blocks, and a field you've left has grown as it should by the time you're back. Break it ripe and golden for wheat and more seeds; 3 wheat make bread at a crafting table, which fills more of the food bar than an apple.
 - M opens the map of the land you've explored, centred on you: the arrow is you and the way you face, with the world's spawn, your bed and your friends marked. Scroll to zoom, drag to look around, and M or Escape closes it. It fills in as you go, a few hundred blocks around you, and it's kept on your computer with the world, or under the server's address when you join one.
 - `[` and `]` move the sun, and F1 shows the debug overlay.
-- The menu (Escape) sets the volume, and the effects, ambience and music each on their own, with − and +. They're kept for you in `volume.toml` beside the worlds' directory (below).
 
 ## Commands
 
@@ -46,7 +61,7 @@ Press T or Enter, or / to start with the slash typed, to open the command bar, w
 - `/tp <x> <z>` teleports to just above the ground there.
 - `/tp <player>` teleports to a player, and `/tp <player> <x> <y> <z>` teleports them.
 - `/gamemode survival` or `/gamemode creative` (`s` or `c` for short) switches game mode, and `/gamemode <mode> <player>` switches someone else's. Survival can't fly, places only what it carries, and breaks blocks over time.
-- `/seed` prints the world's seed. Run with `RC_SEED=<seed>` and a new world's name to get the same world again.
+- `/seed` prints the world's seed. Give it as the seed of a new world to get the same world again.
 - `/list` lists the players here, and `/msg <player> <text>` says something only they see.
 - `/op <player>` and `/deop <player>` let a player run the commands that change things, or stop them (see below).
 - `/help` lists the commands you may run.
@@ -61,13 +76,13 @@ In creative, operators can build structures and save them as templates, the way 
 
 ## Worlds
 
-Worlds are saved every 30 seconds and when you quit, in a directory each under your data directory: `~/.local/share/rustcraft/worlds` on Linux, `~/Library/Application Support/rustcraft/worlds` on macOS and `%APPDATA%\rustcraft\worlds` on Windows. Run with `RC_WORLD=<name>` to play another world, which is made if it doesn't exist yet; the one played otherwise is called `world`.
+Worlds are saved every 30 seconds, when you quit to the title screen and when you quit the game, in a directory each, named as the world is, under your data directory: `~/.local/share/rustcraft/worlds` on Linux, `~/Library/Application Support/rustcraft/worlds` on macOS and `%APPDATA%\rustcraft\worlds` on Windows. Your settings (`settings.toml`) and saved servers (`servers.toml`) are kept beside them, in `rustcraft`.
 
 ## Playing together
 
-To let friends join the world you're playing, choose Open to Friends in the menu (Escape), which shows the address to give them, or run with `RC_HOST=<port>` to open it as the game starts (`RC_HOST=` for the default port, 25600). Friends join with `RC_JOIN=<address>`, such as `RC_JOIN=192.168.1.20:25600`; the port can be left off if it's the default. Everyone needs the same version of rustcraft. Over the internet, the host forwards UDP port 25600 on their router.
+To let friends join the world you're playing, choose Open to Friends in the game menu (Escape), which shows the address to give them and who's joined. Friends join it from Multiplayer, by that address, such as `192.168.1.20:25600`; the port can be left off if it's the default, 25600. Everyone needs the same version of rustcraft. Over the internet, the host forwards UDP port 25600 on their router.
 
-Everyone plays by a name, shown over their head to the others: `RC_NAME=<name>`, or else the name you're logged in as. A name already taken gets a number after it. The host's world keeps each friend's place, look and inventory under their name, so they come back where they left. A friend's game decides how they move, but the host puts them back if they go faster than they can or walk into a wall.
+Everyone plays by a name, shown over their head to the others: the one in Multiplayer, or else the name you're logged in as. A name already taken gets a number after it. The host's world keeps each friend's place, look and inventory under their name, so they come back where they left. A friend's game decides how they move, but the host puts them back if they go faster than they can or walk into a wall.
 
 Anything typed into the command bar without a / is said to everyone, by your name; saying a lot at once is slowed to a line a second.
 
@@ -85,11 +100,15 @@ cargo build --release --bin rustcraft-server --no-default-features
 ```
 
 - `--world <name>` hosts that world, made if it doesn't exist yet, from the same worlds directory as the game (or give a path); `--port <port>` takes players on that UDP port, 25600 if it's left off; `--seed <seed>` gives a new world that seed. `RC_WORLD`, `RC_HOST` and `RC_SEED` do the same. `--help` prints these.
-- Friends join with `RC_JOIN=<address>` as above. Over the internet, forward UDP port 25600 to the server.
+- Friends join it from Multiplayer as above. Over the internet, forward UDP port 25600 to the server.
 - It logs to the terminal it's run in. Type into it to run any command, as an operator, with or without the /: `op <name>` makes the first operator, `list` names who's on, `say <text>` says something to everyone as Server, `help` lists the rest, and `stop`, or Ctrl-C, saves the world and stops. A command that acts on you, such as `tp 1 2 3`, needs a player named instead, as the server has none.
 - It saves every 30 seconds, as a player leaves and as it stops, the same way the game does, so a world can be copied between the game and a server. The time of day runs on while nobody's on.
 
 The same warning as above applies, more so: anyone who can reach the server can join under any name, an operator's included. Only run one for friends you trust, until names are checked.
+
+## Developer options
+
+For development, environment variables skip the menus: `RC_WORLD=<name>` plays that world straight away, made if it doesn't exist yet, with `RC_SEED=<seed>` if it's new; `RC_HOST=<port>` plays it (or `world`) open to friends on that port (`RC_HOST=` for the default); `RC_JOIN=<address>` joins a server. `RC_NAME=<name>` plays by that name when the settings have none, and `RC_TIME=<days>` starts the clock at that time of day.
 
 ## License
 

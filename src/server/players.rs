@@ -133,7 +133,7 @@ pub(super) fn welcome(
         .unique_among(names.iter().chain([&console]));
     let player = save
         .player(&name)
-        .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
+        .unwrap_or_else(|| PlayerState::arriving_at(world.spawn(), save.new_player_mode()));
     let check = PoseCheck {
         ahead: 0.0,
         at: time.elapsed(),

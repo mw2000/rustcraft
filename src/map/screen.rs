@@ -13,13 +13,12 @@ use super::tiles::TileLayer;
 use super::{MapView, ZOOMS};
 use crate::client::others::SeenPlayer;
 use crate::client::player::LocalPlayer;
+use crate::controls::{Action, Controls};
 use crate::menu::{font, free_cursor, GameState, TEXT_SHADOW};
 use crate::player::name::PlayerName;
 use crate::player::PlayerLook;
 use crate::survival::SpawnBed;
 use crate::world::World;
-
-const MAP_KEY: KeyCode = KeyCode::KeyM;
 
 // Unexplored land: dark, like old paper in shadow.
 const UNEXPLORED: Color = Color::srgb(0.13, 0.12, 0.1);
@@ -266,11 +265,11 @@ fn arrow_image(size: u32) -> Image {
 
 /// M opens the map over the game and closes it again, as Escape does.
 pub(super) fn toggle_map(
-    keys: Res<ButtonInput<KeyCode>>,
+    controls: Controls,
     state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
 ) {
-    if keys.just_pressed(MAP_KEY) {
+    if controls.just_pressed(Action::Map) {
         match state.get() {
             GameState::Playing => next.set(GameState::Map),
             GameState::Map => next.set(GameState::Playing),
@@ -499,6 +498,7 @@ mod tests {
             HotbarPlugin,
             MapPlugin,
         ))
+        .insert_state(GameState::Playing)
         .init_asset::<Image>()
         .init_asset::<TextureAtlasLayout>()
         .add_message::<WindowFocused>()

@@ -12,27 +12,40 @@ pub mod join;
 pub mod models;
 pub mod others;
 pub mod player;
+pub mod servers;
 pub mod sound;
 
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use bevy_replicon::prelude::{ClientState, ServerSystems};
+use bevy_replicon::prelude::{ClientState, Remote, ServerSystems};
 
 use crate::chunks::group::rebuild_groups;
 use crate::clock::TimeOfDay;
+use crate::player::Player;
 use crate::protocol::Welcome;
 use crate::server::is_authority;
-use crate::world::World;
+use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 
 /// The client's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
 pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TimeOfDay>()
+        order_leaving(app);
+        app.add_message::<join::LeftServer>()
+            .init_resource::<TimeOfDay>()
             .init_resource::<join::GenerationChecksum>()
             .init_resource::<edits::Predictions>()
+            .init_resource::<edits::WaitingEdits>()
             .init_resource::<join::Teleports>()
+            .add_systems(
+                LeaveWorld,
+                (
+                    (join::leave_server, player::detach_camera)
+                        .in_set(LeaveWorldSystems::Disconnect),
+                    clear_world.in_set(LeaveWorldSystems::Clear),
+                ),
+            )
             .add_observer(player::mark_local_player)
             .add_systems(
                 PostStartup,
@@ -99,6 +112,22 @@ impl Plugin for ClientPlugin {
                 ),
             );
     }
+}
+
+// Puts away what this client had of the world it's left: the players it saw and what the server
+// replicated, and its own state as it was before it joined.
+#[allow(clippy::type_complexity)]
+fn clear_world(things: Query<Entity, Or<(With<Player>, With<Remote>)>>, mut commands: Commands) {
+    for thing in &things {
+        commands.entity(thing).try_despawn();
+    }
+    commands.remove_resource::<World>();
+    commands.remove_resource::<edits::EditOrder>();
+    commands.remove_resource::<join::Checking>();
+    commands.insert_resource(TimeOfDay::default());
+    commands.insert_resource(edits::Predictions::default());
+    commands.insert_resource(edits::WaitingEdits::default());
+    commands.insert_resource(join::Teleports::default());
 }
 
 #[cfg(test)]

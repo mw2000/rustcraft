@@ -65,6 +65,10 @@ required-features = ["client"]
 name = "multiplayer"
 required-features = ["client"]
 
+[[test]]
+name = "session"
+required-features = ["client"]
+
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 # a server and clients in one process, for tests

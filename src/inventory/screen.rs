@@ -366,6 +366,7 @@ mod tests {
             InventoryScreenPlugin,
             ServerPlugin,
         ))
+        .insert_state(GameState::Playing)
         .init_asset::<Image>()
         .init_asset::<TextureAtlasLayout>()
         .add_message::<WindowFocused>()

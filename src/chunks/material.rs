@@ -206,7 +206,7 @@ impl Material for ChunkMaterial {
 }
 
 /// The materials terrain draws with, before any fading.
-#[derive(Clone)]
+#[derive(Resource, Clone)]
 pub struct TerrainMaterials {
     pub chunk: Handle<ChunkMaterial>,
     pub water: Handle<WaterMaterial>,

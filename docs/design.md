@@ -69,13 +69,14 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
-| UI | Pause menu (Escape), command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
+| Menus | A title screen over the horizon of a world the terrain renderer draws; worlds to play, make, rename, duplicate and delete; saved servers and joining by address; settings in tabs (video, controls with every key rebindable, audio, accessibility), saved per player; a loading screen; the pause menu with Open to Friends and Save and Quit to Title; one set of shared widgets (M-U1) | `src/menu/`, `src/session.rs`, `src/preferences.rs`, `src/controls.rs`, `src/save/worlds.rs`, `src/client/servers.rs` |
+| UI | Command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
 | Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
-| Settings | Render distance, LOD scale, shadows; volumes, kept per player | `assets/settings.toml`, `src/settings.rs`, `src/client/sound/volume.rs` |
+| Settings | The renderer's defaults, and the player's own settings over them, volumes too, from the Settings screen | `assets/settings.toml`, `src/settings.rs`, `src/preferences.rs`, `src/client/sound/volume.rs` |
 | Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; so far sheep, which give mutton (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
 | Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time, rare music, all synthesised (§5.10) | `src/client/sound/`, `assets/sounds/` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
@@ -298,8 +299,8 @@ The world's state beyond the seed (INV-1).
 - Saves carry a format version and a game version, and old saves keep loading or are migrated
   explicitly.
 - **Built (M0.3):** `src/save/`. Worlds live under the platform's data directory
-  (`~/.local/share/rustcraft/worlds/<name>/` on Linux, from the `dirs` crate), picked with
-  `RC_WORLD` (default `world`). A missing world is made with `RC_SEED` or a random seed, and its
+  (`~/.local/share/rustcraft/worlds/<name>/` on Linux, from the `dirs` crate), picked from
+  the Singleplayer menu since M-U1, or with `RC_WORLD` (default `world`) for development. A missing world is made with `RC_SEED` or a random seed, and its
   `world.toml` written at once; an existing one keeps its seed, and a disagreeing `RC_SEED` is
   ignored with a log line.
   - `world.toml` holds the format version (`FORMAT_VERSION`, now 4), the game version that wrote
@@ -1866,7 +1867,10 @@ README and licences but no assets, which it doesn't read.
     faded out are paused.
   - **Music:** the first piece 1½ to 4 minutes in, then 8 to 18 minutes of quiet between.
   - **Volume:** master, effects, ambience and music, from − and + rows in the pause menu, kept in
-    `volume.toml` in the data directory beside `worlds/`, written off the main thread.
+    `volume.toml` in the data directory beside `worlds/`, written off the main thread. **Since
+    M-U1** they're sliders in Settings' Audio tab, kept with the player's other settings
+    (`Preferences::audio`), which take them from `volume.toml` until they've been saved there;
+    `Volumes` follows them as `Bindings` does. Every button's press clicks, as before.
   - **Creatures** (M3.1) are heard where they're drawn: footsteps as players' are, a call now and
     then (every 25 seconds or so each), and a higher, sharper one as `Flinches` counts a hit;
     sheep bleat. Each goes through `CreatureSound { kind, hurt, at }`, the hook for whatever
@@ -2012,7 +2016,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
   little music — inspired by packs like Enhanced Audio, from CC0 sources or made by our own
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
   silent and audio-free. Built: all synthesised, §5.10.
-- ☐ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
+- ☑ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
   every setting lives in menus rather than environment variables:
   - **Title screen:** Singleplayer, Multiplayer, Settings, Quit, over a slowly panning view of a
     world in the distance (the horizon is the game's best feature, P1).
@@ -2036,6 +2040,85 @@ Done when: **the world feels inhabited, and night is dangerous.**
     world around the spawn generates, instead of hanging in the air.
   - Consistent look across all of them (one set of shared widgets: buttons, sliders, toggles,
     text fields, lists, tabs), keyboard and mouse navigation, and Escape always going back.
+  - **Built (M-U1):**
+    - **Widgets** (`src/menu/widgets.rs`) are Bevy 0.20's headless `bevy_ui_widgets` styled as
+      the pause menu was: buttons, choices (a button cycling "Name: Option", for switches and
+      short lists), sliders (`Slider`, rounded to their step, showing "Name: value"), text fields
+      (`TextInput`, so a cursor, selection, typing, paste and a filter, selecting all on focus),
+      scrolling lists (`ListBox`; arrow keys select, Enter or a double click is `RowChosen`),
+      tabs as buttons, and confirmations and notices as pages. Tab, Shift-Tab and Up/Down move
+      the focus (`TabNavigationPlugin` and `move_focus_with_arrows`), Enter and Space press, and
+      the focus lights up only once the keyboard's used. Text is sized in rem, so Larger Text is
+      `RemSize`; UI Scale is `UiScale`.
+    - **Pages** (`src/menu/`) are a stack in `Menu`, the top drawn afresh as it changes, each by
+      a system of its own (`run_system_cached_with`). Escape and every Back button run `back`:
+      a page down, out of the pause menu into the game, out of the loading screen to the title,
+      never off the title screen, and not while a key's being bound, which Escape cancels.
+      `GameState` gained `Title` (the default) and `Loading`; UI marked `InWorld` (hotbar, bars,
+      crosshair, command bar) is hidden outside a world.
+    - **Title screen** (`menu/title.rs`): the scenery is a world of its own, `World::joined` with
+      seed 7, drawn by the real terrain renderer to 384 chunks with 4 at full detail (or the
+      player's own, if nearer), seen from 90 blocks over its spawn, turning 0.015 rad/s. It
+      loads in a few seconds and costs what a near render distance does; the camera hangs from a
+      `Viewpoint` entity, as `gather_chunks` wants a parented camera, and terrain waits for one.
+    - **Worlds** (`src/save/worlds.rs`): a world's name is its directory's (characters no
+      platform refuses, up to 32); listed with `world.toml`'s seed and game mode and its
+      modified time as last played, or why it can't be read. `world.toml` gained
+      `new_player_mode`, the mode chosen as it's made, written only when it isn't survival, so
+      the format stays 4. No map preview: the relief would be cheap, but a list of worlds
+      reads well without it, so it's left for later.
+    - **Sessions** (`src/session.rs`): `Session::Singleplayer` or `Session::Join` started from the
+      menus (or `Session::from_env`, for `RC_WORLD`, `RC_JOIN` and `RC_HOST`, which start in
+      `Loading`, skipping the title) opens the world in `OnEnter(Loading)`. The loading screen
+      plays once the chunks 2 across, 2 down and 1 up round the player are drawn
+      (`ChunkLoader::is_drawn`), saying meanwhile whether it's joining or checking the
+      server's world. `open_world` runs in `PreUpdate` whenever there's a `WorldToOpen`, and a
+      world that can't be opened is `WorldUnopened`, shown as a notice (the dedicated server
+      exits on it). `LeftServer` carries why a client's left its server (unreachable, another
+      version, another world, the connection lost), which ends the session with a notice.
+      Ping and player counts aren't shown: netcode can't answer without joining, so a server's
+      reachability shows as it's joined.
+    - **Leaving** is the `LeaveWorld` schedule, in `LeaveWorldSystems` order: `Disconnect` (the
+      server sees off its joiners, keeping their states, and stops hosting; a client drops its
+      `RenetClient`, so the server sees it go at once; the camera's taken down from the
+      player), `Save` (the last save, on the main thread, as on quit) and `Clear` (each plugin
+      puts its own away: the server its players, drops and resources, the client its players,
+      replicated entities, `World` and its edit state, the terrain its chunks, groups and LOD
+      nodes with fresh loaders at the current settings, the map its file, tiles and view, the
+      command bar its lines). The title screen's scenery is left the same way. Save and Quit to
+      Title runs `session::leave`. `is_authority` now also needs a `World` served here
+      (`World::is_served_here`), so the server does nothing in the menus, nor in a joined
+      world as its connection drops. Edits waiting for a joined client's world moved from
+      `Local`s into `WaitingEdits`, which leaving clears.
+    - **Settings** (`src/preferences.rs`) are `Preferences`, kept in `settings.toml` under the
+      data directory over `assets/settings.toml`'s distances: read by merging the file's table
+      over the defaults, so a missing or unreadable value keeps its default and an unknown one
+      is kept, and written a second after they stop changing. Applied live: FOV, fullscreen,
+      vsync, a frame cap (sleeping out the frame in `Update`), UI scale, larger text, shadows,
+      clouds (their tiles hidden; their shadows on the land stay), sensitivity, inversion, hurt
+      tilt, the crosshair (cross, dot or none, new) and key bindings; render and full-detail
+      distance redraw the terrain as Settings closes (`redraw_for_settings`), or wait for the
+      next world on the title screen. There's no view bobbing to turn off. Presets set the
+      distances, shadows and clouds. The player's name is `Preferences::name`, or `RC_NAME` and
+      the login name when it's empty.
+    - **Keys** (`src/controls.rs`): every action is a row of `actions!` with its name, label and
+      default; `Bindings` holds a key or mouse button for each, saved by name, and `Controls`
+      reads them, used by movement, interaction, eating, the hotbar, the inventory, the map,
+      the command bar, the clock and the debug overlay. Escape, Enter and the text keys stay
+      fixed.
+    - **Pause and death:** the pause menu's Open to Friends shows the address and who's joined
+      (`Hosting`), and joined clients get Disconnect in place of Save and Quit. The death screen
+      has Respawn and Quit to Title.
+    - Tests: the widgets (text fields' filter and length, sliders, list selection, tabs, Escape
+      and Back), rebinding a key, settings round trips and live application, presets, the
+      worlds library on a temp dir, the server list, opening, quitting to the title and opening
+      another world in one App with the entity count back where it was and the first world
+      saved and reopened where it was left (`tests/session.rs`), unopenable worlds and
+      unreachable servers ending in notices, the environment variables skipping the title, and
+      a joined client and a host leaving their worlds (`tests/multiplayer.rs`).
+    - **Known gaps:** a server list with ping and players needs a query the protocol doesn't
+      have; render distance changes in a world redraw everything at once; the death screen's
+      Quit to Title saves the dead player as dead, to respawn on return.
 
 ---
 

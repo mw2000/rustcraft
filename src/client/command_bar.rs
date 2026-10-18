@@ -5,13 +5,15 @@ use bevy::input::{ButtonState, InputSystems};
 use bevy::prelude::*;
 use bevy_replicon::prelude::ServerSystems;
 
+use crate::controls::{just_pressed, Action, Bindings};
 use crate::hotbar::HOTBAR_TOP;
-use crate::menu::GameState;
+use crate::menu::{font, GameState, InWorld};
 use crate::protocol::{Chat, ChatLine, CommandOutput, RunCommand, MAX_CHAT_LENGTH};
+use crate::world::{LeaveWorld, LeaveWorldSystems};
 
-// Minecraft's: T or Enter opens the bar, and / opens it with the slash already typed.
-const OPEN_KEYS: [KeyCode; 3] = [KeyCode::KeyT, KeyCode::Enter, KeyCode::NumpadEnter];
-const OPEN_WITH_SLASH_KEY: KeyCode = KeyCode::Slash;
+// Minecraft's: T (`Action::Chat`) or Enter opens the bar, and / (`Action::Command`) opens it
+// with the slash already typed.
+const OPEN_KEYS: [KeyCode; 2] = [KeyCode::Enter, KeyCode::NumpadEnter];
 
 // How long a line stays up once the bar's closed. The latest are all shown while it's open,
 // as many as chat with a few people fills in a while.
@@ -31,14 +33,23 @@ pub struct CommandPlugin;
 impl Plugin for CommandPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CommandBar>()
+            .init_resource::<Bindings>()
             .add_systems(Startup, spawn_bar)
             // straight after input's read, so the keys it takes never reach the game
             .add_systems(PreUpdate, type_into_bar.after(InputSystems))
             // as soon as replicon hands the answer over, which in singleplayer is in the frame
             // the command was typed
             .add_systems(PostUpdate, print_output.after(ServerSystems::Send))
-            .add_systems(Update, draw_bar);
+            .add_systems(Update, draw_bar)
+            .add_systems(LeaveWorld, forget_lines.in_set(LeaveWorldSystems::Clear));
     }
+}
+
+// What was said in the world left isn't shown in the next.
+fn forget_lines(mut bar: ResMut<CommandBar>) {
+    bar.open = false;
+    bar.input.clear();
+    bar.lines.clear();
 }
 
 #[derive(Resource, Default)]
@@ -86,20 +97,20 @@ struct Output;
 struct Input;
 
 fn spawn_bar(mut commands: Commands) {
-    let font = TextFont {
-        font_size: bevy::text::FontSize::Px(16.0),
-        ..default()
-    };
+    let font = font(16.0);
     commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(6.0),
-            right: Val::Px(6.0),
-            bottom: Val::Px(HOTBAR_TOP + 6.0),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(4.0),
-            ..default()
-        })
+        .spawn((
+            InWorld,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(6.0),
+                right: Val::Px(6.0),
+                bottom: Val::Px(HOTBAR_TOP + 6.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..default()
+            },
+        ))
         .with_children(|bar| {
             bar.spawn((
                 Output,
@@ -128,10 +139,13 @@ fn spawn_bar(mut commands: Commands) {
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn type_into_bar(
     mut bar: ResMut<CommandBar>,
     mut typed: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    bindings: Res<Bindings>,
     mut run: MessageWriter<RunCommand>,
     mut chat: MessageWriter<Chat>,
     state: Res<State<GameState>>,
@@ -141,8 +155,9 @@ fn type_into_bar(
         if *state.get() != GameState::Playing {
             return;
         }
-        let slash = keys.just_pressed(OPEN_WITH_SLASH_KEY);
-        if slash || keys.any_just_pressed(OPEN_KEYS) {
+        let pressed = |action| just_pressed(&bindings, action, &keys, &mouse);
+        let slash = pressed(Action::Command);
+        if slash || pressed(Action::Chat) || keys.any_just_pressed(OPEN_KEYS) {
             bar.open = true;
             bar.input = if slash { "/".into() } else { String::new() };
             // the key that opened it would type itself too
@@ -295,7 +310,7 @@ mod tests {
             CommandPlugin,
             GameModePlugin,
         ))
-        .init_state::<GameState>()
+        .insert_state(GameState::Playing)
         .insert_resource(World::new(16));
         app.world_mut().spawn((
             Player::default(),

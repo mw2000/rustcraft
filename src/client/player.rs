@@ -37,3 +37,13 @@ pub(super) fn attach_camera(
             .insert((ChildOf(player), Transform::from_xyz(0.0, EYE_HEIGHT, 0.0)));
     }
 }
+
+/// Takes the camera down from the player as the world's left, so it isn't put away with them.
+pub(super) fn detach_camera(
+    mut commands: Commands,
+    cameras: Query<Entity, (With<Camera3d>, With<ChildOf>)>,
+) {
+    for camera in &cameras {
+        commands.entity(camera).remove::<ChildOf>();
+    }
+}

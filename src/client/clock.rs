@@ -1,19 +1,18 @@
 use bevy::prelude::*;
 
 use crate::clock::TimeOfDay;
+use crate::controls::{Action, Controls};
 use crate::protocol::{TimeSync, WindClock};
-
-const WIND_BACK_KEY: KeyCode = KeyCode::BracketLeft;
-const WIND_FORWARD_KEY: KeyCode = KeyCode::BracketRight;
 
 /// Asks the server to wind the clock back or forward while `[` or `]` is held, and to stop
 /// when it's let go.
 pub fn wind_clock(
-    keys: Res<ButtonInput<KeyCode>>,
+    controls: Controls,
     mut requests: MessageWriter<WindClock>,
     mut asked: Local<i8>,
 ) {
-    let wound = keys.pressed(WIND_FORWARD_KEY) as i8 - keys.pressed(WIND_BACK_KEY) as i8;
+    let wound =
+        controls.pressed(Action::WindForward) as i8 - controls.pressed(Action::WindBack) as i8;
     if wound != *asked {
         *asked = wound;
         requests.write(WindClock(wound));
@@ -45,8 +44,9 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
     use bevy_replicon::prelude::*;
 
-    use super::{follow_clock, wind_clock, WIND_FORWARD_KEY};
+    use super::{follow_clock, wind_clock};
     use crate::clock::{TimeOfDay, DAY_SECONDS, START_TIME};
+    use crate::controls::Bindings;
     use crate::protocol::{ProtocolPlugin, TimeSync};
     use crate::server::{is_authority, ServerPlugin};
     use crate::world::World;
@@ -65,6 +65,8 @@ mod tests {
         ))
         .init_resource::<TimeOfDay>()
         .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<Bindings>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
             FRAME,
         )))
@@ -110,7 +112,7 @@ mod tests {
         for frame in 0..40 {
             if frame == 30 {
                 let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-                keys.press(WIND_FORWARD_KEY);
+                keys.press(KeyCode::BracketRight);
             }
             let before = time(&app);
             app.update();

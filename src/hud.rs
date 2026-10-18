@@ -1,21 +1,25 @@
 //! What survival shows of the local player (§5.5): hearts and the food bar over the hotbar, with
 //! bubbles over the food while they're short of breath, a red flash and a tilt of the view when
 //! they're hurt, the screen fading as they sleep, and the death screen. And eating, by holding
-//! right click with food selected, which the server times.
+//! right click with food selected, which the server times. And in any mode, the crosshair.
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::{observe, Activate};
 
 use crate::client::player::LocalPlayer;
+use crate::controls::{Action, Bindings, Controls};
 use crate::game_mode::GameMode;
 use crate::hotbar::HOTBAR_TOP;
 use crate::interaction::{is_used, Target};
 use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
-use crate::menu::{button, font, free_cursor, label, GameState, TEXT_SHADOW};
+use crate::menu::widgets::{column, first, text_button, WIDE};
+use crate::menu::{font, free_cursor, GameState, InWorld, TEXT_SHADOW};
 use crate::player::input::follow_look;
+use crate::preferences::{Crosshair, Preferences};
 use crate::protocol::{Eat, Respawn};
+use crate::session;
 use crate::survival::{Asleep, Vitals, MAX_AIR};
 use crate::world::World;
 
@@ -40,6 +44,11 @@ const HURT_TILT: f32 = 0.06;
 const FALL_ASLEEP_SECONDS: f32 = 1.5;
 const WAKE_SECONDS: f32 = 0.3;
 const ASLEEP_DARKNESS: f32 = 0.9;
+// The crosshair's arms, and its dot, in pixels.
+const CROSSHAIR_LENGTH: f32 = 18.0;
+const CROSSHAIR_THICKNESS: f32 = 2.0;
+const CROSSHAIR_DOT: f32 = 4.0;
+const CROSSHAIR_COLOUR: Color = Color::srgba(1.0, 1.0, 1.0, 0.8);
 
 /// The survival HUD, the death screen and eating. Needs `HotbarPlugin`'s place on screen and
 /// `MenuPlugin`'s states.
@@ -47,7 +56,8 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_hud)
+        app.init_resource::<Bindings>()
+            .add_systems(Startup, spawn_hud)
             .add_systems(
                 Update,
                 (
@@ -55,6 +65,7 @@ impl Plugin for HudPlugin {
                     die_and_live,
                     (flash_hurt, fade_asleep).after(follow_look),
                     eat.run_if(resource_exists::<World>),
+                    show_crosshair,
                 ),
             )
             .add_systems(OnEnter(GameState::Dead), show_death_screen)
@@ -87,6 +98,10 @@ struct SleepFade;
 
 #[derive(Component)]
 struct DeathScreen;
+
+/// A part of the crosshair, drawn for some of its styles.
+#[derive(Component)]
+struct CrosshairPart(&'static [Crosshair]);
 
 fn spawn_hud(
     mut commands: Commands,
@@ -148,6 +163,7 @@ fn spawn_hud(
     commands
         .spawn((
             Bars,
+            InWorld,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(HOTBAR_TOP + BARS_GAP),
@@ -196,34 +212,86 @@ fn spawn_hud(
             TextColor(Color::WHITE),
             TEXT_SHADOW,
         ));
-    commands
-        .spawn((
-            DeathScreen,
+    commands.spawn((
+        DeathScreen,
+        Node {
+            display: Display::None,
+            ..full_screen()
+        },
+        BackgroundColor(Color::srgba(0.5, 0.0, 0.0, 0.5)),
+        // over the hotbar and the bars, under the pause menu
+        GlobalZIndex(3),
+        children![(
+            column(),
+            children![
+                (
+                    Text::new("You died!"),
+                    font(36.0),
+                    TextColor(Color::WHITE),
+                    TEXT_SHADOW,
+                    Node {
+                        margin: UiRect::bottom(Val::Px(30.0)),
+                        ..default()
+                    },
+                ),
+                (
+                    text_button("Respawn", WIDE),
+                    first(),
+                    observe(|_: On<Activate>, mut respawns: MessageWriter<Respawn>| {
+                        respawns.write(Respawn);
+                    }),
+                ),
+                (
+                    text_button("Quit to Title", WIDE),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.run_system_cached(session::leave);
+                    }),
+                ),
+            ],
+        )],
+    ));
+    let bar = |width, height, styles| {
+        (
+            CrosshairPart(styles),
             Node {
-                display: Display::None,
-                ..full_screen()
+                position_type: PositionType::Absolute,
+                width: Val::Px(width),
+                height: Val::Px(height),
+                ..default()
             },
-            BackgroundColor(Color::srgba(0.5, 0.0, 0.0, 0.5)),
-            // over the hotbar and the bars, under the pause menu
-            GlobalZIndex(3),
-        ))
-        .with_children(|screen| {
-            screen.spawn((
-                Text::new("You died!"),
-                font(36.0),
-                TextColor(Color::WHITE),
-                TEXT_SHADOW,
-                Node {
-                    margin: UiRect::bottom(Val::Px(30.0)),
-                    ..default()
-                },
-            ));
-            screen.spawn(button()).with_child(label("Respawn")).observe(
-                |_: On<Activate>, mut respawns: MessageWriter<Respawn>| {
-                    respawns.write(Respawn);
-                },
-            );
-        });
+            BackgroundColor(CROSSHAIR_COLOUR),
+        )
+    };
+    commands.spawn((
+        InWorld,
+        Pickable::IGNORE,
+        full_screen(),
+        children![
+            bar(CROSSHAIR_LENGTH, CROSSHAIR_THICKNESS, &[Crosshair::Cross]),
+            bar(CROSSHAIR_THICKNESS, CROSSHAIR_LENGTH, &[Crosshair::Cross]),
+            bar(CROSSHAIR_DOT, CROSSHAIR_DOT, &[Crosshair::Dot]),
+        ],
+    ));
+}
+
+// The crosshair in the style chosen, only while playing, as the menus and screens over the
+// game have the cursor instead.
+fn show_crosshair(
+    preferences: Res<Preferences>,
+    state: Res<State<GameState>>,
+    mut parts: Query<(&CrosshairPart, &mut Visibility)>,
+) {
+    if !preferences.is_changed() && !state.is_changed() {
+        return;
+    }
+    let style = preferences.accessibility.crosshair;
+    for (part, mut visibility) in &mut parts {
+        *visibility = if *state.get() == GameState::Playing && part.0.contains(&style) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
 }
 
 // Each icon as the local player's vitals have it, and the bars only in survival and while
@@ -278,9 +346,11 @@ fn halves(points: u8, nth: usize) -> usize {
     }
 }
 
-// Flashes the screen red and tilts the view for a moment when the local player's hurt.
+// Flashes the screen red and tilts the view for a moment when the local player's hurt, unless
+// the tilt's turned off.
 fn flash_hurt(
     time: Res<Time>,
+    preferences: Res<Preferences>,
     player: Query<&Vitals, With<LocalPlayer>>,
     mut flash: Query<&mut BackgroundColor, With<HurtFlash>>,
     mut cameras: Query<&mut Transform, With<Camera3d>>,
@@ -299,7 +369,7 @@ fn flash_hurt(
     for mut background in &mut flash {
         background.0 = Color::srgba(0.8, 0.0, 0.0, HURT_RED * hurt);
     }
-    if hurt > 0.0 {
+    if hurt > 0.0 && preferences.accessibility.hurt_tilt {
         // after the camera's turned the way the player looks, which it is each frame afresh
         for mut camera in &mut cameras {
             camera.rotation *= Quat::from_rotation_z(HURT_TILT * hurt);
@@ -372,7 +442,7 @@ fn hide_death_screen(mut screen: Query<&mut Node, With<DeathScreen>>) {
 fn eat(
     world: Res<World>,
     state: Res<State<GameState>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    controls: Controls,
     target: Res<Target>,
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
     mut eating: Local<Option<u8>>,
@@ -386,7 +456,7 @@ fn eat(
         .is_some_and(|s| s.item.fills().is_some());
     let using = target.0.is_some_and(|hit| is_used(&world, hit, mode));
     let wants =
-        *state.get() == GameState::Playing && mouse.pressed(MouseButton::Right) && food && !using;
+        *state.get() == GameState::Playing && controls.pressed(Action::Place) && food && !using;
     let slot = wants.then_some(hotbar.selected as u8);
     if slot != *eating {
         *eating = slot;

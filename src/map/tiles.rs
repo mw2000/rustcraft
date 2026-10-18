@@ -170,6 +170,18 @@ impl MapTiles {
     }
 }
 
+/// Forgets the tiles of the world left, which the next would draw differently.
+pub(super) fn forget_tiles(
+    mut tiles: ResMut<MapTiles>,
+    nodes: Query<Entity, With<TileKey>>,
+    mut commands: Commands,
+) {
+    *tiles = MapTiles::default();
+    for node in &nodes {
+        commands.entity(node).despawn();
+    }
+}
+
 /// The node the map's images go in.
 #[derive(Component)]
 pub(super) struct TileLayer;

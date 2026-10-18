@@ -11,6 +11,8 @@ pub mod clouds;
 pub mod collision;
 pub mod commands;
 pub mod containers;
+#[cfg(feature = "client")]
+pub mod controls;
 pub mod crafting;
 pub mod creatures;
 #[cfg(feature = "client")]
@@ -38,9 +40,13 @@ pub mod menu;
 #[cfg(feature = "client")]
 pub mod picker;
 pub mod player;
+#[cfg(feature = "client")]
+pub mod preferences;
 pub mod protocol;
 pub mod save;
 pub mod server;
+#[cfg(feature = "client")]
+pub mod session;
 pub mod settings;
 #[cfg(feature = "client")]
 pub mod sky;

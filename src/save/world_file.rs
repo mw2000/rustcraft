@@ -30,6 +30,10 @@ pub struct WorldFile {
     /// The names of the players besides the host who may run every command (`Operators`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ops: Vec<String>,
+    /// The game mode players new to it start in, chosen as it's made, survival in worlds made
+    /// before there was a choice.
+    #[serde(default, skip_serializing_if = "GameMode::is_survival")]
+    pub new_player_mode: GameMode,
     /// The host's player, once they've played in it, the only one saved until M0.6.
     pub player: Option<PlayerState>,
 }
@@ -59,10 +63,9 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
-    /// A player arriving in a new world at `position`, facing +z, walking unless their game
-    /// mode flies.
-    pub fn arriving_at(position: Vec3) -> Self {
-        let game_mode = GameMode::default();
+    /// A player arriving in a new world at `position` in `game_mode`, facing +z, walking unless
+    /// their game mode flies.
+    pub fn arriving_at(position: Vec3, game_mode: GameMode) -> Self {
         Self {
             position: position.into(),
             yaw: PI,
@@ -143,6 +146,7 @@ impl WorldFile {
             seed,
             time_of_day,
             ops: Vec::new(),
+            new_player_mode: GameMode::default(),
             player: None,
         }
     }
@@ -189,7 +193,8 @@ mod tests {
     fn test_world_files_round_trip() {
         let mut file = WorldFile::new(1234, 2.75);
         assert_eq!(file, WorldFile::from_toml(&file.to_toml()).unwrap());
-        let mut player = PlayerState::arriving_at(Vec3::new(10.5, 470.0, -3000.25));
+        let mut player =
+            PlayerState::arriving_at(Vec3::new(10.5, 470.0, -3000.25), GameMode::default());
         player.movement = Movement::Walk;
         player.game_mode = GameMode::Survival;
         file.player = Some(player);
@@ -204,7 +209,7 @@ mod tests {
         let mut file = WorldFile::new(1, 0.5);
         assert!(!file.to_toml().contains("ops"));
         file.ops = vec!["alex".into(), "Sam".into()];
-        file.player = Some(PlayerState::arriving_at(Vec3::ONE));
+        file.player = Some(PlayerState::arriving_at(Vec3::ONE, GameMode::default()));
         let text = file.to_toml();
         assert!(text.contains(r#"ops = ["alex", "Sam"]"#), "{text}");
         assert_eq!(file, WorldFile::from_toml(&text).unwrap());
@@ -244,7 +249,7 @@ mod tests {
     #[test]
     fn test_older_saves_get_a_new_players_mode_and_hotbar() {
         let mut file = WorldFile::new(1, 0.5);
-        file.player = Some(PlayerState::arriving_at(Vec3::ONE));
+        file.player = Some(PlayerState::arriving_at(Vec3::ONE, GameMode::default()));
         let text = file.to_toml();
         let older = &text[..text.find("game_mode").unwrap()];
         assert!(!older.contains("hotbar"), "{older}");
@@ -299,7 +304,7 @@ mod tests {
         );
         assert_eq!(body, state.body());
         assert_eq!(look, state.look());
-        let arriving = PlayerState::arriving_at(Vec3::ONE).look();
+        let arriving = PlayerState::arriving_at(Vec3::ONE, GameMode::default()).look();
         assert!(arriving.forward().dot(Vec3::Z) > 0.9999);
     }
 
@@ -312,7 +317,8 @@ mod tests {
             air: 4,
         };
         let bed = SpawnBed(Some(I64Vec3::new(-12, 470, 1 << 40)));
-        file.player = Some(PlayerState::arriving_at(Vec3::ONE).surviving(vitals, bed));
+        file.player =
+            Some(PlayerState::arriving_at(Vec3::ONE, GameMode::default()).surviving(vitals, bed));
         let text = file.to_toml();
         assert!(text.contains("health = 7"), "{text}");
         let player = WorldFile::from_toml(&text).unwrap().player.unwrap();

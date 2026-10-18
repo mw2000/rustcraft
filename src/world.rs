@@ -1,5 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
+use bevy::app::App;
+use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel, SystemSet};
 use bevy::prelude::Resource;
 use bevy::{
     math::{I64Vec3, Vec3},
@@ -23,6 +25,29 @@ pub struct Reroofed {
     /// Whether that roofed it over entirely or opened it, which decides whether it and the
     /// chunks against it are sealed, see `World::is_chunk_sealed`.
     pub sealed_changed: bool,
+}
+
+/// Run to leave the world being played, saving it and putting everything that belongs to it
+/// away, so the App is as it was before it opened and another world can be opened in it: from
+/// the pause menu's Save and Quit to Title, and when the server's lost.
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LeaveWorld;
+
+/// The steps of `LeaveWorld`, in order.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LeaveWorldSystems {
+    /// Seeing off whoever's joined, and letting go of the server joined.
+    Disconnect,
+    /// The last save, of everyone still there.
+    Save,
+    /// Putting away what's left: entities, and resources back as they started.
+    Clear,
+}
+
+/// Puts `LeaveWorld`'s steps in order, for each plugin that adds to them.
+pub fn order_leaving(app: &mut App) {
+    use LeaveWorldSystems::*;
+    app.configure_sets(LeaveWorld, (Disconnect, Save, Clear).chain());
 }
 
 /// What keeps a chunk loaded, see `World::hold`.
@@ -51,7 +76,8 @@ pub struct World {
     // the edits as LOD nodes draw them, worked out from `edits`, or for a client joined to a
     // server, sent by it, as it has only the edits near its player (§4.4)
     lod_edits: LodEdits,
-    lod_edits_sent: bool,
+    // whether this App's server decides what happens in it, see `is_served_here`
+    served_here: bool,
     // chunks whose roofs edits have changed, see `take_reroofed`
     reroofed: Vec<Reroofed>,
     // blocks whose edits have changed block light, see `take_relit`
@@ -88,7 +114,7 @@ impl World {
             chunks: HashMap::new(),
             holders: HashMap::new(),
             lod_edits: LodEdits::of(&edits),
-            lod_edits_sent: false,
+            served_here: true,
             edits,
             reroofed: Vec::new(),
             relit: Vec::new(),
@@ -103,10 +129,11 @@ impl World {
     }
 
     /// The world with the given seed for a client joined to a server, which is sent the edits
-    /// near its player and, as LOD nodes draw them, those further off.
+    /// near its player and, as LOD nodes draw them, those further off. Also the title screen's
+    /// scenery, which has no server and no edits.
     pub fn joined(seed: u32, region_distance: u32) -> Self {
         Self {
-            lod_edits_sent: true,
+            served_here: false,
             ..Self::from_save(seed, Edits::default(), region_distance)
         }
     }
@@ -119,6 +146,12 @@ impl World {
 
     pub fn seed(&self) -> u32 {
         self.seed
+    }
+
+    /// Whether this App's server decides what happens in this world: not for a client's copy
+    /// of one served elsewhere, nor the title screen's scenery.
+    pub fn is_served_here(&self) -> bool {
+        self.served_here
     }
 
     pub fn edits(&self) -> &Edits {
@@ -191,7 +224,7 @@ impl World {
             }
         }
         self.edits.set(block, to);
-        if !self.lod_edits_sent {
+        if self.served_here {
             self.lod_edits.update(&self.edits, block);
         }
         true

@@ -484,7 +484,7 @@ mod tests {
         use crate::chunks::chunk_loader::{Chunk, ChunkLoader};
         use crate::chunks::fade::Fade;
         use crate::chunks::lod::{LodKey, LodLayout};
-        use crate::client::edits::{apply_block_changes, Predictions};
+        use crate::client::edits::{apply_block_changes, Predictions, WaitingEdits};
         use crate::protocol::BlockChanged;
         use crate::world::World;
 
@@ -524,6 +524,7 @@ mod tests {
             loaded(&mut ecs, I64Vec3::new(-1, 19, -1), I64Vec3::new(1, 21, 1));
             ecs.init_resource::<bevy::ecs::message::Messages<BlockChanged>>();
             ecs.init_resource::<Predictions>();
+            ecs.init_resource::<WaitingEdits>();
             // in the top corner of chunk (0, 20, 0), against the chunks to +x, +y and -z
             ecs.write_message(BlockChanged {
                 block: I64Vec3::new(15, 20 * 16 + 15, 0),
@@ -561,6 +562,7 @@ mod tests {
                 .init_asset::<Mesh>()
                 .add_message::<BlockChanged>()
                 .init_resource::<Predictions>()
+                .init_resource::<WaitingEdits>()
                 .add_systems(
                     Update,
                     (apply_block_changes, rebuild_groups, load_groups).chain(),

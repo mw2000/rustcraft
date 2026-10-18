@@ -1,8 +1,9 @@
 use bevy::ecs::component::Component;
 use serde::{Deserialize, Serialize};
 
-// Long enough for anyone's, short enough for a label over their head.
-const MAX_LENGTH: usize = 16;
+/// The longest a name can be, in characters: long enough for anyone's, short enough for a label
+/// over their head.
+pub const MAX_NAME_LENGTH: usize = 16;
 
 /// A player's name, as others see it over their head and their save is named by: up to 16
 /// letters, digits, `_` and `-`, so it makes a file name anywhere.
@@ -15,7 +16,7 @@ impl PlayerName {
         let kept: String = name
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-            .take(MAX_LENGTH)
+            .take(MAX_NAME_LENGTH)
             .collect();
         Self(if kept.is_empty() {
             "Player".into()

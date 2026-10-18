@@ -6,7 +6,7 @@ use bevy::{
         query::With,
         system::{Query, Res},
     },
-    input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
+    input::mouse::MouseMotion,
     log::info,
     math::Vec3,
     time::Time,
@@ -15,26 +15,29 @@ use bevy::{
 
 use super::physics::{step, MoveInput};
 use super::{Movement, Player, PlayerLook};
+use crate::controls::{Action, Controls};
+use crate::preferences::Preferences;
 use crate::{
     chunks::chunk::ChunkCoordinate, client::player::LocalPlayer, game_mode::GameMode, world::World,
 };
 
-const FLY_TOGGLE_KEY: KeyCode = KeyCode::KeyF;
-// How far the mouse turns the view, per pixel it moves. Mouse motion is already a distance, so
-// it isn't scaled by the frame's length, which would turn the view less the higher the frame rate.
+// How far the mouse turns the view, per pixel it moves, at a sensitivity of 1. Mouse motion is
+// already a distance, so it isn't scaled by the frame's length, which would turn the view less
+// the higher the frame rate.
 const LOOK_SENSITIVITY: f32 = 0.1_f32.to_radians();
 
 /// Moves the player by the keys held: WASD across, Space and Ctrl up and down or jumping,
-/// Shift sprinting, and F between flying and walking where the game mode allows.
+/// Shift sprinting, and F between flying and walking where the game mode allows, or whatever
+/// they're bound to.
 pub fn player_move(
     time: Res<Time>,
     world: Res<World>,
     mut players: Query<(&mut Transform, &mut Player, &PlayerLook, &GameMode), With<LocalPlayer>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    controls: Controls,
 ) {
     let (mut transform, mut player, look, mode) =
         players.single_mut().expect("player does not exist");
-    if keys.just_pressed(FLY_TOGGLE_KEY) && mode.can_fly() {
+    if controls.just_pressed(Action::Fly) && mode.can_fly() {
         player.movement = match player.movement {
             Movement::Walk => Movement::Fly,
             Movement::Fly => Movement::Walk,
@@ -51,17 +54,17 @@ pub fn player_move(
         transform.translation,
         &mut player,
         *look,
-        move_input(&keys),
+        move_input(&controls),
         time.delta_secs(),
         block,
     );
 }
 
-fn move_input(keys: &ButtonInput<KeyCode>) -> MoveInput {
+fn move_input(controls: &Controls) -> MoveInput {
     let axis = |negative, positive| {
-        if keys.pressed(negative) {
+        if controls.pressed(negative) {
             -1.0
-        } else if keys.pressed(positive) {
+        } else if controls.pressed(positive) {
             1.0
         } else {
             0.0
@@ -69,27 +72,29 @@ fn move_input(keys: &ButtonInput<KeyCode>) -> MoveInput {
     };
     MoveInput {
         across: Vec3::new(
-            axis(KeyCode::KeyA, KeyCode::KeyD),
+            axis(Action::Left, Action::Right),
             0.0,
-            axis(KeyCode::KeyW, KeyCode::KeyS),
+            axis(Action::Forward, Action::Back),
         ),
-        rise: -axis(KeyCode::Space, KeyCode::ControlLeft),
-        jump: keys.pressed(KeyCode::Space),
-        sprint: keys.pressed(KeyCode::ShiftLeft),
+        rise: -axis(Action::Jump, Action::Descend),
+        jump: controls.pressed(Action::Jump),
+        sprint: controls.pressed(Action::Sprint),
     }
 }
 
-/// Turns the player's look with the mouse.
+/// Turns the player's look with the mouse, as sensitive as the Controls settings have it, and
+/// upside down if they invert it.
 pub fn player_look(
     mut looks: Query<&mut PlayerLook, With<LocalPlayer>>,
     mut motion: MessageReader<MouseMotion>,
+    preferences: Res<Preferences>,
 ) {
     let mut look = looks.single_mut().expect("player does not exist");
+    let controls = &preferences.controls;
+    let turn = LOOK_SENSITIVITY * controls.sensitivity;
+    let up = if controls.invert_y { -1.0 } else { 1.0 };
     for ev in motion.read() {
-        look.turn(
-            -ev.delta.x * LOOK_SENSITIVITY,
-            -ev.delta.y * LOOK_SENSITIVITY,
-        );
+        look.turn(-ev.delta.x * turn, -ev.delta.y * turn * up);
     }
 }
 

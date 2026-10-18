@@ -129,9 +129,9 @@ pub struct CloudLayer {
     pub layer: Handle<ShaderBuffer>,
 }
 
-// One copy of the pattern, `offset` patterns from the one over the camera.
+/// One copy of the clouds' pattern, `offset` patterns from the one over the camera.
 #[derive(Component)]
-struct CloudTile {
+pub struct CloudTile {
     offset: IVec2,
 }
 

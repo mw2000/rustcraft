@@ -46,7 +46,7 @@ pub struct SoundPlugin;
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PlaySound>()
-            .insert_resource(Volumes::load())
+            .init_resource::<Volumes>()
             .add_systems(Startup, load_sounds)
             .add_systems(
                 Update,
@@ -60,7 +60,6 @@ impl Plugin for SoundPlugin {
                 footsteps::FootstepsPlugin,
                 events::SoundEventsPlugin,
                 ambience::AmbiencePlugin,
-                volume::VolumeMenuPlugin,
             ));
     }
 }

@@ -3,25 +3,12 @@ use bevy::prelude::*;
 
 use crate::client::command_bar::command_bar_closed;
 use crate::client::player::LocalPlayer;
+use crate::controls::{Action, Bindings, Controls};
 use crate::game_mode::GameMode;
 use crate::inventory::icons::{draw_stacks, load_icons, stack_view, ItemIcons, StackView};
 use crate::inventory::{Hotbar, HOTBAR_SLOTS};
-use crate::menu::GameState;
+use crate::menu::{GameState, InWorld};
 use crate::protocol::DropItem;
-
-const SLOT_KEYS: [KeyCode; HOTBAR_SLOTS] = [
-    KeyCode::Digit1,
-    KeyCode::Digit2,
-    KeyCode::Digit3,
-    KeyCode::Digit4,
-    KeyCode::Digit5,
-    KeyCode::Digit6,
-    KeyCode::Digit7,
-    KeyCode::Digit8,
-    KeyCode::Digit9,
-];
-
-const DROP_KEY: KeyCode = KeyCode::KeyQ;
 
 // Touchpads scroll in pixels, which are gathered up into notches of a mouse wheel.
 const PIXELS_PER_NOTCH: f32 = 40.0;
@@ -46,7 +33,8 @@ pub struct HotbarPlugin;
 
 impl Plugin for HotbarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (load_icons, spawn_hotbar).chain())
+        app.init_resource::<Bindings>()
+            .add_systems(Startup, (load_icons, spawn_hotbar).chain())
             .add_systems(
                 Update,
                 (
@@ -83,6 +71,7 @@ fn spawn_hotbar(mut commands: Commands, icons: Res<ItemIcons>) {
     commands
         .spawn((
             Strip,
+            InWorld,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(MARGIN),
@@ -125,7 +114,7 @@ fn spawn_hotbar(mut commands: Commands, icons: Res<ItemIcons>) {
 }
 
 fn select_slot(
-    keys: Res<ButtonInput<KeyCode>>,
+    controls: Controls,
     scroll: Res<AccumulatedMouseScroll>,
     mut hotbar: Query<&mut Hotbar, With<LocalPlayer>>,
     // how far the wheel's turned towards the next notch
@@ -134,7 +123,10 @@ fn select_slot(
     let Ok(mut hotbar) = hotbar.single_mut() else {
         return;
     };
-    if let Some(slot) = SLOT_KEYS.iter().position(|&key| keys.just_pressed(key)) {
+    if let Some(slot) = Action::SLOTS
+        .iter()
+        .position(|&slot| controls.just_pressed(slot))
+    {
         hotbar.selected = slot;
     }
     *notches += match scroll.unit {
@@ -151,6 +143,7 @@ fn select_slot(
 
 // Q throws one of what's held, and Ctrl+Q the whole stack, as in Minecraft.
 fn drop_held(
+    controls: Controls,
     keys: Res<ButtonInput<KeyCode>>,
     hotbar: Query<&Hotbar, With<LocalPlayer>>,
     mut drops: MessageWriter<DropItem>,
@@ -158,7 +151,7 @@ fn drop_held(
     let Ok(hotbar) = hotbar.single() else {
         return;
     };
-    if keys.just_pressed(DROP_KEY) {
+    if controls.just_pressed(Action::Drop) {
         drops.write(DropItem {
             slot: hotbar.selected as u8,
             all: keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
@@ -270,7 +263,7 @@ mod tests {
         ))
         .init_asset::<Image>()
         .init_asset::<TextureAtlasLayout>()
-        .init_state::<GameState>();
+        .insert_state(GameState::Playing);
         app.world_mut().spawn((
             Player::default(),
             LocalPlayer,

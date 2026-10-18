@@ -1,6 +1,7 @@
 mod creatures;
 pub(crate) mod region;
 mod world_file;
+pub mod worlds;
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -11,8 +12,8 @@ use bevy::app::{App, AppExit, Last, OnAppExitSystems, Plugin};
 use bevy::ecs::{
     message::MessageReader,
     resource::Resource,
-    schedule::IntoScheduleConfigs,
-    system::{Query, Res, ResMut, SystemParam},
+    schedule::{common_conditions::resource_exists, IntoScheduleConfigs},
+    system::{Commands, Query, Res, ResMut, SystemParam},
 };
 use bevy::log::{error, info};
 use bevy::platform::collections::{HashMap, HashSet};
@@ -35,7 +36,7 @@ use crate::player::{Player, PlayerLook, PlayerOwner};
 use crate::server::creatures::{Dormant, Health};
 use crate::server::Operators;
 use crate::survival::{SpawnBed, Vitals};
-use crate::world::World;
+use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 use region::{ChunkEdits, Region};
 pub use world_file::{PlayerState, WorldFile};
 
@@ -52,20 +53,34 @@ pub struct SavePlugin;
 
 impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
+        order_leaving(app);
+        // with a world open, which the game's menus are without
         app.add_systems(
             Last,
-            (autosave, save_on_exit.in_set(OnAppExitSystems)).chain(),
+            (autosave, save_on_exit.in_set(OnAppExitSystems))
+                .chain()
+                .run_if(resource_exists::<WorldSave>),
+        )
+        .add_systems(
+            LeaveWorld,
+            save_on_leaving
+                .in_set(LeaveWorldSystems::Save)
+                .run_if(resource_exists::<WorldSave>),
         );
     }
 }
 
-/// Where worlds are saved, a directory each: under the platform's data directory, such as
-/// `~/.local/share/rustcraft/worlds` on Linux.
-pub fn worlds_dir() -> PathBuf {
+/// Where the game keeps what it saves, under the platform's data directory, such as
+/// `~/.local/share/rustcraft` on Linux.
+pub fn data_dir() -> PathBuf {
     dirs::data_dir()
-        .expect("there's no data directory to save worlds in")
+        .expect("there's no data directory to save in")
         .join("rustcraft")
-        .join("worlds")
+}
+
+/// Where worlds are saved, a directory each.
+pub fn worlds_dir() -> PathBuf {
+    data_dir().join("worlds")
 }
 
 /// The name of the world to play: `RC_WORLD`, or `world`.
@@ -83,6 +98,8 @@ pub struct WorldSave {
     written: Option<WorldFile>,
     // the host's player as it was opened, kept as it is by a dedicated server, which has none
     host: Option<PlayerState>,
+    // see `WorldFile::new_player_mode`
+    new_player_mode: GameMode,
     // the players who've joined from elsewhere, by name, as they were saved or as they left
     players: HashMap<String, PlayerState>,
     // those of them changed since they were last written
@@ -228,6 +245,7 @@ impl WorldSave {
             unsaved: HashSet::new(),
             written: Some(file.clone()),
             host: file.player.clone(),
+            new_player_mode: file.new_player_mode,
             players,
             unsaved_players: HashSet::new(),
             opened_creatures: written_creatures.values().flatten().copied().collect(),
@@ -258,6 +276,11 @@ impl WorldSave {
     /// The world's directory.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The game mode players new to the world start in.
+    pub fn new_player_mode(&self) -> GameMode {
+        self.new_player_mode
     }
 
     /// Saves what's changed at the next frame's autosave rather than waiting for its time.
@@ -483,6 +506,7 @@ impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
         file.ops = self.operators.names().to_vec();
+        file.new_player_mode = save.new_player_mode;
         file.player = save.host.clone();
         for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players
         {
@@ -548,13 +572,22 @@ fn save_on_exit(
     mut save: ResMut<WorldSave>,
     mut savable: Savable,
 ) {
-    if exits.read().count() == 0 {
-        return;
+    if exits.read().count() > 0 {
+        write_last_save(&mut save, &mut savable);
     }
+}
+
+// The same as the world's left for another, which is done with its save once it's written.
+fn save_on_leaving(mut save: ResMut<WorldSave>, mut savable: Savable, mut commands: Commands) {
+    write_last_save(&mut save, &mut savable);
+    commands.remove_resource::<WorldSave>();
+}
+
+fn write_last_save(save: &mut WorldSave, savable: &mut Savable) {
     if let Some(writing) = save.writing.take() {
         save.finished(block_on(writing.task), writing.contents);
     }
-    let snapshot = savable.snapshot(&mut save);
+    let snapshot = savable.snapshot(save);
     let contents = snapshot.contents();
     let result = snapshot.write();
     if result.is_ok() {

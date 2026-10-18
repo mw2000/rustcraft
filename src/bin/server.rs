@@ -13,7 +13,7 @@ use bevy_replicon::prelude::RepliconChannels;
 use rustcraft::chunks::task_pool_plugin;
 use rustcraft::protocol::DEFAULT_PORT;
 use rustcraft::save::{world_name, worlds_dir};
-use rustcraft::server::{host, Console, DedicatedServerPlugins, WorldToOpen};
+use rustcraft::server::{host, Console, DedicatedServerPlugins, WorldToOpen, WorldUnopened};
 use rustcraft::world::World;
 
 // Frames a second. Clients send where they are 20 times a second and others see them 100 ms
@@ -110,6 +110,7 @@ fn main() -> AppExit {
         })
         .insert_resource(Console::stdin())
         .add_systems(Startup, serve(options.port))
+        .add_systems(Update, stop_if_unopened)
         .run()
 }
 
@@ -120,6 +121,13 @@ fn log_to_stdout(_: &mut App) -> Option<BoxedFmtLayer> {
         .with_writer(std::io::stdout)
         .with_ansi(terminal);
     Some(Box::new(layer))
+}
+
+// Stops the server if it couldn't open its world, having said why.
+fn stop_if_unopened(mut unopened: MessageReader<WorldUnopened>, mut exit: MessageWriter<AppExit>) {
+    if unopened.read().next().is_some() {
+        exit.write(AppExit::error());
+    }
 }
 
 // Takes players on `port`, or stops the server if it can't.

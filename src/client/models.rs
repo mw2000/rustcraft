@@ -192,10 +192,7 @@ fn draw_player(
     commands.spawn((
         NameLabel(add.entity),
         Text::new(name.as_str()),
-        TextFont {
-            font_size: bevy::text::FontSize::Px(14.0),
-            ..default()
-        },
+        crate::menu::font(14.0),
         TextColor(Color::WHITE),
         Node {
             position_type: PositionType::Absolute,

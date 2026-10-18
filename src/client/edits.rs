@@ -104,6 +104,15 @@ impl EditOrder {
     }
 }
 
+/// What the server's sent about edits before this client's world is made, while it's checked,
+/// waiting for it.
+#[derive(Resource, Default)]
+pub struct WaitingEdits {
+    chunks: Vec<ChunkEdits>,
+    summaries: Vec<EditSummary>,
+    changes: Vec<BlockChanged>,
+}
+
 /// Makes this client's requests to change blocks in its own world at once, and has the meshes
 /// they reach rebuilt.
 pub fn predict_edits(
@@ -128,13 +137,16 @@ pub fn apply_chunk_edits(
     order: Option<ResMut<EditOrder>>,
     mut predictions: ResMut<Predictions>,
     mut chunk_loader: ResMut<ChunkLoader>,
-    mut waiting: Local<Vec<ChunkEdits>>,
+    mut waiting: ResMut<WaitingEdits>,
 ) {
     let (Some(mut world), Some(mut order)) = (world, order) else {
-        waiting.extend(sent.read().cloned());
+        waiting.chunks.extend(sent.read().cloned());
         return;
     };
-    for chunk in std::mem::take(&mut *waiting).iter().chain(sent.read()) {
+    for chunk in std::mem::take(&mut waiting.chunks)
+        .iter()
+        .chain(sent.read())
+    {
         let changed_since = order.chunk(chunk);
         for (block, to) in chunk.edits() {
             if !changed_since(block) && predictions.told(&mut world, block, to) {
@@ -149,14 +161,17 @@ pub fn apply_chunk_edits(
 pub fn apply_edit_summaries(
     mut summaries: MessageReader<EditSummary>,
     world: Option<ResMut<World>>,
-    mut waiting: Local<Vec<EditSummary>>,
+    mut waiting: ResMut<WaitingEdits>,
 ) {
     let Some(mut world) = world else {
-        waiting.extend(summaries.read().cloned());
+        waiting.summaries.extend(summaries.read().cloned());
         return;
     };
     let lod_edits = world.lod_edits_mut();
-    for summary in std::mem::take(&mut *waiting).iter().chain(summaries.read()) {
+    for summary in std::mem::take(&mut waiting.summaries)
+        .iter()
+        .chain(summaries.read())
+    {
         lod_edits.set(summary.cells());
     }
 }
@@ -170,13 +185,13 @@ pub fn apply_block_changes(
     mut order: Option<ResMut<EditOrder>>,
     mut predictions: ResMut<Predictions>,
     mut chunk_loader: ResMut<ChunkLoader>,
-    mut waiting: Local<Vec<BlockChanged>>,
+    mut waiting: ResMut<WaitingEdits>,
 ) {
     let Some(mut world) = world else {
-        waiting.extend(changes.read().copied());
+        waiting.changes.extend(changes.read().copied());
         return;
     };
-    for change in std::mem::take(&mut *waiting)
+    for change in std::mem::take(&mut waiting.changes)
         .into_iter()
         .chain(changes.read().copied())
     {

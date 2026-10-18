@@ -235,9 +235,27 @@ pub(super) fn save_on_exit(
     file: Option<ResMut<MapFile>>,
     mut explored: ResMut<Explored>,
 ) {
-    let Some(mut file) = file.filter(|_| exits.read().count() > 0) else {
-        return;
-    };
+    if let Some(mut file) = file.filter(|_| exits.read().count() > 0) {
+        write_last(&mut file, &mut explored);
+    }
+}
+
+/// The same as the world's left, forgetting it, ready for the next.
+pub(super) fn save_on_leaving(
+    file: Option<ResMut<MapFile>>,
+    mut explored: ResMut<Explored>,
+    mut commands: Commands,
+) {
+    if let Some(mut file) = file {
+        write_last(&mut file, &mut explored);
+    }
+    *explored = Explored::default();
+    commands.remove_resource::<MapFile>();
+    commands.remove_resource::<MapDir>();
+}
+
+// Waits for what's being read and written, and writes what's still to be.
+fn write_last(file: &mut MapFile, explored: &mut Explored) {
     if let Some(loading) = file.loading.take() {
         explored.add_read(block_on(loading), &file.path);
     }

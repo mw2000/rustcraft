@@ -9,8 +9,9 @@ pub mod tiles;
 use bevy::prelude::*;
 
 use crate::client::command_bar::command_bar_closed;
+use crate::controls::Bindings;
 use crate::menu::GameState;
-use crate::world::World;
+use crate::world::{LeaveWorld, LeaveWorldSystems, World};
 use explored::{Explored, MapDir, MapFile};
 use tiles::MapTiles;
 
@@ -20,7 +21,8 @@ pub struct MapPlugin;
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Explored>()
+        app.init_resource::<Bindings>()
+            .init_resource::<Explored>()
             .init_resource::<MapView>()
             .init_resource::<MapTiles>()
             .add_systems(Startup, screen::spawn_map)
@@ -55,10 +57,19 @@ impl Plugin for MapPlugin {
                         .run_if(resource_exists::<World>),
                 ),
             )
+            .add_systems(
+                LeaveWorld,
+                (explored::save_on_leaving, tiles::forget_tiles, forget_view)
+                    .in_set(LeaveWorldSystems::Clear),
+            )
             .add_systems(OnEnter(GameState::Map), screen::open)
             .add_systems(OnExit(GameState::Map), screen::close)
             .add_systems(Last, explored::save_on_exit);
     }
+}
+
+fn forget_view(mut view: ResMut<MapView>) {
+    *view = MapView::default();
 }
 
 /// How many blocks each of the map's pixels covers at each zoom, from the closest in.

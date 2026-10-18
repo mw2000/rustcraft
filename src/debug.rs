@@ -15,9 +15,9 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 use crate::chunks::chunk_loader::Chunk;
 use crate::chunks::lod::LodNode;
 use crate::client::player::LocalPlayer;
+use crate::controls::{Action, Bindings, Controls};
 use crate::world::World;
 
-const TOGGLE_KEY: KeyCode = KeyCode::F1;
 const REFRESH_SECONDS: f32 = 0.25;
 
 /// F1 toggles a text readout of the player's climate, frame cost and loaded terrain.
@@ -29,7 +29,8 @@ impl Plugin for DebugOverlayPlugin {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
         let counts = DrawCounts::default();
-        app.insert_resource(counts.clone())
+        app.init_resource::<Bindings>()
+            .insert_resource(counts.clone())
             .add_systems(Startup, spawn_overlay)
             .add_systems(Update, (toggle_overlay, update_overlay).chain());
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
@@ -121,11 +122,8 @@ fn spawn_overlay(mut commands: Commands) {
     ));
 }
 
-fn toggle_overlay(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut overlay: Query<&mut Visibility, With<DebugOverlay>>,
-) {
-    if !keys.just_pressed(TOGGLE_KEY) {
+fn toggle_overlay(controls: Controls, mut overlay: Query<&mut Visibility, With<DebugOverlay>>) {
+    if !controls.just_pressed(Action::DebugOverlay) {
         return;
     }
     for mut visibility in &mut overlay {

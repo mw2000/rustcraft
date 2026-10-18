@@ -25,6 +25,11 @@ impl GameMode {
         }
     }
 
+    // by reference, as serde's `skip_serializing_if` asks
+    pub(crate) fn is_survival(&self) -> bool {
+        *self == Self::Survival
+    }
+
     /// Whether the player may fly.
     pub fn can_fly(self) -> bool {
         self == GameMode::Creative

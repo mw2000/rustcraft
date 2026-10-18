@@ -13,7 +13,7 @@ pub mod material;
 mod terrain;
 
 #[cfg(feature = "client")]
-pub use terrain::{insert_terrain_resources, TerrainPlugin};
+pub use terrain::{insert_terrain_resources, redraw_terrain, TerrainPlugin};
 
 use bevy::app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 

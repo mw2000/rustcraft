@@ -89,6 +89,12 @@ pub fn connect(
     Ok((client, transport))
 }
 
+/// Why this client's left the server it was joining or playing on, as the menus tell the player:
+/// it couldn't be reached, it plays another version, it generates another world, or the
+/// connection was lost.
+#[derive(Message, Debug, Clone)]
+pub struct LeftServer(pub String);
+
 /// How this client works out the checksum of what a seed generates: `world_checksum`, unless a
 /// test swaps it to play a client that generates a different world from the server's.
 #[derive(Resource, Clone, Copy)]
@@ -103,7 +109,7 @@ impl Default for GenerationChecksum {
 /// The world a client's been welcomed to, while it works out whether it generates the same
 /// terrain from the seed as the server (D-3).
 #[derive(Resource)]
-pub(super) struct Checking {
+pub struct Checking {
     seed: u32,
     server: u64,
     task: Task<u64>,
@@ -149,6 +155,7 @@ pub(super) fn check_world(
     settings: Res<Settings>,
     client: Option<ResMut<RenetClient>>,
     mut output: MessageWriter<CommandOutput>,
+    mut left: MessageWriter<LeftServer>,
     mut commands: Commands,
 ) {
     let Some(checksum) = futures::check_ready(&mut checking.task) else {
@@ -163,6 +170,7 @@ pub(super) fn check_world(
             checking.server
         );
         error!("{text}");
+        left.write(LeftServer(text.clone()));
         output.write(CommandOutput { text, error: true });
         if let Some(mut client) = client {
             client.disconnect();
@@ -256,16 +264,20 @@ pub(super) fn send_pose(
     });
 }
 
-/// Says in the command bar, and the log, when joining fails or the server goes.
+/// Says in the command bar, and the log, when joining fails or the server goes, but not when
+/// this client let go of it itself, leaving the world.
 pub(super) fn report_connection(
     mut transitions: MessageReader<StateTransitionEvent<ClientState>>,
     client: Option<Res<RenetClient>>,
     mut output: MessageWriter<CommandOutput>,
+    mut left: MessageWriter<LeftServer>,
 ) {
     for transition in transitions.read() {
+        let Some(client) = &client else {
+            continue;
+        };
         let why = client
-            .as_ref()
-            .and_then(|client| client.disconnect_reason())
+            .disconnect_reason()
             .map_or_else(String::new, |reason| format!(": {reason}"));
         let text = match (transition.exited, transition.entered) {
             (Some(ClientState::Connecting), Some(ClientState::Disconnected)) => {
@@ -277,19 +289,31 @@ pub(super) fn report_connection(
             _ => continue,
         };
         error!("{text}");
+        left.write(LeftServer(text.clone()));
         output.write(CommandOutput { text, error: true });
     }
 }
 
 /// Says why the server refused this client, as it disconnects it.
-pub(super) fn refused(_: On<ProtocolMismatch>, mut output: MessageWriter<CommandOutput>) {
+pub(super) fn refused(
+    _: On<ProtocolMismatch>,
+    mut output: MessageWriter<CommandOutput>,
+    mut left: MessageWriter<LeftServer>,
+) {
     let text = format!(
         "The server plays a different version of rustcraft from this one, {} (protocol {})",
         env!("CARGO_PKG_VERSION"),
         PROTOCOL_VERSION
     );
     error!("{text}");
+    left.write(LeftServer(text.clone()));
     output.write(CommandOutput { text, error: true });
+}
+
+// Lets go of the server joined as the world's left: removing the client is what disconnects it.
+pub(super) fn leave_server(mut commands: Commands) {
+    commands.remove_resource::<NetcodeClientTransport>();
+    commands.remove_resource::<RenetClient>();
 }
 
 /// Puts the vitals the server says this client's player has on them, and lies them down or

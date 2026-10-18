@@ -154,6 +154,22 @@ impl ChunkLoader {
         self.chunk_to_entity.get(&coord).copied()
     }
 
+    /// Lets go of every chunk this has loaded, as it's put away.
+    pub fn release_all(&self, world: &mut World) {
+        for &coord in self.chunk_to_entity.keys() {
+            world.release(coord, Holder::Client);
+        }
+    }
+
+    /// Whether the chunk at `coord` is drawn as it will be: loaded, meshed if there's anything
+    /// to see of it, and in its group's mesh, for the loading screen to wait for.
+    pub fn is_drawn(&self, coord: ChunkCoordinate, unsettled: &Query<(), Unsettled>) -> bool {
+        self.chunk_to_entity
+            .get(&coord)
+            .is_some_and(|&entity| !unsettled.contains(entity))
+            && !self.waiting.contains(&LodKey::containing(coord, 1))
+    }
+
     #[cfg(test)]
     pub(crate) fn track(&mut self, coord: ChunkCoordinate, entity: Entity) {
         self.chunk_to_entity.insert(coord, entity);

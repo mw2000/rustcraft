@@ -34,25 +34,33 @@ use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy::time::common_conditions::on_timer;
-use bevy_replicon::prelude::{ClientId, ClientState, ClientSystems, ServerSystems};
+use bevy_replicon::prelude::{
+    ClientId, ClientState, ClientSystems, ConnectedClient, ServerSystems,
+};
 use bevy_replicon::RepliconPlugins;
+use bevy_replicon_renet2::netcode::NetcodeServerTransport;
+use bevy_replicon_renet2::renet2::RenetServer;
 use bevy_replicon_renet2::RepliconRenetPlugins;
 
 use crate::clock::TimeOfDay;
 use crate::containers::Containers;
+use crate::creatures::Creature;
 use crate::farming::Crops;
 use crate::game_mode::GameModePlugin;
 use crate::player::name::PlayerName;
+use crate::player::Player;
 use crate::protocol::{ProtocolPlugin, POSE_INTERVAL};
 use crate::save::{PlayerState, SavePlugin, WorldSave};
-use crate::world::World;
+use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 
 /// The server's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
 pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<edits::EditAllowances>()
+        order_leaving(app);
+        app.add_message::<WorldUnopened>()
+            .init_resource::<edits::EditAllowances>()
             .init_resource::<TimeOfDay>()
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
@@ -66,7 +74,15 @@ impl Plugin for ServerPlugin {
             .add_observer(players::welcome)
             .add_observer(survival::start_living)
             .add_observer(players::see_off)
-            .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
+            // at the start of the frame after it's asked for, so the rest of the frame has it
+            .add_systems(PreUpdate, open_world.run_if(resource_exists::<WorldToOpen>))
+            .add_systems(
+                LeaveWorld,
+                (
+                    disconnect_joiners.in_set(LeaveWorldSystems::Disconnect),
+                    close_world.in_set(LeaveWorldSystems::Clear),
+                ),
+            )
             .add_systems(
                 Update,
                 (
@@ -222,10 +238,11 @@ impl PluginGroup for DedicatedServerPlugins {
     }
 }
 
-/// Whether this App decides the game: it does unless it's a client connected to a server
-/// elsewhere, so in singleplayer, when hosting, and as a dedicated server.
-pub fn is_authority(state: Res<State<ClientState>>) -> bool {
-    *state.get() == ClientState::Disconnected
+/// Whether this App decides the game: it does once its server has opened a world, unless it's a
+/// client of a server elsewhere, so in singleplayer, when hosting, and as a dedicated server, but
+/// not in the menus, nor in the world a client was playing on as it's disconnected.
+pub fn is_authority(state: Res<State<ClientState>>, world: Option<Res<World>>) -> bool {
+    *state.get() == ClientState::Disconnected && world.is_some_and(|world| world.is_served_here())
 }
 
 /// The world for the server to open as it starts, see `open_world`.
@@ -243,12 +260,30 @@ pub struct WorldToOpen {
     pub host: Option<PlayerName>,
 }
 
+/// Why the world asked for couldn't be opened, such as its being from a newer version of the
+/// game, as `open_world` finds.
+#[derive(Message, Debug, Clone)]
+pub struct WorldUnopened(pub String);
+
 /// Opens the world and its save, and spawns the host's player, if there's a host, where they
 /// were saved, or at the world's spawn if they're new.
-pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
+pub fn open_world(
+    mut commands: Commands,
+    open: Res<WorldToOpen>,
+    mut unopened: MessageWriter<WorldUnopened>,
+) {
+    commands.remove_resource::<WorldToOpen>();
     let dir = &open.dir;
-    let (mut save, saved, edits, containers, crops) = WorldSave::open(dir.clone(), open.seed)
-        .unwrap_or_else(|error| panic!("couldn't open the world in {}: {error}", dir.display()));
+    let (mut save, saved, edits, containers, crops) = match WorldSave::open(dir.clone(), open.seed)
+    {
+        Ok(opened) => opened,
+        Err(error) => {
+            let text = format!("Couldn't open the world in {}: {error}", dir.display());
+            error!("{text}");
+            unopened.write(WorldUnopened(text));
+            return;
+        }
+    };
     let world = World::from_save(saved.seed, edits, open.region_distance);
     info!(
         "playing the world in {}, with seed {}",
@@ -259,7 +294,7 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     if let Some(name) = &open.host {
         let arrival = saved
             .player
-            .unwrap_or_else(|| PlayerState::arriving_at(world.spawn()));
+            .unwrap_or_else(|| PlayerState::arriving_at(world.spawn(), saved.new_player_mode));
         let [x, y, z] = arrival.position;
         info!("spawned at {x:?}, {y:?}, {z:?}");
         commands.spawn(players::spawning(&arrival, ClientId::Server, name.clone()));
@@ -272,5 +307,37 @@ pub fn open_world(mut commands: Commands, open: Res<WorldToOpen>) {
     commands.insert_resource(creatures::Dormant::of(save.take_creatures()));
     commands.insert_resource(Operators::new(saved.ops));
     commands.insert_resource(save);
-    commands.remove_resource::<WorldToOpen>();
+}
+
+// Sees off everyone who's joined as the world's left, which keeps their players' states to save,
+// and stops taking players, which tells their games they've been disconnected.
+fn disconnect_joiners(clients: Query<Entity, With<ConnectedClient>>, mut commands: Commands) {
+    for client in &clients {
+        commands.entity(client).despawn();
+    }
+    commands.remove_resource::<NetcodeServerTransport>();
+    commands.remove_resource::<RenetServer>();
+}
+
+// Puts away the world the server had open, once it's saved: its players, its creatures and the
+// items lying in it, and its resources as they were before it opened.
+#[allow(clippy::type_complexity)]
+fn close_world(
+    things: Query<Entity, Or<(With<Player>, With<Creature>, With<drops::DroppedItem>)>>,
+    mut commands: Commands,
+) {
+    for thing in &things {
+        commands.entity(thing).try_despawn();
+    }
+    commands.remove_resource::<World>();
+    commands.remove_resource::<players::WorldChecksum>();
+    commands.insert_resource(edits::EditAllowances::default());
+    commands.insert_resource(TimeOfDay::default());
+    commands.insert_resource(clock::ClockRate::default());
+    commands.insert_resource(ServerChunks::default());
+    commands.insert_resource(Containers::default());
+    commands.insert_resource(Crops::default());
+    commands.insert_resource(chat::ChatAllowances::default());
+    commands.insert_resource(Operators::default());
+    commands.insert_resource(creatures::Dormant::default());
 }

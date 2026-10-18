@@ -26,7 +26,7 @@ use rustcraft::chunks::generate::checksum::world_checksum;
 use rustcraft::chunks::generate::generator::generate_chunk;
 use rustcraft::chunks::generate::WORLD_HEIGHT;
 use rustcraft::client::creatures::SeenCreature;
-use rustcraft::client::join::{connect, GenerationChecksum};
+use rustcraft::client::join::{connect, GenerationChecksum, LeftServer};
 use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::LocalPlayer;
 use rustcraft::client::ClientPlugin;
@@ -50,7 +50,7 @@ use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, Console, DedicatedServerPlugins, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
 use rustcraft::survival::Vitals;
-use rustcraft::world::World;
+use rustcraft::world::{LeaveWorld, World};
 
 // A frame's worth, so replicon's fixed-rate server ticks, which send what's written, keep up.
 const FRAME: Duration = Duration::from_millis(20);
@@ -1778,5 +1778,64 @@ fn test_a_joiner_sees_the_creatures_near_it_moving_smoothly_and_hits_them() {
         let hurt = server.world().get::<Health>(near).unwrap().points == 7;
         hurt && client.world().get::<Flinches>(shown_sheep) == Some(&Flinches(1))
     });
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_client_leaving_its_world_lets_go_of_the_server_and_everything_it_was_sent() {
+    let dir = temp_dir("client-leaves");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    update_until(&mut server, &mut client, |server, client| {
+        joined(client) && owners(server).len() == 2
+    });
+    client.world_mut().run_schedule(LeaveWorld);
+    client.update();
+    assert!(!joined(&client));
+    assert!(!client.world().contains_resource::<RenetClient>());
+    assert!(owners(&mut client).is_empty());
+    let remote = client
+        .world_mut()
+        .query::<&Remote>()
+        .iter(client.world())
+        .count();
+    assert_eq!(0, remote);
+    // and the server sees them go at once, rather than once they time out
+    update_until(&mut server, &mut client, |server, _| {
+        owners(server) == [ClientId::Server]
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_host_leaving_its_world_sees_everyone_off_and_saves_them() {
+    let dir = temp_dir("host-leaves");
+    let (mut server, mut sockets) = host(&dir, 1, true);
+    let mut client = joiner(
+        &server,
+        sockets.pop().unwrap(),
+        "guest",
+        None,
+        GenerationChecksum::default(),
+    );
+    update_until(&mut server, &mut client, |server, client| {
+        joined(client) && owners(server).len() == 2
+    });
+    server.world_mut().run_schedule(LeaveWorld);
+    server.update();
+    assert!(!server.world().contains_resource::<World>());
+    assert!(owners(&mut server).is_empty());
+    assert!(dir.join("players").join("guest.toml").exists());
+    // the guest's told, and says why
+    let mut cursor = MessageCursor::<LeftServer>::default();
+    let start = Instant::now();
+    loop {
+        assert!(start.elapsed() < Duration::from_secs(30), "never told");
+        client.update();
+        let messages = client.world().resource::<Messages<LeftServer>>();
+        if cursor.read(messages).next().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }

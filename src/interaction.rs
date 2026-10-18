@@ -11,6 +11,7 @@ use crate::client::creatures::{creature_hit, SeenCreature};
 use crate::client::player::LocalPlayer;
 use crate::collision::{boxes_at, looked_at, Hit};
 use crate::containers::Container;
+use crate::controls::{Action, Bindings, Controls};
 use crate::crafting::Station;
 use crate::creatures::Creature;
 use crate::farming::tilled;
@@ -48,7 +49,8 @@ pub struct InteractionPlugin;
 
 impl Plugin for InteractionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Target>()
+        app.init_resource::<Bindings>()
+            .init_resource::<Target>()
             .init_resource::<TargetCreature>()
             .init_resource::<CraftingStation>()
             .init_resource::<ContainerView>()
@@ -235,7 +237,7 @@ fn break_target(
     target: Res<Target>,
     creature: Res<TargetCreature>,
     mut hits: MessageWriter<HitCreature>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    controls: Controls,
     time: Res<Time>,
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
     mut breaking: ResMut<Breaking>,
@@ -243,17 +245,17 @@ fn break_target(
 ) {
     let (mode, hotbar, inventory) = player.single().expect("player does not exist");
     let slot = hotbar.selected as u8;
-    if let Some(creature) = creature.0.filter(|_| mouse.just_pressed(MouseButton::Left)) {
+    if let Some(creature) = creature.0.filter(|_| controls.just_pressed(Action::Break)) {
         hits.write(HitCreature { creature });
     }
     if mode.breaks_at_once() {
-        if let Some(hit) = target.0.filter(|_| mouse.just_pressed(MouseButton::Left)) {
+        if let Some(hit) = target.0.filter(|_| controls.just_pressed(Action::Break)) {
             requests.edit(hit.block, BlockType::Air, slot);
         }
         return;
     }
     let tool = hotbar.held(inventory).and_then(|stack| stack.item.tool());
-    let held = target.0.filter(|_| mouse.pressed(MouseButton::Left));
+    let held = target.0.filter(|_| controls.pressed(Action::Break));
     let held = held.map(|hit| (hit.block, break_time(world.get_block_at(hit.block), tool)));
     match breaking.hold(held, time.delta_secs()) {
         Some(BreakStep::Start(block)) => {
@@ -278,7 +280,7 @@ fn stop_breaking(mut breaking: ResMut<Breaking>) {
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    controls: Controls,
     mut player: Query<(&GameMode, &mut Hotbar, &Inventory, &PlayerLook), With<LocalPlayer>>,
     mut requests: EditRequests,
     mut picks: MessageWriter<PickBlock>,
@@ -292,7 +294,7 @@ fn use_target(
     // and right click on a crafting table, a furnace or a bed uses it instead, see
     // `use_station`
     let places = (replaceable || hit.face != I64Vec3::ZERO) && !is_used(&world, hit, *mode);
-    if mouse.just_pressed(MouseButton::Right) && places {
+    if controls.just_pressed(Action::Place) && places {
         let held = hotbar.held(inventory).map(|stack| stack.item);
         let hoe = held
             .and_then(Item::tool)
@@ -309,7 +311,7 @@ fn use_target(
             requests.edit(at, placed(kind, hit.face, point, look.forward()), slot);
         }
     }
-    if mouse.just_pressed(MouseButton::Middle) {
+    if controls.just_pressed(Action::Pick) {
         let block = world.get_block_at(hit.block);
         if !hotbar.pick(block, inventory) && mode.has_every_block() {
             picks.write(PickBlock {
@@ -344,7 +346,7 @@ fn opens_screen(world: &World, hit: Hit, mode: GameMode) -> bool {
 fn use_station(
     world: Res<World>,
     target: Res<Target>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    controls: Controls,
     player: Query<&GameMode, With<LocalPlayer>>,
     mut station: ResMut<CraftingStation>,
     mut view: ResMut<ContainerView>,
@@ -354,7 +356,7 @@ fn use_station(
     let (Some(hit), Ok(&mode)) = (target.0, player.single()) else {
         return;
     };
-    if !mouse.just_pressed(MouseButton::Right) {
+    if !controls.just_pressed(Action::Place) {
         return;
     }
     if world.get_block_at(hit.block) == BlockType::Bed || toggled(world.get(hit.block)).is_some() {
@@ -574,7 +576,7 @@ mod tests {
             world.edit(I64Vec3::ZERO, BlockType::Sand);
             let mut app = App::new();
             app.add_plugins((MinimalPlugins, StatesPlugin))
-                .init_state::<GameState>()
+                .insert_state(GameState::Playing)
                 .add_message::<RequestEdit>()
                 .add_message::<PickBlock>()
                 .add_message::<UseBlock>()
@@ -582,6 +584,8 @@ mod tests {
                 .add_message::<HitCreature>()
                 .init_resource::<TargetCreature>()
                 .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<crate::controls::Bindings>()
                 .init_resource::<CraftingStation>()
                 .init_resource::<ContainerView>()
                 .init_resource::<Breaking>()
