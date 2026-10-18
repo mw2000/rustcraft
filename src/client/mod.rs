@@ -1,6 +1,7 @@
 //! What a player's game does with what the server decides (§4.4): in singleplayer it runs in the
 //! same App as the server.
 
+pub mod clock;
 pub mod edits;
 pub mod player;
 
@@ -9,13 +10,16 @@ use bevy::transform::TransformSystems;
 use bevy_replicon::prelude::ServerSystems;
 
 use crate::chunks::group::rebuild_groups;
+use crate::clock::TimeOfDay;
+use crate::server::is_authority;
 
 /// The client's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
 pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(player::mark_local_player)
+        app.init_resource::<TimeOfDay>()
+            .add_observer(player::mark_local_player)
             .add_systems(
                 PostStartup,
                 // the scene's camera, spawned once the server has spawned the player, is in
@@ -31,7 +35,10 @@ impl Plugin for ClientPlugin {
                 (edits::apply_block_changes, rebuild_groups)
                     .chain()
                     .after(ServerSystems::Send),
-            );
+            )
+            // after replicon hands over the server's syncs, which over a network it does in
+            // `PreUpdate`
+            .add_systems(Update, clock::follow_clock.run_if(not(is_authority)));
     }
 }
 

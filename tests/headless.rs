@@ -12,7 +12,7 @@ use bevy::time::TimeUpdateStrategy;
 use bevy_replicon::prelude::*;
 use rustcraft::block::BlockType;
 use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData};
-use rustcraft::clock::{ClockPlugin, TimeOfDay};
+use rustcraft::clock::TimeOfDay;
 use rustcraft::game_mode::{GameMode, GameModePlugin};
 use rustcraft::player::{Movement, Player, PlayerLook, PlayerOwner};
 use rustcraft::protocol::{BlockChanged, ProtocolPlugin, RequestEdit};
@@ -31,7 +31,6 @@ fn server(dir: &Path) -> App {
         ServerPlugin,
         SavePlugin,
         GameModePlugin,
-        ClockPlugin,
     ))
     .insert_resource(WorldToOpen {
         dir: dir.to_owned(),

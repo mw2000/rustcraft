@@ -13,13 +13,16 @@ pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
-        // ordered, as edits to one block only make sense in the order they're made, and
-        // commands and what they print in the order they're typed
+        // ordered, as edits to one block only make sense in the order they're made, commands
+        // and what they print in the order they're typed, and the clock's set in the order
+        // it's told
         app.add_client_message::<RequestEdit>(Channel::Ordered)
             .add_server_message::<BlockChanged>(Channel::Ordered)
             .add_server_message::<EditRejected>(Channel::Ordered)
             .add_client_message::<RunCommand>(Channel::Ordered)
-            .add_server_message::<CommandOutput>(Channel::Ordered);
+            .add_server_message::<CommandOutput>(Channel::Ordered)
+            .add_client_message::<WindClock>(Channel::Ordered)
+            .add_server_message::<TimeSync>(Channel::Ordered);
     }
 }
 
@@ -59,6 +62,18 @@ pub struct RunCommand(pub String);
 pub struct CommandOutput {
     pub text: String,
     pub error: bool,
+}
+
+/// A player winding the clock back (-1) or forward (1), or letting it run at its own pace
+/// again (0).
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindClock(pub i8);
+
+/// The server's time of day, in days, and how fast it's running, in days a second.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct TimeSync {
+    pub time: f32,
+    pub rate: f32,
 }
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself

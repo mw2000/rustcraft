@@ -320,6 +320,20 @@ The world's state beyond the seed (INV-1).
   need a `Teleport`. `/gamemode` sets the sender's `GameMode` (open to anyone until operators,
   M0.6e) and `GameModePlugin` lands them as before; `/seed` reads the server's `World`.
   `CommandPlugin` now needs `ProtocolPlugin`.
+- **Built (M0.5e):** the server's clock (`src/server/clock.rs`) runs only on the authority:
+  `run_clock` moves `TimeOfDay` on at a `ClockRate`, and `sync_clock` sends every client
+  `TimeSync { time, rate }` every 5 seconds and as soon as the rate changes (to the App itself
+  in singleplayer, where nothing reads it). A client that isn't the authority sets its clock
+  by each sync and runs it at the rate given in between (`client::clock::follow_clock`), and
+  stands still until the first. `[` and `]` stay as they were, rather than becoming a `/time`
+  command, so the sky can still be wound through dusk: the client sends `WindClock(-1 | 0 | 1)`
+  as they're pressed and let go, and the server sets the rate, the last to ask having their
+  way, and syncs at once, so everyone's sky winds together. `ClockPlugin` is gone; the server
+  and client plugins each start `TimeOfDay` at `START_TIME` until a world's opened, and saving
+  keeps the server's time as before. Over a network a client's clock jumps at each sync by
+  however far its frames have drifted from the server's, a fraction of a second's worth, or a
+  moment's while it's wound; neither is worth smoothing yet. A client that leaves while
+  winding should unwind the clock (M0.6).
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
   `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, players); `src/save/` under the server;
   `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup, `edits.rs`, `player.rs`).
@@ -562,7 +576,7 @@ and loads.**
   - ☑ **M0.5c Players owned by the server.** Spawned from saves by the server; the client puts
     the camera on its `LocalPlayer`.
   - ☑ **M0.5d Commands and game modes on the server.**
-  - ☐ **M0.5e Time on the server**, with `TimeSync`.
+  - ☑ **M0.5e Time on the server**, with `TimeSync`.
   - ☐ **M0.5f Server chunk residency**, headless, with shared holders in `World`. A dedicated
     server must drain `World::reroofed` itself, since only the client takes it now, and
     `EditAllowances` must forget a client when it disconnects (M0.6).

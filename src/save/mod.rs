@@ -290,6 +290,7 @@ mod tests {
     use bevy::math::{I64Vec3, U16Vec3, Vec3};
     use bevy::prelude::*;
     use bevy::state::app::StatesPlugin;
+    use bevy::time::TimeUpdateStrategy;
     use bevy_replicon::prelude::*;
 
     use super::{region, Region, SavePlugin, WorldFile, WorldSave, EDITS_DIR, WORLD_FILE};
@@ -450,6 +451,8 @@ mod tests {
         let dir = TempDir::new("restart");
         let built = I64Vec3::new(3, 460, -7);
         let mut app = play(&dir);
+        // no time passes, so the clock stays where it's set
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
         let at = Vec3::new(100.0, 480.0, -50.0);
         let looking = PlayerLook {
             yaw: 4.0,

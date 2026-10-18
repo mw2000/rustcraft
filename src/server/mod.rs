@@ -1,8 +1,11 @@
 //! What the server decides (INV-4): in singleplayer it runs in the same App as the client, and
 //! a dedicated server runs it on its own (§4.4).
 
+mod clock;
 mod commands;
 mod edits;
+
+pub use clock::run_clock;
 
 use std::path::PathBuf;
 
@@ -20,14 +23,21 @@ pub struct ServerPlugin;
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<edits::EditAllowances>()
+            .init_resource::<TimeOfDay>()
+            .init_resource::<clock::ClockRate>()
             .add_systems(Startup, open_world.run_if(resource_exists::<WorldToOpen>))
+            .add_systems(Update, run_clock.run_if(is_authority))
             .add_systems(
                 PostUpdate,
                 // after replicon hands the server the requests made this frame, which with no
                 // transport it does in `ClientSystems::Send`, and before it sends the answers,
                 // so a singleplayer edit or command is made and answered in the frame it's
                 // asked for
-                (edits::receive_edits, commands::run_commands)
+                (
+                    edits::receive_edits,
+                    commands::run_commands,
+                    (clock::wind_clock, clock::sync_clock).chain(),
+                )
                     .after(ClientSystems::Send)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),

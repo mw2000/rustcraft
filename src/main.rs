@@ -14,8 +14,8 @@ use rustcraft::chunks::{
     material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
+use rustcraft::client::clock::{follow_clock, wind_clock};
 use rustcraft::client::ClientPlugin;
-use rustcraft::clock::{run_clock, wind_clock, ClockPlugin};
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
@@ -30,7 +30,7 @@ use rustcraft::player::input::{follow_look, player_look, player_move};
 use rustcraft::player::underwater::{murk, update_underwater_effects, MurkMaterial};
 use rustcraft::protocol::ProtocolPlugin;
 use rustcraft::save::{world_name, worlds_dir, SavePlugin};
-use rustcraft::server::{open_world, ServerPlugin, WorldToOpen};
+use rustcraft::server::{open_world, run_clock, ServerPlugin, WorldToOpen};
 use rustcraft::sky::{
     atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, FOG_MAX_OPACITY,
 };
@@ -206,7 +206,7 @@ fn main() {
             InteractionPlugin,
             SavePlugin,
         ))
-        .add_plugins((GameModePlugin, ClockPlugin, HotbarPlugin, PickerPlugin))
+        .add_plugins((GameModePlugin, HotbarPlugin, PickerPlugin))
         // singleplayer: the server and client in one App, with no transport between them, so
         // replicon passes their messages straight across (§4.4)
         .add_plugins((RepliconPlugins, ProtocolPlugin, ServerPlugin, ClientPlugin))
@@ -238,6 +238,9 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, (wind_clock, move_sky.after(run_clock)).chain())
+        .add_systems(
+            Update,
+            (wind_clock, move_sky.after(run_clock).after(follow_clock)),
+        )
         .run();
 }
