@@ -41,9 +41,22 @@ pub struct DebugSettings {
     pub solid_leaves: bool,
 }
 
+/// Where a file in `assets/` lives, found the way Bevy's `AssetPlugin` finds its assets: under
+/// `BEVY_ASSET_ROOT`, else `CARGO_MANIFEST_DIR` (set by `cargo run`), else next to the executable.
+/// A release launched by double-clicking has some other working directory, so a path relative to
+/// that would miss. Pass the path inside the root, such as `assets/settings.toml`.
+pub fn asset_path(file: &str) -> std::path::PathBuf {
+    let root = std::env::var_os("BEVY_ASSET_ROOT")
+        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR"))
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_exe().ok()?.parent().map(|p| p.to_owned()))
+        .unwrap_or_default();
+    root.join(file)
+}
+
 impl Settings {
     pub fn read(file: &str) -> Result<Self, Box<dyn Error>> {
-        Ok(toml::from_str(&std::fs::read_to_string(file)?)?)
+        Ok(toml::from_str(&std::fs::read_to_string(asset_path(file))?)?)
     }
 }
 

@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use rustcraft::settings::Settings;
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;

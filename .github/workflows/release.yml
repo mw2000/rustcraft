@@ -1,0 +1,97 @@
+name: Release
+
+# A version tag publishes a GitHub release. Running it by hand (workflow_dispatch) builds the same
+# archives and keeps them as workflow artifacts, to try the packaging without cutting a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+            exe: rustcraft
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+            exe: rustcraft.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-aarch64
+            exe: rustcraft
+    steps:
+      - uses: actions/checkout@v4
+      # The same packages as ci.yml: gilrs needs libudev, and x11 windowing the X and xkbcommon headers.
+      - name: Install system packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libx11-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # The dedicated server (design.md 5.9) isn't built yet. When it exists, build it here with
+      # another `--bin` and add its executable to the package step below.
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --bin rustcraft
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" != tag ]; then
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)-dev"
+          fi
+          dir="rustcraft-${version}-${{ matrix.name }}"
+          mkdir "$dir"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "$dir/"
+          cp -r assets "$dir/assets"
+          cp README.md LICENSE-APACHE LICENSE-MIT "$dir/"
+          if [ "${{ runner.os }}" = Windows ]; then
+            7z a "$dir.zip" "$dir"
+            echo "ARCHIVE=$dir.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$dir.tar.gz" "$dir"
+            echo "ARCHIVE=$dir.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustcraft-${{ matrix.name }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: archives/*
+          generate_release_notes: true
+          body: |
+            Download the archive for your system, unpack it and run `rustcraft`. The game's controls
+            and commands are in the [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md#controls).
+
+            macOS: these builds aren't notarised, so open `rustcraft` the first time with right-click, then Open.
+            Linux: needs a Vulkan driver.

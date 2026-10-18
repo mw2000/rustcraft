@@ -40,7 +40,9 @@ pub(crate) fn push_shader_defs(descriptor: &mut RenderPipelineDescriptor, defs: 
 /// mipmaps itself, and without them textures shimmer as the camera moves. Magnified texels
 /// stay crisp.
 pub fn block_atlas(path: &str) -> Image {
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("could not read {path}: {e}"));
+    let path = crate::settings::asset_path(path);
+    let bytes =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
     let mut image = Image::from_buffer(
         &bytes,
         ImageType::Extension("png"),
@@ -54,7 +56,7 @@ pub fn block_atlas(path: &str) -> Image {
         }),
         RenderAssetUsages::RENDER_WORLD,
     )
-    .unwrap_or_else(|e| panic!("could not decode {path}: {e}"));
+    .unwrap_or_else(|e| panic!("could not decode {}: {e}", path.display()));
     let tile = image.height();
     mip_tiles(&mut image, tile.ilog2() + 1);
     image

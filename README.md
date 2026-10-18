@@ -2,6 +2,16 @@
 
 Another Minecraft clone, originally written using [specs](https://github.com/amethyst/specs) and [glium](https://github.com/glium/glium) but recently migrated to Bevy.
 
+## Download
+
+Get the archive for your system from the [Releases page](../../releases), unpack it and run `rustcraft` (`rustcraft.exe` on Windows). Keep the `assets` folder next to it.
+
+- macOS (Apple Silicon): the build isn't notarised, so the first time, right-click `rustcraft` and choose Open.
+- Linux: you need a Vulkan driver.
+- Windows release builds open no console window, so their logs go nowhere.
+
+To build it yourself instead:
+
 ```
 cargo run --release
 ```

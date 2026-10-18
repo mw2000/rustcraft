@@ -409,6 +409,16 @@ landmarks visible from far away (P1).
   Rust. A dedicated server binary alongside.
 - CI that builds and tests every PR (there is none yet).
 
+Built: `.github/workflows/release.yml` builds `--release` on every `v*` tag for Linux x86_64,
+Windows x86_64 and macOS Apple Silicon (Intel macOS is skipped), packs each as
+`rustcraft-<version>-<target>/` holding the binary, `assets/`, the README and both licences
+(`.tar.gz`, or `.zip` on Windows), and attaches them to a GitHub release. Run by hand, it uploads
+the archives as workflow artifacts instead. The binary finds `assets/` next to itself
+(`settings::asset_path`, the same rule as Bevy's `AssetPlugin`), so double-clicking works, and
+Windows release builds open no console, so their logs go nowhere. macOS builds are not notarised.
+Still to come: the dedicated server binary (M0.5/M0.6), which gets a second `--bin` and archive
+entry in the workflow.
+
 ---
 
 ## 6. Roadmap
@@ -498,7 +508,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
 
 ### Throughout
 
-- ☐ **M-R1 Release builds** for Windows, macOS and Linux, and a dedicated server (§5.9).
+- ◐ **M-R1 Release builds** for Windows, macOS and Linux, and a dedicated server (§5.9). Release workflow done; the server binary is to come.
 
 ---
 
