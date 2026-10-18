@@ -414,8 +414,7 @@ The world's state beyond the seed (INV-1).
     item's `Transform` alone, so only moving items and changed stacks are sent again.
   - **Known gaps:** netcode runs unsecure: clients aren't authenticated (they pick their own
     random id) and nothing's encrypted, fine among friends until connect tokens are handed out.
-    Not synced yet: edits made before a client joined, or in chunks it hadn't loaded when they
-    were broadcast if they arrive before its `Welcome` (M0.6c's `ChunkEdits`); other players,
+    Not synced yet (edits came with M0.6c): other players,
     whom nobody sees (M0.6d); `/tp`, which moves only the server's copy of a client's player,
     and `/gamemode`, which the client's own movement doesn't follow (M0.6d's `Teleport`, and
     the mode to come with it); a client's player is never saved and always arrives at the
@@ -444,8 +443,59 @@ The world's state beyond the seed (INV-1).
   a test swaps for one that disagrees. `PROTOCOL_VERSION` is 2. A golden test pins seed 3's
   checksum, so any change to what's generated fails it until the value is updated
   deliberately (§8), and CI's `determinism` job runs it on Linux, Windows and macOS.
+- **Built (M0.6c):** edit sync (`src/server/sync.rs`, `src/client/edits.rs`).
+  - **Areas:** a welcomed client's entity gets a `SyncedArea`: its player's chunk, its reach,
+    the chunks whose edits it's been sent, and those in reach it's still to be, nearest first.
+    The client tells its reach as it's welcomed, `EditReach(full_detail_reach)`, 36 chunks with
+    the default settings (0, its own chunk, until then). As its player crosses into another
+    chunk, `follow_players` forgets sent chunks more than 4 chunks beyond its reach (so
+    walking along the edge doesn't send the same ones again; keeping every one would keep
+    sending far-off clients changes for chunks they no longer draw) and lines up the edited
+    chunks in reach not sent, by a scan of every edited chunk, which is quick even for
+    thousands. `send_chunk_edits` sends each client up to 4,096 edits a frame, about 12 KB,
+    as `ChunkEdits`, a chunk's edits as region files have them: a palette of block names and
+    each edit as `(index in chunk, palette index)` (`region::local_index`), 3 bytes an edit.
+    50,000 edits round the spawn in 32 chunks went in 149 KB over 11 frames (a test).
+  - **`BlockChanged` by area:** `receive_edits` sends changes through `sync::BlockChanges`,
+    to the host (`ClientId::Server`, whose client shares the world) and to each client whose
+    area has the chunk sent or in reach. One out of reach is sent the chunk's edits as it
+    comes near, and a chunk with no edits before is sent again whole the next time its
+    client moves, which is rare and cheap. `Welcome` carries `you`, the client's `ClientId`.
+  - **Client:** `apply_chunk_edits` puts the edits into its `World` (`World::edit`), so a
+    chunk not loaded takes them as it's generated and one loaded is rebuilt, before
+    `apply_block_changes`, as a chunk's edits are older than the changes after them. Both
+    keep what comes before the client has its `World` (while it checks the checksum) and
+    apply it once it does, so nothing sent before the world's made is lost.
+  - **Prediction:** a client joined to a server makes its own `RequestEdit`s in its world at
+    once (`predict_edits`) and keeps `Predictions`: the block of each request unanswered,
+    and for each such block what the server has there, as last told, and how many are
+    unanswered. While any are, the server's changes and chunk edits there update only what
+    it has; once the last is answered, `BlockChanged { by: (you, seq) }` or `EditRejected`,
+    the block becomes what the server has, which is what was predicted unless it refused or
+    someone else changed it. A confirmation that changes nothing rebuilds nothing, so a
+    predicted edit is meshed once. Rolling back to the tracked value rather than
+    `EditRejected`'s `actual` stays right when a later `BlockChanged` overtakes the refusal on
+    its own channel. On the host and in singleplayer nothing's predicted, as the server
+    answers in the same frame.
+  - **Order:** replicon gives each message its own channel, ordered only within itself, so
+    under packet loss a chunk's `ChunkEdits` and a `BlockChanged` can overtake each other.
+    The server counts the `BlockChanged`s it sends each client, and each `ChunkEdits` says
+    how many came before it; the client counts them as they come (`EditOrder`, a joined
+    client's alone). A change no newer than its chunk's latest edits is skipped, and so is a
+    block in a chunk's edits that a newer change has set. Changes are remembered by block only
+    until the next chunk's edits arrive, as those come in order and nothing on its way can be
+    older. `BlockChanged` itself is unchanged. `PROTOCOL_VERSION` is 3.
+  - **Known gaps:** applying a chunk's edits to a loaded chunk
+    sets them a block at a time into its runs, which is slow for a chunk with thousands; on
+    joining chunks aren't loaded yet, so this only bites a client walking into a big build.
+  - `tests/multiplayer.rs` adds: edits made before joining arrive and show as the chunk's
+    generated, and those far off only once the player goes there; a change far from a
+    client isn't sent to it but reaches it as it comes near; a client sees its own edit at
+    once and undone when it's refused; edits sent while a slow client checks its world wait
+    for it; a chunk's edits and a change overtaking each other (injected) leave the newer; and
+    the cost of joining among 50,000 edits.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin` and `is_authority`,
-  `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, `host.rs`, `players.rs`); `src/save/`
+  `edits.rs`, `chunks.rs`, `commands.rs`, `clock.rs`, `host.rs`, `players.rs`, `sync.rs`); `src/save/`
   under the server; `src/client/` (`mod.rs` with `ClientPlugin` and today's scene setup,
   `edits.rs`, `player.rs`, `join.rs`).
   Shared modules stay where they are. Later a default-on `client` cargo feature keeps wgpu and
@@ -765,7 +815,7 @@ and loads.**
     disconnects.
   - ☑ **M0.6b Determinism handshake**, with golden checksums and a CI matrix of Windows, macOS
     and Linux (D-3).
-  - ☐ **M0.6c Edit sync**: `ChunkEdits` on joining and moving, `BlockChanged` by area, client
+  - ☑ **M0.6c Edit sync**: `ChunkEdits` on joining and moving, `BlockChanged` by area, client
     prediction with rollback.
   - ☐ **M0.6d Other players**: names, interpolated poses, simple models, plausibility checks with
     `Teleport` corrections, a save per player.

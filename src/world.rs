@@ -101,6 +101,10 @@ impl World {
         self.seed
     }
 
+    pub fn edits(&self) -> &Edits {
+        &self.edits
+    }
+
     pub fn edits_mut(&mut self) -> &mut Edits {
         &mut self.edits
     }

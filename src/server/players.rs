@@ -3,6 +3,7 @@ use bevy::tasks::{block_on, AsyncComputeTaskPool, Task};
 use bevy_replicon::prelude::*;
 
 use super::edits::EditAllowances;
+use super::sync::SyncedArea;
 use crate::chunks::generate::checksum::world_checksum;
 use crate::inventory::Inventory;
 use crate::player::{arriving, PlayerLook, PlayerOwner};
@@ -36,7 +37,8 @@ impl WorldChecksum {
 }
 
 /// Welcomes a client the server has let in, its versions matching: spawns its player at the
-/// world's spawn, and tells it the seed, its checksum and where its player is.
+/// world's spawn, tells it the seed, its checksum and where its player is, and starts keeping
+/// its edits in step round its player.
 pub(super) fn welcome(
     authorized: On<Add<AuthorizedClient>>,
     world: Res<World>,
@@ -48,12 +50,16 @@ pub(super) fn welcome(
     // where everyone joining arrives until M0.6d saves each player
     let player = PlayerState::arriving_at(world.spawn());
     commands.spawn((arriving(&player), PlayerOwner(client)));
+    commands
+        .entity(authorized.entity)
+        .insert(SyncedArea::default());
     welcomes.write(ToClients {
         targets: SendTargets::Single(client),
         message: Welcome {
             seed: world.seed(),
             checksum: checksum.get(),
             player,
+            you: client,
         },
     });
     info!("{client} joined");

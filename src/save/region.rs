@@ -112,11 +112,13 @@ pub fn decode(bytes: &[u8], edits: &mut Edits) -> io::Result<()> {
     Ok(())
 }
 
-fn local_index(local: U16Vec3) -> u16 {
+/// Where a block is in its chunk, `(y * 16 + z) * 16 + x`, as edits are saved and sent.
+pub fn local_index(local: U16Vec3) -> u16 {
     (local.y * CHUNK_SIZE + local.z) * CHUNK_SIZE + local.x
 }
 
-fn local_block(index: u16) -> U16Vec3 {
+/// The block at `index` in a chunk, see `local_index`.
+pub fn local_block(index: u16) -> U16Vec3 {
     U16Vec3::new(
         index % CHUNK_SIZE,
         index / (CHUNK_SIZE * CHUNK_SIZE),

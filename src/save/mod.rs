@@ -1,4 +1,4 @@
-mod region;
+pub(crate) mod region;
 mod world_file;
 
 use std::fs::{self, File};

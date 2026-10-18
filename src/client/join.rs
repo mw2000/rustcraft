@@ -11,14 +11,15 @@ use bevy_replicon_renet2::netcode::{
 use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient};
 use bevy_replicon_renet2::RenetChannelsExt;
 
+use super::edits::{EditOrder, Predictions};
 use super::player::LocalPlayer;
 use crate::chunks::generate::checksum::world_checksum;
 use crate::edits::Edits;
 use crate::inventory::Inventory;
 use crate::player::{arriving, PlayerLook};
 use crate::protocol::{
-    CommandOutput, InventoryChanged, PlayerPose, Welcome, DEFAULT_PORT, NETCODE_PROTOCOL_ID,
-    PROTOCOL_VERSION,
+    CommandOutput, EditReach, InventoryChanged, PlayerPose, Welcome, DEFAULT_PORT,
+    NETCODE_PROTOCOL_ID, PROTOCOL_VERSION,
 };
 use crate::settings::Settings;
 use crate::world::World;
@@ -103,16 +104,25 @@ pub(super) struct Checking {
     task: Task<u64>,
 }
 
-/// Spawns this client's player where the server has them, and starts checking the world it's
-/// welcomed to, on a task as that takes a fraction of a second (INV-7).
+/// Spawns this client's player where the server has them, starts checking the world it's
+/// welcomed to, on a task as that takes a fraction of a second (INV-7), and asks for the edits
+/// of the chunks it draws at full detail.
 pub(super) fn arrive(
     mut welcomes: MessageReader<Welcome>,
     checksum: Res<GenerationChecksum>,
+    settings: Res<Settings>,
+    mut predictions: ResMut<Predictions>,
+    mut reach: MessageWriter<EditReach>,
     mut commands: Commands,
 ) {
     let Some(welcome) = welcomes.read().last() else {
         return;
     };
+    predictions.me = Some(welcome.you);
+    commands.insert_resource(EditOrder::default());
+    reach.write(EditReach(
+        settings.renderer.lod_layout().full_detail_reach(),
+    ));
     let (seed, GenerationChecksum(checksum)) = (welcome.seed, *checksum);
     commands.insert_resource(Checking {
         seed,

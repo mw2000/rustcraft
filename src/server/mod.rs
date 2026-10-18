@@ -9,6 +9,7 @@ mod edits;
 mod host;
 mod inventory;
 mod players;
+mod sync;
 
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
@@ -67,6 +68,19 @@ impl Plugin for ServerPlugin {
                     (clock::wind_clock, clock::sync_clock).chain(),
                 )
                     .after(ClientSystems::Send)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
+                // with every player where they've moved, before the edits are sent
+                (
+                    sync::receive_reaches,
+                    sync::follow_players,
+                    sync::send_chunk_edits,
+                )
+                    .chain()
+                    .after(players::move_players)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
             )

@@ -24,6 +24,7 @@ impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TimeOfDay>()
             .init_resource::<join::GenerationChecksum>()
+            .init_resource::<edits::Predictions>()
             .add_observer(player::mark_local_player)
             .add_systems(
                 PostStartup,
@@ -50,12 +51,18 @@ impl Plugin for ClientPlugin {
                 // after replicon hands over what the server sent, which in singleplayer it does
                 // in `ServerSystems::Send`, the same frame, and rebuilding at once rather than in
                 // the next frame's `Update`, so an edit is redrawn as soon as it was before the
-                // server
-                (edits::apply_block_changes, rebuild_groups)
+                // server. A chunk's edits go in before the changes since, which are newer.
+                (
+                    edits::predict_edits
+                        .run_if(not(is_authority))
+                        .run_if(resource_exists::<World>),
+                    edits::apply_chunk_edits,
+                    edits::apply_block_changes,
+                    (edits::roll_back_refused, rebuild_groups).run_if(resource_exists::<World>),
+                )
                     .chain()
                     .after(ServerSystems::Send)
-                    .after(join::check_world)
-                    .run_if(resource_exists::<World>),
+                    .after(join::check_world),
             )
             // after replicon hands over the server's syncs, which over a network it does in
             // `PreUpdate`

@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::drops::DroppedItem;
+use super::sync::BlockChanges;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::game_mode::GameMode;
@@ -71,9 +72,9 @@ type Players<'w, 's> = Query<
     With<Player>,
 >;
 
-/// Makes the edits clients ask for that pass the checks, telling every client, and tells the
-/// client asking for one that doesn't what's there instead. In survival a block placed is taken
-/// from the player's hotbar, and one broken leaves its item to pick up.
+/// Makes the edits clients ask for that pass the checks, telling the clients near them, and
+/// tells the client asking for one that doesn't what's there instead. In survival a block placed
+/// is taken from the player's hotbar, and one broken leaves its item to pick up.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive_edits(
     mut requests: MessageReader<FromClient<RequestEdit>>,
@@ -81,7 +82,7 @@ pub(super) fn receive_edits(
     mut allowances: ResMut<EditAllowances>,
     time: Res<Time>,
     mut players: Players,
-    mut changed: MessageWriter<ToClients<BlockChanged>>,
+    mut changed: BlockChanges,
     mut rejected: MessageWriter<ToClients<EditRejected>>,
     mut commands: Commands,
 ) {
@@ -116,13 +117,10 @@ pub(super) fn receive_edits(
             });
             continue;
         }
-        changed.write(ToClients {
-            targets: SendTargets::All,
-            message: BlockChanged {
-                block,
-                to,
-                by: Some((client, seq)),
-            },
+        changed.write(BlockChanged {
+            block,
+            to,
+            by: Some((client, seq)),
         });
         let (_, mode, _, mut inventory) = players
             .iter_mut()
@@ -148,13 +146,10 @@ pub(super) fn receive_edits(
         if !to.is_solid() && plant.is_plant() {
             world.edit(above, BlockType::Air);
             leave(plant, above);
-            changed.write(ToClients {
-                targets: SendTargets::All,
-                message: BlockChanged {
-                    block: above,
-                    to: BlockType::Air,
-                    by: None,
-                },
+            changed.write(BlockChanged {
+                block: above,
+                to: BlockType::Air,
+                by: None,
             });
         }
     }
@@ -318,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn test_an_edit_in_reach_is_made_and_sent_to_every_client() {
+    fn test_an_edit_in_reach_is_made_and_sent_to_the_host() {
         let mut app = server(GameMode::Creative);
         let (above, under_feet) = (FLOOR + I64Vec3::Y, I64Vec3::ZERO);
         let edits = [
