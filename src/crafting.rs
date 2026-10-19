@@ -338,6 +338,36 @@ recipes! {
         name: "barrel", station: CraftingTable,
         ingredients: [(PLANKS, 6), (Item::Block(BlockType::PlanksSlab), 2)], output: (Item::Block(BlockType::Barrel), 1),
     },
+    // Villages' blocks (M3.4): plaster of sand and lime burnt from stone, adobe of earth bound
+    // with straw, and thatch of straw.
+    Plaster {
+        name: "plaster", station: CraftingTable,
+        ingredients: [(SAND, 3), (Item::Block(BlockType::Stone), 1)], output: (Item::Block(BlockType::Plaster), 4),
+    },
+    Adobe {
+        name: "adobe", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Dirt), 3), (Item::Wheat, 1)], output: (Item::Block(BlockType::Adobe), 4),
+    },
+    Thatch {
+        name: "thatch", station: CraftingTable,
+        ingredients: [(Item::Wheat, 4)], output: (Item::Block(BlockType::Thatch), 1),
+    },
+    ThatchStairs {
+        name: "thatch_stairs", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Thatch), 6)], output: (Item::Block(BlockType::ThatchStairs), 4),
+    },
+    ThatchSlab {
+        name: "thatch_slab", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Thatch), 3)], output: (Item::Block(BlockType::ThatchSlab), 6),
+    },
+    AdobeStairs {
+        name: "adobe_stairs", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Adobe), 6)], output: (Item::Block(BlockType::AdobeStairs), 4),
+    },
+    AdobeSlab {
+        name: "adobe_slab", station: CraftingTable,
+        ingredients: [(Item::Block(BlockType::Adobe), 3)], output: (Item::Block(BlockType::AdobeSlab), 6),
+    },
     WoolBlock {
         name: "wool_block", station: Hand,
         ingredients: [(Item::Wool, 4)], output: (Item::Block(BlockType::WoolBlock), 1),
@@ -738,12 +768,12 @@ mod tests {
             assert_eq!(made_of, recipe.ingredients()[0].1, "{}", recipe.name());
             assert_eq!(makes, recipe.output().count, "{}", recipe.name());
         }
-        // and every new building block is made somehow, but for what's only for authoring, and
-        // spawners, found only in dungeons
+        // and every new building block is made somehow, but for what's only for authoring,
+        // spawners, found only in dungeons, and paths, trodden in villages
         for block in BlockType::ALL
             .iter()
             .skip(BlockType::LootMarker as usize + 1)
-            .filter(|&&block| block != BlockType::Spawner)
+            .filter(|&&block| !matches!(block, BlockType::Spawner | BlockType::Path))
         {
             made(*block);
         }

@@ -2,8 +2,9 @@
 //! trees are (INV-3), and built into full-detail chunks and LOD nodes alike (INV-5).
 
 mod template;
+pub mod village;
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use bevy::math::{I64Vec2, I64Vec3, IVec3, Vec3Swizzles};
 
@@ -17,6 +18,7 @@ use crate::block::{Block, BlockType};
 pub use template::{
     Choice, Placement, Structure, Template, LOOT, SPAWNER, STRUCTURE_DEPTH, STRUCTURE_HEIGHT,
 };
+use village::{lay_out, Path, Village, PIECES, VILLAGES, VILLAGE_REACH};
 
 // Each structure type's file, built into the game. Where two would stand together the one listed
 // later gives way (`Placements::yields`), so new types go at the end.
@@ -57,14 +59,15 @@ const EDGE_MARGIN: i64 = 8;
 // for the ground between the samples dipping, as caves keep under the ground (§5.4).
 const UNDER_STRIDE: i64 = 4;
 const COVER: i64 = 8;
-// Cells remembered, a few dozen bytes each.
+// Cells remembered, a few dozen bytes each, and villages, a few kilobytes each.
 const PLACEMENTS_KEPT: usize = 65_536;
+const VILLAGES_KEPT: usize = 4096;
 
-/// A structure standing in the world.
+/// A structure standing in the world: one of a type, or a piece or a stretch of path of a
+/// village.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Placed {
-    // in `STRUCTURES`
-    kind: usize,
+    kind: Kind,
     /// Quarter turns from its template as written, 0..4.
     pub rotation: u8,
     /// Its footprint's lowest corner, at the height of its floor.
@@ -77,24 +80,62 @@ pub struct Placed {
     pub variant: u64,
 }
 
+// What a structure is: of a type, in `STRUCTURES`, a village's piece, in `PIECES`, or a stretch
+// of a village's path.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum Kind {
+    Type(usize),
+    Piece(usize),
+    Path(Path),
+}
+
 impl Placed {
-    pub fn structure(&self) -> &'static Structure {
-        &STRUCTURES[self.kind]
+    /// Its type's name, or its piece's, or `path`.
+    pub fn name(&self) -> &'static str {
+        match self.kind {
+            Kind::Type(kind) => &STRUCTURES[kind].name,
+            Kind::Piece(piece) => &PIECES[piece].name,
+            Kind::Path(_) => "path",
+        }
     }
 
-    fn template(&self) -> &'static Template {
-        &self.structure().template
+    /// The loot table its chests roll from: its type's, or a village's.
+    pub fn loot_table(&self) -> &'static str {
+        match self.kind {
+            Kind::Type(kind) => &STRUCTURES[kind].name,
+            _ => &VILLAGES.name,
+        }
+    }
+
+    /// The blocks it's built of, unless it's a path.
+    pub fn template(&self) -> Option<&'static Template> {
+        match self.kind {
+            Kind::Type(kind) => Some(&STRUCTURES[kind].template),
+            Kind::Piece(piece) => Some(&PIECES[piece].template),
+            Kind::Path(_) => None,
+        }
+    }
+
+    /// The stretch of path it is, if it's one of a village's.
+    pub fn path(&self) -> Option<Path> {
+        match self.kind {
+            Kind::Path(path) => Some(path),
+            _ => None,
+        }
     }
 
     /// Whether it's under the ground, out of sight from far away: LODs leave it out, as they do
     /// caves, and the ground over it is left alone.
     pub fn is_underground(&self) -> bool {
-        self.structure().placement.depth.is_some()
+        matches!(self.kind, Kind::Type(kind) if STRUCTURES[kind].placement.depth.is_some())
     }
 
     /// Its footprint across x and z.
     pub fn footprint(&self) -> I64Vec2 {
-        self.template().footprint(self.rotation)
+        match self.kind {
+            Kind::Path(path) => path.footprint(),
+            _ => self.template().unwrap().footprint(self.rotation),
+        }
     }
 
     // Whether its footprint overlaps the columns `min..=max`.
@@ -110,13 +151,16 @@ impl Placed {
 
     // Its lowest layer's corner, where its template's cell 0 is.
     fn corner(&self) -> I64Vec3 {
-        self.min - I64Vec3::Y * self.template().floor
+        self.min - I64Vec3::Y * self.template().map_or(0, |t| t.floor)
     }
 
     /// The lowest block it can change, and the block past the highest.
     pub fn bounds(&self) -> (I64Vec3, I64Vec3) {
         let corner = self.corner();
-        let (mut bottom, mut top) = (corner.y, corner.y + self.template().size.y);
+        let (mut bottom, mut top) = match self.kind {
+            Kind::Path(path) => path.bounds(self.min),
+            _ => (corner.y, corner.y + self.template().unwrap().size.y),
+        };
         if !self.is_underground() {
             bottom = bottom.min(ground_top(self.lowest));
             top = top.max(ground_top(self.highest) + 1);
@@ -133,7 +177,12 @@ impl Placed {
     // foundation up from the ground, and over it, air down to the floor, clearing the ground and
     // what grows on it. `height` is only asked for on the surface.
     fn stamp(&self, at: I64Vec3, height: impl FnOnce() -> i64) -> Option<Block> {
-        let template = self.template();
+        let template = match self.kind {
+            Kind::Path(path) => {
+                return path.stamp(self.min, at, self.variant, ground_top(height()));
+            }
+            _ => self.template().unwrap(),
+        };
         let cell = template.cell(self.rotation, at - self.corner(), self.variant);
         if cell.is_some() || self.is_underground() {
             return cell;
@@ -210,7 +259,10 @@ impl Placed {
     /// of its foundation down from its lowest layer to the ground under it or to `ground`,
     /// whichever is lower. Each is its lowest block and the block past its highest.
     pub fn boxes(&self, slab: i64, ground: i64) -> Vec<(I64Vec3, I64Vec3, BlockType)> {
-        let template = self.template();
+        // a path is too flat to see from so far
+        let Some(template) = self.template() else {
+            return Vec::new();
+        };
         let corner = self.corner();
         let footprint = self.footprint();
         let mut boxes = Vec::new();
@@ -250,12 +302,13 @@ impl Placed {
 
     /// Its markers, by kind, where they are in the world.
     pub fn markers(&self) -> impl Iterator<Item = (&'static str, I64Vec3)> + '_ {
-        let template = self.template();
-        template.markers.iter().map(move |(kind, at)| {
-            (
-                kind.as_str(),
-                self.corner() + template.turn(self.rotation, *at),
-            )
+        self.template().into_iter().flat_map(move |template| {
+            template.markers.iter().map(move |(kind, at)| {
+                (
+                    kind.as_str(),
+                    self.corner() + template.turn(self.rotation, *at),
+                )
+            })
         })
     }
 }
@@ -293,23 +346,77 @@ impl Tally {
     }
 }
 
-/// The structures placed so far, remembered by cell: deciding one takes dozens of noise samples,
-/// and every chunk and LOD node near it asks.
-pub struct Placements(Recent<(usize, i64, i64), Option<Placed>>);
+/// The structures placed so far, remembered by cell, and villages laid out: deciding one takes
+/// dozens of noise samples, a village a few thousand, and every chunk and LOD node near it asks.
+pub struct Placements {
+    types: Recent<(usize, i64, i64), Option<Placed>>,
+    villages: Recent<(i64, i64), Option<Arc<Village>>>,
+}
 
 impl Default for Placements {
     fn default() -> Self {
-        Self(Recent::new(PLACEMENTS_KEPT))
+        Self {
+            types: Recent::new(PLACEMENTS_KEPT),
+            villages: Recent::new(VILLAGES_KEPT),
+        }
     }
 }
 
 impl Placements {
     /// Every structure whose footprint overlaps the columns `min..=max` (x, z), in a fixed
-    /// order. Blocks while another thread places one, so only call from a task.
+    /// order: those of each type, then the paths and pieces of villages. Blocks while another
+    /// thread places one, so only call from a task.
     pub fn near(&self, noise: &NoiseGenerator, min: I64Vec2, max: I64Vec2) -> Vec<Placed> {
-        (0..STRUCTURES.len())
+        let mut found: Vec<Placed> = (0..STRUCTURES.len())
             .flat_map(|kind| self.near_of(noise, kind, min, max))
-            .collect()
+            .collect();
+        for village in self.villages_near(noise, min, max) {
+            let all = village.paths.iter().chain(&village.pieces);
+            found.extend(all.filter(|p| p.overlaps(min, max)));
+        }
+        found
+    }
+
+    /// Every village reaching into the columns `min..=max`, in a fixed order. Blocks while
+    /// another thread lays one out, so only call from a task.
+    pub fn villages_near(
+        &self,
+        noise: &NoiseGenerator,
+        min: I64Vec2,
+        max: I64Vec2,
+    ) -> Vec<Arc<Village>> {
+        let placement = &VILLAGES.placement;
+        let cell = I64Vec2::splat(placement.cell);
+        let (first, last) = (
+            (min - VILLAGE_REACH).div_euclid(cell),
+            (max + VILLAGE_REACH).div_euclid(cell),
+        );
+        let mut found = Vec::new();
+        for cz in first.y..=last.y {
+            for cx in first.x..=last.x {
+                let village = self.village(noise, I64Vec2::new(cx, cz));
+                found.extend(village.filter(|v| v.overlaps(min, max)));
+            }
+        }
+        found
+    }
+
+    /// The village in `cell` of the villages' grid, if one stands there. Blocks while another
+    /// thread lays it out, so only call from a task, or once it's been laid out for the chunks
+    /// round it.
+    pub fn village(&self, noise: &NoiseGenerator, cell: I64Vec2) -> Option<Arc<Village>> {
+        let placement = &VILLAGES.placement;
+        let seed = chosen(noise, &VILLAGES.name, placement.chance, cell.x, cell.y)?;
+        let village = self.villages.get((cell.x, cell.y), || {
+            // villages give way to every surface structure, as they're listed last
+            let earlier = |min, max| {
+                (0..STRUCTURES.len())
+                    .filter(|&kind| STRUCTURES[kind].placement.depth.is_none())
+                    .any(|kind| !self.near_of(noise, kind, min, max).is_empty())
+            };
+            lay_out(noise, cell, seed, earlier).map(Arc::new)
+        });
+        village.as_ref().clone()
     }
 
     // Those of `kind` alone.
@@ -332,11 +439,12 @@ impl Placements {
         for cz in first.y..=last.y {
             for cx in first.x..=last.x {
                 // most cells are ruled out by their hash alone, without waiting on others
-                let Some(seed) = chosen(noise, kind, cx, cz) else {
+                let Some(seed) = chosen(noise, &structure.name, structure.placement.chance, cx, cz)
+                else {
                     continue;
                 };
                 let cell = I64Vec2::new(cx, cz);
-                let placed = *self.0.get((kind, cx, cz), || {
+                let placed = *self.types.get((kind, cx, cz), || {
                     place(noise, kind, cell, seed).filter(|p| !self.yields(noise, p))
                 });
                 found.extend(placed.filter(|p| p.overlaps(min, max)));
@@ -353,23 +461,25 @@ impl Placements {
         let min = placed.min.xz() - CLEARING;
         let max = placed.min.xz() + placed.footprint() + CLEARING - 1;
         let underground = placed.is_underground();
-        (0..placed.kind)
+        let Kind::Type(before) = placed.kind else {
+            unreachable!("only types are placed by cell")
+        };
+        (0..before)
             .filter(|&kind| STRUCTURES[kind].placement.depth.is_some() == underground)
             .any(|kind| !self.near_of(noise, kind, min, max).is_empty())
     }
 }
 
-// The hash deciding the structure of `kind` in cell `cx`, `cz`, if the cell is among the
-// `chance` of cells that may have one: only those go on to sample the ground.
-fn chosen(noise: &NoiseGenerator, kind: usize, cx: i64, cz: i64) -> Option<u64> {
-    let structure = &STRUCTURES[kind];
+// The hash deciding the structure of the type `name` in cell `cx`, `cz`, if the cell is among
+// the `chance` of cells that may have one: only those go on to sample the ground.
+fn chosen(noise: &NoiseGenerator, name: &str, chance: f64, cx: i64, cz: i64) -> Option<u64> {
     // each type's grid is salted by its name, so types don't line up, nor shift as others come
-    let salt = structure.name.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+    let salt = name.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
         (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
     let seed = hash(noise.seed() as u64 ^ salt, cx, cz);
-    let chance = (seed >> 11) as f64 / (1u64 << 53) as f64;
-    (chance < structure.placement.chance).then(|| hash(seed, 1, 0))
+    let draw = (seed >> 11) as f64 / (1u64 << 53) as f64;
+    (draw < chance).then(|| hash(seed, 1, 0))
 }
 
 // The structure of `kind` in `cell`, from its hash `seed`, if the ground there suits it. Decided
@@ -440,7 +550,7 @@ fn place(noise: &NoiseGenerator, kind: usize, cell: I64Vec2, seed: u64) -> Optio
             && lowest - WATER_LEVEL >= placement.min_above_sea
             && top <= ground_top(lowest) - COVER;
         return suits.then_some(Placed {
-            kind,
+            kind: Kind::Type(kind),
             rotation,
             min: I64Vec3::new(min.x, floor, min.y),
             lowest,
@@ -460,7 +570,7 @@ fn place(noise: &NoiseGenerator, kind: usize, cell: I64Vec2, seed: u64) -> Optio
         && lowest > WATER_LEVEL
         && floor - WATER_LEVEL >= placement.min_above_sea;
     suits.then_some(Placed {
-        kind,
+        kind: Kind::Type(kind),
         rotation,
         min: I64Vec3::new(min.x, floor, min.y),
         lowest,
@@ -553,16 +663,13 @@ mod tests {
     fn test_instances_choose_their_blocks_the_same_each_time_and_differently_from_each_other() {
         let noise = NoiseGenerator::new(3);
         let all = Placements::default().near(&noise, AREA.0, AREA.1);
-        let towers: Vec<_> = all
-            .iter()
-            .filter(|p| p.structure().name == "watchtower")
-            .collect();
+        let towers: Vec<_> = all.iter().filter(|p| p.name() == "watchtower").collect();
         assert!(towers.len() >= 2);
         let blocks = |p: &Placed| -> Vec<Option<Block>> {
-            let size = p.template().size;
+            let size = p.template().unwrap().size;
             (0..size.x * size.y * size.z)
                 .map(|i| I64Vec3::new(i % size.x, i / size.x / size.z, i / size.x % size.z))
-                .map(|at| p.template().cell(0, at, p.variant))
+                .map(|at| p.template().unwrap().cell(0, at, p.variant))
                 .collect()
         };
         assert_eq!(blocks(towers[0]), blocks(towers[0]));
@@ -625,8 +732,10 @@ mod tests {
         let placements = Placements::default();
         let mut all = placements.near(&noise, AREA.0, AREA.1);
         all.extend(placements.near(&noise, NORTH.0, NORTH.1));
-        for p in &all {
-            let placement = &p.structure().placement;
+        // villages have tests of their own
+        let types: Vec<_> = all.iter().filter(|p| type_of(p).is_some()).collect();
+        for p in &types {
+            let placement = &type_of(p).unwrap().placement;
             let spot = p.min.xz() + p.footprint() / 2;
             let biome = noise.sample(spot.x as f64, spot.y as f64).biome;
             let biome = noise.biomes().name(biome).unwrap_or(BASE_TERRAIN);
@@ -659,19 +768,19 @@ mod tests {
             assert_eq!(p.lowest, *heights.iter().min().unwrap());
             assert_eq!(p.highest, *heights.iter().max().unwrap());
         }
-        for p in &all {
-            for other in all.iter().filter(|o| *o != p) {
+        for p in &types {
+            for other in all.iter().filter(|o| *o != *p) {
                 let apart = (other.min - p.min).xz().abs().max_element();
                 if other.kind == p.kind {
                     // each in a cell of its own, kept well apart from those in the cells round it
-                    let cell = p.structure().placement.cell;
+                    let cell = type_of(p).unwrap().placement.cell;
                     let width = p.footprint().max_element();
                     assert!(
                         apart >= cell / EDGE_MARGIN * 2 - width,
                         "{p:?} and {other:?}"
                     );
                 } else if other.is_underground() == p.is_underground() {
-                    // and other types keep out of its clearing
+                    // and other types and villages keep out of its clearing
                     let (min, max) = (p.min.xz() - CLEARING, p.min.xz() + p.footprint() + CLEARING);
                     assert!(!other.overlaps(min, max - 1), "{p:?} and {other:?}");
                 }
@@ -680,13 +789,20 @@ mod tests {
         // every type, turned every way
         for kind in 0..STRUCTURES.len() {
             assert!(
-                all.iter().any(|p| p.kind == kind),
+                types.iter().any(|p| p.kind == Kind::Type(kind)),
                 "no {}",
                 STRUCTURES[kind].name
             );
         }
         for rotation in 0..4 {
-            assert!(all.iter().any(|p| p.rotation == rotation));
+            assert!(types.iter().any(|p| p.rotation == rotation));
+        }
+    }
+
+    fn type_of(placed: &Placed) -> Option<&'static Structure> {
+        match placed.kind {
+            Kind::Type(kind) => Some(&STRUCTURES[kind]),
+            _ => None,
         }
     }
 

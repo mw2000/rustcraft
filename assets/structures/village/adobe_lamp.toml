@@ -1,0 +1,35 @@
+# A lamp post of the adobe village, a lantern on a sandstone column. Written by .claude/skills/structures/village_adobe.py.
+name = "adobe_lamp"
+
+[piece]
+role = "lamp"
+styles = ["adobe"]
+
+[template]
+size = [1, 5, 1]
+floor = 1
+foundation = "sandstone"
+palette = { a = "sandstone_wall", l = "lantern", p = "path", s = "sandstone" }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+p
+''',
+  # 1
+  '''
+s
+''',
+  # 2
+  '''
+a
+''',
+  # 3
+  '''
+a
+''',
+  # 4
+  '''
+l
+''',
+]

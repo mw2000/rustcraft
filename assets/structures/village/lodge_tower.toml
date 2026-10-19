@@ -1,0 +1,276 @@
+# The lodge village's lookout, a railed gallery and a bell under a steep spire. Written by .claude/skills/structures/village_lodge.py.
+name = "lodge_tower"
+
+[piece]
+role = "tower"
+styles = ["lodge"]
+
+[template]
+size = [7, 26, 7]
+floor = 1
+foundation = "stone_bricks"
+palette = { A = "stone_brick_stairs[facing=south]", B = "stone_brick_stairs[facing=west]", C = "stone_bricks*3|cobblestone*3|mossy_cobblestone|mossy_stone_bricks|cracked_stone_bricks", a = "dark_planks*2/planks", b = "barrel[facing=up]", c = "dark_planks_stairs[facing=west]*14|snow", d = "dark_planks", e = "door[facing=south,hinge=left]", f = "gold_block", g = "glass_pane", h = "ladder[facing=south]", i = "dark_planks_stairs[facing=west,half=top]", j = "lantern[hanging=true]", k = "dark_planks_stairs[facing=east,half=top]", l = "dark_planks_stairs[facing=north,half=top]", m = "log", n = "dark_planks_stairs[facing=north]*14|snow", o = "door[facing=south,half=top,hinge=left]", p = "dark_planks_stairs[facing=east]*14|snow", q = "log[axis=x]", r = "dark_planks_fence", s = "dark_planks_stairs[facing=south,half=top]", t = "dark_planks_stairs[facing=south]*14|snow", u = "log[axis=z]", v = "path*3|gravel", w = "planks", x = "stone_brick_stairs[facing=east]", y = "stone_brick_stairs[facing=north,half=top]", z = "stone_brick_stairs[facing=north]" }
+markers = { entrance = [[3, 1, 6]], work = [[4, 1, 3]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+vvvvvvv
+vCCCCCv
+vCwwwCv
+vCwwwCv
+vCwwwCv
+vCCCCCv
+vvvvvvv
+''',
+  # 1
+  '''
+AAAAAAA
+xCCCCCB
+xC-h-CB
+xC---CB
+xCb--CB
+xCCeCCB
+zzz.zzz
+''',
+  # 2
+  '''
+.......
+.CCCCC.
+.C-h-C.
+.C---C.
+.C---C.
+.CCoCC.
+.......
+''',
+  # 3
+  '''
+.......
+.CCCCC.
+.C-h-C.
+.C---C.
+.C---C.
+.CCCCC.
+....j..
+''',
+  # 4
+  '''
+.......
+.CCgCC.
+.C-h-C.
+.g---g.
+.C--jC.
+.CCCCC.
+....y..
+''',
+  # 5
+  '''
+.......
+.CCqCC.
+.C-h-C.
+.u---u.
+.CqqqC.
+.CCCCC.
+.......
+''',
+  # 6
+  '''
+.......
+.maaam.
+.a-h-a.
+.a---a.
+.a---a.
+.maaam.
+.......
+''',
+  # 7
+  '''
+.......
+.maaam.
+.a-h-a.
+.a---a.
+.a---a.
+.maaam.
+.......
+''',
+  # 8
+  '''
+.......
+.magam.
+.a-h-a.
+.g---g.
+.a---a.
+.maaam.
+.......
+''',
+  # 9
+  '''
+.......
+.maqam.
+.a-h-a.
+.u---u.
+.a---a.
+.magam.
+.......
+''',
+  # 10
+  '''
+.......
+.maaam.
+.a-h-a.
+.a---a.
+.a--ja.
+.maqam.
+.......
+''',
+  # 11
+  '''
+.......
+.maaam.
+.a-h-a.
+.a---a.
+.aqqqa.
+.maaam.
+.......
+''',
+  # 12
+  '''
+.......
+.magam.
+.a-h-a.
+.g---g.
+.a---a.
+.maaam.
+.......
+''',
+  # 13
+  '''
+.......
+.maqam.
+.a-h-a.
+.u---u.
+.a---a.
+.maaam.
+.......
+''',
+  # 14
+  '''
+ksssssi
+kmqqqmi
+ku-h-ui
+ku---ui
+ku---ui
+kmqqqmi
+kllllli
+''',
+  # 15
+  '''
+ddddddd
+ddddddd
+dddhddd
+ddddddd
+ddddddd
+ddddddd
+ddddddd
+''',
+  # 16
+  '''
+rrrrrrr
+rm...mr
+r.....r
+r.....r
+r.....r
+rm...mr
+rrrrrrr
+''',
+  # 17
+  '''
+.......
+.m...m.
+.......
+...f...
+.......
+.m...m.
+.......
+''',
+  # 18
+  '''
+.......
+.m...m.
+.......
+...r...
+..j....
+.m...m.
+.......
+''',
+  # 19
+  '''
+.......
+.mqqqm.
+.u...u.
+.uqqqu.
+.uq..u.
+.mqqqm.
+.......
+''',
+  # 20
+  '''
+ttttttt
+p.....c
+p.....c
+p.....c
+p.....c
+p.....c
+nnnnnnn
+''',
+  # 21
+  '''
+.......
+.ddddd.
+.d...d.
+.d...d.
+.d...d.
+.ddddd.
+.......
+''',
+  # 22
+  '''
+.......
+.ttttt.
+.p...c.
+.p...c.
+.p...c.
+.nnnnn.
+.......
+''',
+  # 23
+  '''
+.......
+.......
+..ddd..
+..d.d..
+..ddd..
+.......
+.......
+''',
+  # 24
+  '''
+.......
+.......
+..ttt..
+..p.c..
+..nnn..
+.......
+.......
+''',
+  # 25
+  '''
+.......
+.......
+.......
+...d...
+.......
+.......
+.......
+''',
+]

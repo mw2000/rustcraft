@@ -1,0 +1,266 @@
+# The timber village's bell tower, a gold bell in its open belfry under a steep spire. Written by .claude/skills/structures/village_timber.py.
+name = "timber_bell_tower"
+
+[piece]
+role = "tower"
+styles = ["timber"]
+
+[template]
+size = [7, 25, 7]
+floor = 1
+foundation = "cobblestone"
+palette = { A = "stone_bricks", B = "stone_bricks*6|mossy_stone_bricks|cracked_stone_bricks*2", a = "dark_planks_fence", b = "barrel[facing=up]", c = "cobblestone", d = "dark_planks", e = "cobblestone_stairs[facing=north]", f = "door[facing=south,half=top,hinge=left]", g = "door[facing=south,hinge=left]", h = "glass_pane", i = "gold_block", j = "ladder[facing=south]", k = "dark_planks_stairs[facing=north]", l = "cobblestone_stairs[facing=east]", m = "lantern[hanging=true]", n = "dark_planks_stairs[facing=west]", o = "cobblestone*5|mossy_cobblestone*2|stone_bricks", p = "dark_planks_stairs[facing=south]", q = "log", r = "dark_planks_stairs[facing=east]", s = "cobblestone_stairs[facing=west]", t = "cobblestone_wall", u = "log[axis=x]", v = "log[axis=z]", w = "path*3|cobblestone", x = "stone_brick_stairs[facing=east,half=top]", y = "stone_brick_stairs[facing=north,half=top]", z = "stone_brick_stairs[facing=west,half=top]" }
+markers = { entrance = [[3, 1, 6]], work = [[4, 1, 3]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+wcccccw
+wcccccw
+wcccccw
+wcccccw
+wcccccw
+wwwwwww
+wwwwwww
+''',
+  # 1
+  '''
+lAoooAs
+lo-j-os
+lo---os
+lob--os
+lAogoAs
+eee.eee
+.......
+''',
+  # 2
+  '''
+.AoooA.
+.o-j-o.
+.o---o.
+.o---o.
+.AofoA.
+.......
+.......
+''',
+  # 3
+  '''
+.AoooA.
+.o-j-o.
+.o---o.
+.o---o.
+.AoooA.
+....m..
+.......
+''',
+  # 4
+  '''
+.AoooA.
+.o-j-o.
+.om--o.
+.o---o.
+.AoooA.
+....y..
+.......
+''',
+  # 5
+  '''
+.AohoA.
+.o-j-o.
+.hd--h.
+.o---o.
+.AoooA.
+.......
+.......
+''',
+  # 6
+  '''
+.AoooA.
+.o-j-o.
+.o---o.
+.o---o.
+.AoooA.
+.......
+.......
+''',
+  # 7
+  '''
+xABBBAz
+xB-j-Bz
+xB---Bz
+xB---Bz
+xABhBAz
+yyyyyyy
+.......
+''',
+  # 8
+  '''
+.ABBBA.
+.B-j-B.
+.B---B.
+.B---B.
+.ABBBA.
+.......
+.......
+''',
+  # 9
+  '''
+.ABhBA.
+.B-j-B.
+.h---h.
+.B--mB.
+.ABBBA.
+.......
+.......
+''',
+  # 10
+  '''
+.ABBBA.
+.B-j-B.
+.B---B.
+.B--dB.
+.ABBBA.
+.......
+.......
+''',
+  # 11
+  '''
+.ABBBA.
+.B-j-B.
+.B---B.
+.B---B.
+.ABBBA.
+.......
+.......
+''',
+  # 12
+  '''
+.ABBBA.
+.B-j-B.
+.B---B.
+.B---B.
+.ABBBA.
+.......
+.......
+''',
+  # 13
+  '''
+.ddddd.
+.ddjdd.
+.ddddd.
+.ddddd.
+.ddddd.
+.......
+.......
+''',
+  # 14
+  '''
+.qa-aq.
+.a...a.
+.a...a.
+.a...a.
+.qaaaq.
+.......
+.......
+''',
+  # 15
+  '''
+.q...q.
+.......
+...t...
+.......
+.q...q.
+.......
+.......
+''',
+  # 16
+  '''
+.q...q.
+.......
+...i...
+..m....
+.q...q.
+.......
+.......
+''',
+  # 17
+  '''
+.quuuq.
+.v...v.
+.vuuuv.
+.vu..v.
+.quuuq.
+.......
+.......
+''',
+  # 18
+  '''
+r.....n
+r.....n
+r.....n
+r.....n
+r.....n
+kkkkkkk
+.......
+''',
+  # 19
+  '''
+.ddddd.
+.d...d.
+.d...d.
+.d...d.
+.ddddd.
+.......
+.......
+''',
+  # 20
+  '''
+.ppppp.
+.r...n.
+.r...n.
+.r...n.
+.kkkkk.
+.......
+.......
+''',
+  # 21
+  '''
+.......
+..ddd..
+..d.d..
+..ddd..
+.......
+.......
+.......
+''',
+  # 22
+  '''
+.......
+..ppp..
+..r.n..
+..kkk..
+.......
+.......
+.......
+''',
+  # 23
+  '''
+.......
+.......
+...d...
+.......
+.......
+.......
+.......
+''',
+  # 24
+  '''
+.......
+.......
+...d...
+.......
+.......
+.......
+.......
+''',
+]

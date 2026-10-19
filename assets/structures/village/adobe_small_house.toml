@@ -1,0 +1,126 @@
+# An adobe house for one, a stair up its side to the roof. Written by .claude/skills/structures/village_adobe.py.
+name = "adobe_small_house"
+
+[piece]
+role = "house"
+styles = ["adobe"]
+
+[template]
+size = [8, 10, 8]
+floor = 1
+foundation = "sandstone"
+palette = { a = "adobe", b = "adobe_stairs[facing=north,half=top]", c = "bed", d = "adobe*24|sandstone|terracotta", e = "adobe_stairs[facing=north]", f = "door[facing=south,half=top,hinge=left]", g = "door[facing=south,hinge=left]", h = "log[axis=x]", i = "log[axis=z]", j = "sandstone", k = "sandstone_slab", l = "barrel[facing=up]|air", m = "sandstone_slab[half=top]", n = "lantern", o = "adobe_slab", p = "path*5|sand*2|gravel", q = "sandstone_stairs[facing=north]", r = "barrel[facing=up]", s = "glass_pane", t = "lantern[hanging=true]", u = "furnace[facing=south]", v = "terracotta*4|sandstone", y = "red_terracotta/yellow_terracotta/blue_terracotta" }
+markers = { bed = [[3, 2, 2]], entrance = [[2, 1, 7]], loot = [[4, 2, 3]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+pppppppp
+pppppppp
+pppppppp
+pppppppp
+pppppppp
+ppppppap
+pppppppp
+pppppppp
+''',
+  # 1
+  '''
+........
+jjjjjja.
+jvvvvjar
+jvvvvja.
+jvvvvja.
+jjjjjja.
+qqq.l...
+........
+''',
+  # 2
+  '''
+...m....
+dddddda.
+du--cdan
+d----da.
+dr---de.
+ddgddd..
+....m...
+........
+''',
+  # 3
+  '''
+........
+dddsdda.
+db---da.
+s----de.
+d----d..
+ddfdsd..
+........
+........
+''',
+  # 4
+  '''
+........
+yayhyya.
+ya---ye.
+i--t-y..
+y----y..
+yyyyhy..
+...t....
+........
+''',
+  # 5
+  '''
+.i.i....
+aaaiaao.
+aiaiaa..
+aiaiaa..
+aiaiaa..
+aiaiaa..
+.i.i....
+........
+''',
+  # 6
+  '''
+........
+dadddd..
+d.......
+d....d..
+d....d..
+dddddd..
+........
+........
+''',
+  # 7
+  '''
+........
+dakkkd..
+k.......
+k....k..
+k....n..
+dkkkkd..
+........
+........
+''',
+  # 8
+  '''
+........
+ka...k..
+........
+........
+........
+k....k..
+........
+........
+''',
+  # 9
+  '''
+........
+.k......
+........
+........
+........
+........
+........
+........
+''',
+]

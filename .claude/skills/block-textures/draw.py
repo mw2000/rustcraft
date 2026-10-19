@@ -792,6 +792,63 @@ def spawner(rng):
     return bevel(out, IRON[3], IRON[0])
 
 
+def path_top(rng):
+    """Earth trodden hard into a path: paler, greyer and smoother than the dirt round it, with small stones pressed
+    into it and the faint ruts of feet and carts along it."""
+    earth = np.array([(124, 102, 74), (140, 117, 86), (152, 129, 96), (164, 141, 106)], float)
+    out = earth[levels(noise(rng, (1, 3)), 4)]
+    y, x = np.mgrid[:16, :16]
+    out[((x % 8 == 2) | (x % 8 == 3)) & (noise(rng, (3, 0)) > 0.5)] *= 0.92  # ruts running along it
+    stones = np.array([(104, 98, 90), (138, 132, 122), (168, 162, 150)], float)
+    for _ in range(6):
+        sy, sx = rng.integers(0, 16, 2)
+        out[sy, sx] = stones[2]
+        out[sy, (sx + 1) % 16] = stones[1]
+        out[(sy + 1) % 16, sx] = stones[0]
+    return out
+
+
+def plaster(rng):
+    """Lime plaster, whitewashed: an off-white face, soft with the brush's strokes, a little dirtier and patchier
+    in places, with a hairline crack now and then."""
+    lime = np.array([(206, 199, 184), (218, 212, 198), (228, 223, 211), (236, 232, 222)], float)
+    out = lime[levels(noise(rng, (2, 1)) + noise(rng, (0, 2)) * 0.4, 4)]
+    for _ in range(2):  # hairline cracks, a few texels long
+        y, x = rng.integers(0, 16, 2)
+        for _ in range(rng.integers(3, 6)):
+            out[y % 16, x % 16] = lime[0] * 0.86
+            y, x = y + rng.integers(0, 2), x + rng.choice([-1, 1])
+    return out
+
+
+def adobe(rng):
+    """Sun-dried mud bricks, long and squat, warm sandy brown with flecks of straw in them, laid in a soft earthen
+    mortar a shade darker, their edges rounded off by the weather."""
+    mud = np.array([(150, 108, 72), (166, 122, 82), (180, 136, 94)], float)
+    mortar = np.array([(132, 96, 66), (122, 88, 60)], float)
+    y, x = np.mgrid[:16, :16]
+    shifted = x + (y // 5) % 2 * 4  # three courses of bricks, alternate ones offset
+    brick = (y // 5) * 2 + shifted % 16 // 8
+    out = mud[np.clip(rng.integers(0, 2, 8)[brick % 8] + (noise(rng) > 0.7), 0, 2)]
+    out[(y % 5 == 0) & (shifted % 8 != 7)] = mud[2] * 1.04  # each brick's top caught by the sun
+    straw = (noise(rng) > 0.86) & (y % 5 != 4)
+    out[straw] = (196, 168, 104)
+    joint = (y % 5 == 4) | (shifted % 8 == 7) | (y == 15)
+    out[joint] = mortar[(noise(rng) > 0.5).astype(int)][joint]
+    return out
+
+
+def thatch(rng):
+    """Bundles of straw laid in courses: golden stalks running down the tile, lighter at their cut ends along the
+    bottom of each course and shadowed under the course above."""
+    straw = np.array([(112, 86, 44), (148, 116, 58), (176, 142, 74), (202, 170, 96)], float)
+    y, x = np.mgrid[:16, :16]
+    out = straw[levels(noise(rng, (4, 0)) + (y % 8) / 14, 4)]  # stalks down the tile, lighter towards a course's end
+    out[y % 8 == 0] = straw[0]  # the shadow under the course above
+    out[(y % 8 == 7) & (noise(rng, (0, 1)) > 0.4)] = (214, 186, 112)  # the cut ends
+    return out
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceFront=furnace_front,
             TallGrass=plant("TallGrass"), Poppy=plant("Poppy"), Dandelion=plant("Dandelion"), Cornflower=plant("Cornflower"), Torch=torch, BedTop=bed_top,
@@ -807,7 +864,8 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             BlueTerracotta=terracotta((70, 62, 94)), GreenTerracotta=terracotta((76, 83, 42)), DarkPlanks=dark_planks,
             LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end,
             Wool=wool, BasaltSide=basalt_side, BasaltTop=basalt_top, Magma=magma,
-            ShortGrass=plant("ShortGrass"), WildGrass=plant("WildGrass"), Spawner=spawner)
+            ShortGrass=plant("ShortGrass"), WildGrass=plant("WildGrass"), Spawner=spawner,
+            PathTop=path_top, Plaster=plaster, Adobe=adobe, Thatch=thatch)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

@@ -552,7 +552,7 @@ fn test_a_dungeons_spawner_is_built_as_someone_comes_near_and_not_again_once_bro
             .region_store
             .structures_near(-reach, reach)
             .into_iter()
-            .filter(|placed| placed.structure().name == "dungeon")
+            .filter(|placed| placed.name() == "dungeon")
             .collect();
         dungeons.sort_by_key(|placed| placed.min.xz().length_squared());
         let dungeon = dungeons.first().expect("a dungeon within 4 km");

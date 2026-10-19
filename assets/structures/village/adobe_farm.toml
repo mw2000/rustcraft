@@ -1,0 +1,72 @@
+# A walled field of wheat watered by two channels, a shade at its front. Written by .claude/skills/structures/village_adobe.py.
+name = "adobe_farm"
+
+[piece]
+role = "farm"
+styles = ["adobe"]
+
+[template]
+size = [13, 4, 11]
+floor = 1
+foundation = "sandstone"
+palette = { 0 = "wheat_0|wheat_1|wheat_2*2|wheat_3*2|wheat_4*2|wheat_5*2|wheat_6*2|ripe_wheat*3", a = "adobe*24|sandstone|terracotta", b = "barrel[facing=up]", c = "thatch", d = "sandstone_slab", e = "thatch|barrel[facing=up]", f = "farmland", h = "path*5|sand*2|gravel", i = "thatch|air", k = "planks_fence/dark_planks_fence", l = "lantern", n = "planks", o = "sandstone_wall", p = "path", r = "barrel[facing=up]|air", s = "planks_slab/dark_planks_slab", t = "path*4|sand", w = "water" }
+markers = { entrance = [[6, 1, 10]], work = [[2, 1, 3], [6, 1, 7], [10, 1, 5]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+hhhhhhhhhhhhh
+hfffnfffnfffh
+hfffwfffwfffh
+hfffwfffwfffh
+hfffwfffwfffh
+hfffwfffwfffh
+hfffwfffwfffh
+httttttttttth
+httttttttttth
+hhhhhppphhhhh
+hhhhhppphhhhh
+''',
+  # 1
+  '''
+aaaaaaaaaaaaa
+a000.000.000a
+a000.000.000a
+a000.000.000a
+a000.000.000a
+a000.000.000a
+a000.000.000a
+ab.k........a
+ace........ra
+aaaaa...aaaaa
+.............
+''',
+  # 2
+  '''
+odddddodddddo
+d...........d
+d...........d
+d...........d
+d...........d
+d...........d
+d...........d
+d..k........d
+di..........d
+odddo...odddo
+.............
+''',
+  # 3
+  '''
+l.....l.....l
+.............
+.............
+.............
+.............
+.............
+.............
+.sss.........
+.sss.........
+l...l...l...l
+.............
+''',
+]

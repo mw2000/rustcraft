@@ -7,6 +7,7 @@ use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use super::structures::village::Village;
 use super::structures::{Placed, Placements, STRUCTURE_REACH};
 use super::trees::TreeGround;
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -109,6 +110,16 @@ impl RegionStore {
     /// `Placements::near`. Blocks while another thread places one, so only call from a task.
     pub fn structures_near(&self, min: I64Vec2, max: I64Vec2) -> Vec<Placed> {
         self.placements.near(&self.noise, min, max)
+    }
+
+    /// Every village reaching into the columns `min..=max`, see `Placements::villages_near`.
+    pub fn villages_near(&self, min: I64Vec2, max: I64Vec2) -> Vec<Arc<Village>> {
+        self.placements.villages_near(&self.noise, min, max)
+    }
+
+    /// The village in `cell` of the villages' grid, see `Placements::village`.
+    pub fn village(&self, cell: I64Vec2) -> Option<Arc<Village>> {
+        self.placements.village(&self.noise, cell)
     }
 
     /// The lowest and highest ground under a coarse LOD node, if a node over the same

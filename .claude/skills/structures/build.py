@@ -28,12 +28,12 @@ STEP = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
 def stairs(material, facing, top=False):
     """A stair of `material` (`sandstone`, `dark_planks`, ...) climbing towards `facing`,
     turned over if `top`."""
-    name = {"stone_bricks": "stone_brick"}.get(material, material)
+    name = {"stone_bricks": "stone_brick", "bricks": "brick"}.get(material, material)
     return f"{name}_stairs[facing={facing}{',half=top' if top else ''}]"
 
 
 def slab(material, top=False):
-    name = {"stone_bricks": "stone_brick"}.get(material, material)
+    name = {"stone_bricks": "stone_brick", "bricks": "brick"}.get(material, material)
     return f"{name}_slab{'[half=top]' if top else ''}"
 
 
@@ -150,6 +150,23 @@ class Build:
     def write(self, name, placement, foundation, about, script):
         """Writes the template to `assets/structures/<name>.toml`, with `placement` as a dict of
         its fields in order, and `about` and the script that wrote it in its first comment."""
+        table = ["[placement]"] + [f"{k} = {_value(v)}" for k, v in placement.items()]
+        self._write(ASSETS / f"{name}.toml", name, table, foundation, about, script)
+
+    def write_piece(self, name, role, styles, foundation, about, script):
+        """Writes the template as a village piece, `assets/structures/village/<name>.toml`: a
+        `[piece]` table of its `role` (house, hall, smithy, farm, pen, tower, well or lamp) and
+        the village `styles` that build it in place of a placement, as villages place their
+        pieces along their streets themselves."""
+        table = ["[piece]", f"role = {_value(role)}", f"styles = {_value(list(styles))}"]
+        # a piece is as tall as what it builds, so the layout knows its height
+        top = max(y for (_, y, _), block in self.cells.items() if block is not None)
+        self.size = (self.size[0], top + 1, self.size[2])
+        path = ASSETS / "village" / f"{name}.toml"
+        path.parent.mkdir(exist_ok=True)
+        self._write(path, name, table, foundation, about, script)
+
+    def _write(self, path, name, table, foundation, about, script):
         sx, sy, sz = self.size
         palette = {}
         for block in sorted({b for b in self.cells.values() if b not in (None, AIR)}, key=str):
@@ -163,18 +180,8 @@ class Build:
             else:
                 raise ValueError("more blocks than keys")
 
-        def value(v):
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, str):
-                return f'"{v}"'
-            if isinstance(v, (list, tuple)):
-                return "[" + ", ".join(value(i) for i in v) + "]"
-            return str(v)
-
         out = [f"# {about} Written by .claude/skills/structures/{script}.", f'name = "{name}"', ""]
-        out.append("[placement]")
-        out += [f"{k} = {value(v)}" for k, v in placement.items()]
+        out += table
         out += ["", "[template]", f"size = [{sx}, {sy}, {sz}]", f"floor = {self.floor}"]
         out.append(f'foundation = "{foundation}"')
         keys = sorted(palette.items(), key=lambda kv: kv[1])
@@ -197,6 +204,16 @@ class Build:
                 out.append(row)
             out.append("''',")
         out.append("]")
-        path = ASSETS / f"{name}.toml"
         path.write_text("\n".join(out) + "\n")
         print(f"wrote {path}")
+
+
+def _value(v):
+    """A value as TOML writes it."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return f'"{v}"'
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_value(i) for i in v) + "]"
+    return str(v)

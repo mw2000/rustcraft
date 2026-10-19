@@ -1,0 +1,352 @@
+# The timber village's inn: a taproom under a jettied gable, a kitchen range beside it. Written by .claude/skills/structures/village_timber.py.
+name = "timber_inn"
+
+[piece]
+role = "hall"
+styles = ["timber"]
+
+[template]
+size = [13, 21, 13]
+floor = 1
+foundation = "cobblestone"
+palette = { A = "lantern[hanging=true]", B = "log", C = "log[axis=x]", D = "log[axis=z]", E = "path", F = "planks", G = "plaster*2/light_planks", H = "poppy*3|dandelion*3|cornflower*2|air*2", I = "short_grass*4|tall_grass*2|poppy|dandelion|air*6", J = "stone_brick_stairs[facing=north]", K = "stone_bricks", L = "thatch/dark_planks", M = "thatch_slab/dark_planks_slab", N = "thatch_stairs[facing=east]/dark_planks_stairs[facing=east]", O = "thatch_stairs[facing=north]/dark_planks_stairs[facing=north]", P = "thatch_stairs[facing=south]/dark_planks_stairs[facing=south]", Q = "thatch_stairs[facing=west]/dark_planks_stairs[facing=west]", R = "trapdoor[facing=east,open=true]*3|air", S = "trapdoor[facing=south,half=top]", T = "trapdoor[facing=south,open=true]*3|air", U = "trapdoor[facing=west,open=true]*3|air", a = "barrel[facing=up]|air", b = "barrel[facing=up]", c = "cobblestone*5|mossy_cobblestone|stone_bricks*2", d = "bed", e = "barrel[facing=west]*2|air", f = "crafting_table", g = "dark_planks_slab[half=top]", h = "dark_planks_stairs[facing=north,half=top]", i = "bricks*3/cobblestone*2", j = "dark_planks_stairs[facing=south,half=top]", k = "dark_planks", l = "cobblestone*6|mossy_cobblestone*2|stone_bricks", m = "dark_planks_stairs[facing=south]", n = "dark_planks_slab", o = "bookshelf", p = "dark_planks_fence", q = "dark_planks_stairs[facing=west]", r = "barrel[facing=west]", s = "cobblestone_wall", t = "dark_planks_stairs[facing=east]", u = "door[facing=south,half=top,hinge=left]", v = "door[facing=south,hinge=left]", w = "furnace[facing=east]", x = "glass_pane", y = "grass", z = "lantern" }
+markers = { entrance = [[7, 1, 12]], loot = [[10, 2, 2]], work = [[2, 2, 5], [9, 2, 4]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+yyyyyyyyyyyyy
+yyyylllllllly
+yyyylllllllly
+lllllllllllly
+lllllllllllly
+lllllllllllly
+lllllllllllly
+lllllllllllly
+lllllllllllly
+lllllllllllly
+EEEEEyyEyyyyy
+EEEEEyyEyyyyy
+yyyyyyyEyyyyy
+''',
+  # 1
+  '''
+IIIIIIIIIIIII
+IIIIllllllllI
+IIIIlFkFFFFlI
+lllllFFFFFFlI
+lFFFlFFFFFFlI
+lFFFlFFFFFFlI
+lFFFlFFFFFFlI
+lFFFlFFFFFFlI
+lFFFlFFFFFFlI
+llllllllllllI
+a....IIJIIIII
+.qptpHH.HHHHI
+IIIIIII.IIIII
+''',
+  # 2
+  '''
+.............
+....KccccccK.
+....c-kkkk-c.
+BGBGB---k-rc.
+cf-bGqptk-rc.
+cw--G---k-rc.
+iw--G---k-rc.
+c---Gqp---rc.
+ca----m---rc.
+BGBGBccvcccK.
+.S.S.........
+..g.z........
+.............
+''',
+  # 3
+  '''
+.........A...
+....KcccxccK.
+..A.c--tkk-c.
+BGBGB---n-ec.
+c---G-g-n-ex.
+c---G---n-ec.
+i---G---n-ec.
+c---G-g---ex.
+c---------ec.
+BxBxBxxucxxK.
+THTHT........
+.............
+.............
+''',
+  # 4
+  '''
+.........j...
+....KcccxccK.
+..j.c---tk-c.
+BGBGB------c.
+c---G------x.
+c---G------c.
+i-A-G------c.
+c---G------x.
+c---G------c.
+BGBGBxxccxxK.
+.............
+.............
+.............
+''',
+  # 5
+  '''
+.............
+....KccccccK.
+PPP.c----t-c.
+cCCCc------c.
+c---c------c.
+c---c-A----c.
+iCCCc----A-c.
+c---c------c.
+c---c---A--c.
+cCCCcccccccK.
+OOO.h.A..A.h.
+.............
+.............
+''',
+  # 6
+  '''
+.............
+....BCCCCCCB.
+....Dkk---kD.
+LLL.DkkkkkkD.
+c...ckkkkkkD.
+c...ckkkkkkD.
+i...ckkkkkkD.
+c...ckkkkkkD.
+c...ckkkkkkD.
+LLL.DkkkkkkD.
+....BDDDDDDB.
+.............
+.............
+''',
+  # 7
+  '''
+.............
+....BGGBBGGB.
+....G------G.
+PPP.G--ppp-G.
+c...cd-----G.
+c...c-----oB.
+i...cd--p--G.
+c...c------G.
+c...cd-----G.
+OOO.G-----dG.
+....BGGBBGGB.
+.....S....S..
+.............
+''',
+  # 8
+  '''
+.............
+....BGGBBGGB.
+...UG------GR
+....x------x.
+LLLUG------GR
+c...c------B.
+i...c---g--GR
+c...c------x.
+LLL.G------GR
+....G------G.
+....BxGBBGxB.
+....THT..THT.
+.............
+''',
+  # 9
+  '''
+.............
+....BCCCCCCB.
+....D------D.
+....D------D.
+PPP.D------D.
+c...c--A---D.
+i...c------D.
+c...c------D.
+OOO.D---A--D.
+....D------D.
+....BCCCCCCB.
+.............
+.............
+''',
+  # 10
+  '''
+...N........Q
+...NGGGGGGGGQ
+...N.......iQ
+...N........Q
+...N........Q
+LLLL.CCCCCC.Q
+i...c.......Q
+LLLL........Q
+...N........Q
+...N........Q
+...NGGGBBGGGQ
+...N........Q
+.............
+''',
+  # 11
+  '''
+....L......L.
+....LGGGGGGL.
+....L......i.
+....L......L.
+....L......L.
+PPPPL......L.
+i...c......L.
+OOOOL......L.
+....L......L.
+....L......L.
+....LGGBBGGL.
+....L......L.
+.............
+''',
+  # 12
+  '''
+....N......Q.
+....NGGGGGGQ.
+....N......i.
+....N......Q.
+....N......Q.
+....N......Q.
+iLLLL......Q.
+....N......Q.
+....N......Q.
+....N......Q.
+....NGxBBxGQ.
+....N......Q.
+.............
+''',
+  # 13
+  '''
+.....L....L..
+.....LGGGGL..
+.....L....Li.
+.....L....L..
+.....L....L..
+.....L....L..
+iMMMML....L..
+.....L....L..
+.....L....L..
+.....L....L..
+.....LGBBGL..
+.....L....L..
+.............
+''',
+  # 14
+  '''
+.....N....Q..
+.....NGGGGQ..
+.....N....Qi.
+.....N....Q..
+.....N....Q..
+.....N....Q..
+s....N....Q..
+.....N....Q..
+.....N....Q..
+.....N....Q..
+.....NGBBGQ..
+.....N....Q..
+.............
+''',
+  # 15
+  '''
+......L..L...
+......LGGL...
+......L..L.i.
+......L..L...
+......L..L...
+......L..L...
+......L..L...
+......L..L...
+......L..L...
+......L..L...
+......LBBL...
+......L..L...
+.............
+''',
+  # 16
+  '''
+......N..Q...
+......NGGQ...
+......N..Q.i.
+......N..Q...
+......N..Q...
+......N..Q...
+......N..Q...
+......N..Q...
+......N..Q...
+......N..Q...
+......NBBQ...
+......N..Q...
+.............
+''',
+  # 17
+  '''
+.......LL....
+.......LL....
+.......LL..i.
+.......LL....
+.......LL....
+.......LL....
+.......LL....
+.......LL....
+.......LL....
+.......LL....
+.......LL....
+.......LL....
+.............
+''',
+  # 18
+  '''
+.......NQ....
+.......NQ....
+.......NQ..i.
+.......NQ....
+.......NQ....
+.......NQ....
+.......NQ....
+.......NQ....
+.......NQ....
+.......NQ....
+.......NQ....
+.......NQ....
+.............
+''',
+  # 19
+  '''
+.............
+.............
+...........i.
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+''',
+  # 20
+  '''
+.............
+.............
+...........s.
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+.............
+''',
+]

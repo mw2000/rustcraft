@@ -1,0 +1,64 @@
+# A round corral of adobe topped with a fence, a trough and straw inside. Written by .claude/skills/structures/village_adobe.py.
+name = "adobe_pen"
+
+[piece]
+role = "pen"
+styles = ["adobe"]
+
+[template]
+size = [9, 4, 9]
+floor = 1
+foundation = "sandstone"
+palette = { a = "adobe*24|sandstone|terracotta", b = "barrel[facing=up]", c = "thatch", h = "path*5|sand*2|gravel", i = "thatch|air", l = "lantern", n = "planks_fence/dark_planks_fence", p = "path*3|sand", r = "barrel[facing=up]|air", s = "sandstone_slab", t = "path*3|sand|grass", w = "water" }
+markers = { animal = [[3, 1, 2], [4, 1, 3], [5, 1, 4], [6, 1, 3]], entrance = [[4, 1, 8]], work = [[3, 1, 7]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+hhhhhhhhh
+hhttttthh
+httttttth
+httttttth
+httttttth
+hhttttthh
+hhhhhhhhh
+ppppppppp
+ppppppppp
+''',
+  # 1
+  '''
+.aaaaaaa.
+aa.....aa
+a....ic.a
+a.ww....a
+a.ss....a
+aa.....aa
+.aaaaaaa.
+.........
+b.......r
+''',
+  # 2
+  '''
+.nnnnnnn.
+nn.....nn
+n.......n
+n.......n
+n.......n
+nn.....nn
+.nnnnnnn.
+.........
+.........
+''',
+  # 3
+  '''
+....l....
+.........
+.........
+l.......l
+.........
+.........
+....l....
+.........
+.........
+''',
+]

@@ -1,0 +1,30 @@
+# Villages (§5.6, M3.4): where they stand, and the styles they're built in by biome. A village
+# is laid out from the seed round a well, with streets running out from it and its pieces, the
+# templates in `village/`, placed along them facing the street (`structures::village`).
+name = "village"
+
+[placement]
+cell = 1024
+chance = 0.85
+biomes = ["base", "forest", "foothills", "savanna", "taiga", "desert"]
+min_above_sea = 2
+# the most the ground may rise and fall across the village, sampled every 12 blocks
+max_rise = 20
+hilltop = false
+
+# Each style's pieces name it in their `styles`, and its streets are trodden of `path`, a palette
+# choice made afresh for each block.
+[[styles]]
+name = "timber"
+biomes = ["base", "forest", "foothills"]
+path = "path*6|gravel"
+
+[[styles]]
+name = "adobe"
+biomes = ["desert", "savanna"]
+path = "path*5|sandstone"
+
+[[styles]]
+name = "lodge"
+biomes = ["taiga"]
+path = "path*4|gravel*2|cobblestone"

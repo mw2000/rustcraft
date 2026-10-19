@@ -101,7 +101,8 @@ impl PartialEq for Template {
 /// the whole of it (`a/b`, a variant). Every choice made for the whole structure draws the same
 /// number, so keys whose choices have the same weights in the same order choose alike, as a
 /// roof's stairs and slabs both of dark planks or both of planks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
 pub struct Choice {
     options: Vec<(Block, u32)>,
     whole: bool,
@@ -116,7 +117,7 @@ impl Choice {
     }
 
     // The block chosen in a structure of seed `seed` for its cell `at`, as written unturned.
-    fn pick(&self, seed: u64, at: I64Vec3) -> Block {
+    pub(super) fn pick(&self, seed: u64, at: I64Vec3) -> Block {
         let [(block, _)] = self.options[..] else {
             let total: u32 = self.options.iter().map(|&(_, weight)| weight).sum();
             let draw = if self.whole {
@@ -165,6 +166,14 @@ impl std::str::FromStr for Choice {
             })
             .collect::<Result<_, String>>()?;
         Ok(Self { options, whole })
+    }
+}
+
+impl TryFrom<String> for Choice {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        text.parse()
     }
 }
 

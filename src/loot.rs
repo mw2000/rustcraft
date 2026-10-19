@@ -182,6 +182,23 @@ pub const TABLES: &[LootTable] = &[
             entry(BrightSteelAxe, 1..=1, 1),
         ],
     },
+    // a village's houses, inn and smithy (M3.4), kept in food and a little metal, which is
+    // worth taking only once, as the chests aren't filled again
+    LootTable {
+        name: "village",
+        rolls: 2..=5,
+        entries: &[
+            entry(Bread, 1..=4, 10),
+            entry(Wheat, 2..=8, 8),
+            entry(Apple, 1..=4, 6),
+            entry(Seeds, 2..=8, 5),
+            entry(block(BlockType::Torch), 2..=6, 5),
+            entry(Coal, 2..=5, 4),
+            entry(Wool, 1..=3, 3),
+            entry(IronIngot, 1..=2, 2),
+            entry(Shears, 1..=1, 1),
+        ],
+    },
 ];
 
 impl LootTable {
@@ -220,7 +237,7 @@ pub fn generated_table(regions: &RegionStore, at: I64Vec3) -> Option<&'static Lo
     let placed = structures
         .iter()
         .find(|placed| placed.markers().any(|marker| marker == (LOOT, at)))?;
-    LootTable::named(&placed.structure().name)
+    LootTable::named(placed.loot_table())
 }
 
 /// Where the chest is in seed 3's watchtower nearest its spawn, for tests.
@@ -231,7 +248,7 @@ pub(crate) fn watchtower_chest(regions: &RegionStore) -> I64Vec3 {
     let structures = regions.structures_near(spawn - 4096, spawn + 4096);
     let tower = structures
         .iter()
-        .filter(|placed| placed.structure().name == "watchtower")
+        .filter(|placed| placed.name() == "watchtower")
         .min_by_key(|placed| (placed.min.xz() - spawn).length_squared())
         .expect("seed 3 has a watchtower near its spawn");
     let mut chests = tower.markers().filter(|&(kind, _)| kind == LOOT);
@@ -252,6 +269,7 @@ mod tests {
     use crate::chunks::generate::generator::generate_chunk;
     use crate::chunks::generate::noise::NoiseGenerator;
     use crate::chunks::generate::region_store::RegionStore;
+    use crate::chunks::generate::structures::village::VILLAGES;
     use crate::chunks::generate::structures::{LOOT, STRUCTURES};
     use crate::containers::Container;
 
@@ -277,10 +295,10 @@ mod tests {
                 assert!(*entry.count.end() <= item.max_stack(), "{item:?}");
             }
         }
-        // each one a structure's, so none is left unrolled
+        // each one a structure's, or villages', so none is left unrolled
         for table in TABLES {
             assert!(
-                STRUCTURES.iter().any(|s| s.name == table.name),
+                STRUCTURES.iter().any(|s| s.name == table.name) || table.name == VILLAGES.name,
                 "{} is no structure's",
                 table.name
             );
@@ -312,6 +330,7 @@ mod tests {
 
     #[test]
     fn test_every_structure_with_chests_has_a_table() {
+        assert!(LootTable::named(&VILLAGES.name).is_some());
         for structure in STRUCTURES.iter() {
             let markers = &structure.template.markers;
             if markers.iter().any(|(kind, _)| kind == LOOT) {

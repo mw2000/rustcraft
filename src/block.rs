@@ -243,6 +243,8 @@ const COBBLESTONE: Material = material(Tile::Cobblestone, 7.5, Pickaxe, 1);
 const STONE_BRICKS: Material = material(Tile::StoneBricks, 7.5, Pickaxe, 1);
 const BRICKS: Material = material(Tile::Bricks, 7.5, Pickaxe, 1);
 const TERRACOTTA: Material = material(Tile::Terracotta, 6.0, Pickaxe, 1);
+const ADOBE: Material = material(Tile::Adobe, 4.0, Pickaxe, 0);
+const THATCH: Material = material(Tile::Thatch, 1.0, Shears, 0);
 const SANDSTONE: Material = Material {
     top: Tile::SandstoneTop,
     bottom: Tile::SandstoneTop,
@@ -809,6 +811,22 @@ blocks! {
         hardness: 10.0, tool: Some(Pickaxe), tier: 1,
         top: Tile::Spawner, side: Tile::Spawner, bottom: Tile::Spawner, lod: Tile::Spawner,
     },
+    // Villages' blocks (M3.4). A path is earth trodden hard, which villages lay their streets
+    // of and which breaks back into dirt; plaster whitewashes timber-framed walls; adobe is mud
+    // brick, for hot dry country; and thatch roofs cottages with straw, quickest cut with shears.
+    Path {
+        name: "path", solid: true, light_opacity: MAX_LIGHT, occlusion_weight: 1.0, emits: 0,
+        style: RenderStyle::Cube, replaceable: false, drops: Drops::Block(BlockType::Dirt),
+        hardness: 0.75, tool: Some(Shovel), tier: 0,
+        top: Tile::PathTop, side: Tile::Dirt, bottom: Tile::Dirt, lod: Tile::PathTop,
+    },
+    Plaster { ..cube("plaster", Tile::Plaster, material(Tile::Plaster, 3.0, Pickaxe, 0)) },
+    Adobe { ..cube("adobe", Tile::Adobe, ADOBE) },
+    Thatch { ..cube("thatch", Tile::Thatch, THATCH) },
+    ThatchStairs { ..stairs("thatch_stairs", THATCH) },
+    ThatchSlab { ..slab("thatch_slab", THATCH) },
+    AdobeStairs { ..stairs("adobe_stairs", ADOBE) },
+    AdobeSlab { ..slab("adobe_slab", ADOBE) },
 }
 
 impl BlockType {
@@ -1127,9 +1145,13 @@ pub enum Tile {
     ShortGrass,
     WildGrass,
     Spawner,
+    PathTop,
+    Plaster,
+    Adobe,
+    Thatch,
 }
 
-pub const TILE_COUNT: usize = 85;
+pub const TILE_COUNT: usize = 89;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -1184,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Spawner as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Thatch as usize + 1);
     }
 
     #[test]

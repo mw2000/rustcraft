@@ -2717,7 +2717,8 @@ fn structures_near_spawn(
     let (x, z, _) = regions.noise().find_spawn();
     let spawn = I64Vec2::new(x, z);
     let mut found = regions.structures_near(spawn - 3000, spawn + 3000);
-    found.retain(|p| !p.is_underground());
+    // villages' paths have tests of their own
+    found.retain(|p| !p.is_underground() && p.template().is_some());
     found.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
     found.truncate(count);
     assert_eq!(count, found.len());
@@ -2744,7 +2745,7 @@ fn test_structures_stand_on_their_foundations_cleared_inside_with_no_trees_or_pl
     let regions = world.regions.clone();
     let mut filled = 0;
     for placed in structures_near_spawn(&regions, 6) {
-        let template = &placed.structure().template;
+        let template = placed.template().unwrap();
         let corner = placed.min - I64Vec3::Y * template.floor;
         let footprint = placed.footprint();
         let top = placed.bounds().1.y;
@@ -2827,9 +2828,16 @@ fn test_structures_are_the_same_whichever_order_chunks_come_in() {
 fn test_lods_draw_structures_as_full_detail_has_them() {
     use super::lod::STRUCTURE_MAX_CELL;
     use super::terrain::is_solid;
+    use crate::chunks::generate::structures::Placed;
     let mut world = Generated::new(3);
     let regions = world.regions.clone();
-    for placed in structures_near_spawn(&regions, 4) {
+    // tall enough to have cells over the ground, which a village's lamps aren't
+    let tall = |p: &Placed| p.template().is_some_and(|t| t.size.y - t.floor >= 8);
+    for placed in structures_near_spawn(&regions, 12)
+        .into_iter()
+        .filter(tall)
+        .take(4)
+    {
         let (low, high) = placed.bounds();
         // level 0 is full detail itself, caves aside, and they keep under structures
         for coord in chunks_over(low, high) {
@@ -2892,9 +2900,15 @@ fn test_lods_draw_structures_as_full_detail_has_them() {
                 }
             }
         }
-        assert!(solid_cells > 20, "only {solid_cells} solid cells");
+        // a village's pieces are smaller than the structures standing alone
+        let least = if placed.loot_table() == placed.name() {
+            20
+        } else {
+            0
+        };
+        assert!(solid_cells > least, "only {solid_cells} solid cells");
         // and from cells four wide, as boxes as tall and as wide as it is
-        let template = &placed.structure().template;
+        let template = placed.template().unwrap();
         let corner = placed.min - I64Vec3::Y * template.floor;
         let tallest = (0..template.size.y)
             .filter(|&y| {
@@ -3437,8 +3451,8 @@ fn test_structures_underground_are_built_into_the_rock_meeting_caves_and_left_ou
     under.sort_by_key(|p| (p.min.xz() - spawn).length_squared());
     let mut caves_met = 0;
     for name in ["mineshaft", "dungeon"] {
-        for placed in under.iter().filter(|p| p.structure().name == name).take(3) {
-            let template = &placed.structure().template;
+        for placed in under.iter().filter(|p| p.name() == name).take(3) {
+            let template = placed.template().unwrap();
             let (low, high) = placed.bounds();
             let size = high - low;
             let mut open = 0;
@@ -3489,4 +3503,43 @@ fn test_structures_underground_are_built_into_the_rock_meeting_caves_and_left_ou
     }
     // where caves cross them, they meet
     assert!(caves_met > 0);
+}
+
+#[test]
+fn test_a_villages_streets_are_trodden_into_the_ground_the_same_at_full_detail_and_level_0() {
+    use bevy::math::{I64Vec2, Vec3Swizzles};
+    let mut world = Generated::new(3);
+    let regions = world.regions.clone();
+    let (x, z, _) = regions.noise().find_spawn();
+    let spawn = I64Vec2::new(x, z);
+    let mut villages = regions.villages_near(spawn - 2000, spawn + 2000);
+    villages.sort_by_key(|v| (v.well().min.xz() - spawn).length_squared());
+    let village = villages.first().expect("a village near seed 3's spawn");
+    let mut columns = 0;
+    for placed in village.paths.iter().take(12) {
+        let path = placed.path().unwrap();
+        let footprint = placed.footprint();
+        for dx in 0..footprint.x {
+            for dz in 0..footprint.y {
+                let column = placed.min.xz() + I64Vec2::new(dx, dz);
+                let at = column.extend(path.top(placed.min, column)).xzy();
+                // its surface trodden earth, or a stone in it, with nothing growing over it
+                let surface = world.block(at - I64Vec3::Y);
+                assert!(
+                    matches!(surface, BlockType::Path | BlockType::Gravel),
+                    "{surface:?} at {at}"
+                );
+                assert_eq!(BlockType::Air, world.block(at), "{at}");
+                assert_eq!(BlockType::Air, world.block(at + I64Vec3::Y), "{at}");
+                // and level 0 draws it as full detail has it
+                let under = at - I64Vec3::Y;
+                let coord = under.div_euclid(I64Vec3::splat(16));
+                let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord }, None);
+                let cell = under.rem_euclid(I64Vec3::splat(16)).as_ivec3();
+                assert_eq!(surface, lod.raw(cell), "{at}");
+                columns += 1;
+            }
+        }
+    }
+    assert!(columns > 100, "{columns}");
 }

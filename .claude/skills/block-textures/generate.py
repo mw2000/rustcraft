@@ -100,6 +100,10 @@ TILES = [
     dict(name="ShortGrass", drawn=True, grey=187),  # greyscale, tinted per climate like TallGrass
     dict(name="WildGrass", drawn=True, grey=187),
     dict(name="Spawner", drawn=True),
+    dict(name="PathTop", drawn=True),
+    dict(name="Plaster", drawn=True),
+    dict(name="Adobe", drawn=True),
+    dict(name="Thatch", drawn=True),
 ]
 
 

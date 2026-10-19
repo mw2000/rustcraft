@@ -1,0 +1,236 @@
+# The adobe village's watchtower, a bell under a little pyramid over its lookout. Written by .claude/skills/structures/village_adobe.py.
+name = "adobe_tower"
+
+[piece]
+role = "tower"
+styles = ["adobe"]
+
+[template]
+size = [7, 22, 7]
+floor = 1
+foundation = "sandstone"
+palette = { a = "adobe", b = "barrel[facing=up]", c = "log[axis=x]", d = "adobe*24|sandstone|terracotta", e = "ladder[facing=south]", f = "sandstone_slab", g = "glass_pane", h = "sandstone_stairs[facing=north,half=top]", i = "sandstone_stairs[facing=east]", j = "sandstone_stairs[facing=north]", k = "sandstone_stairs[facing=south]", l = "gold_block", m = "sandstone_stairs[facing=west]", n = "lantern", o = "door[facing=south,half=top,hinge=left]", p = "path*5|sand*2|gravel", q = "terracotta*4|sandstone", r = "door[facing=south,hinge=left]", s = "sandstone", t = "lantern[hanging=true]", w = "sandstone_wall", y = "red_terracotta/yellow_terracotta/blue_terracotta" }
+markers = { entrance = [[3, 1, 6]], work = [[4, 1, 2]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+psssssp
+psqqqsp
+psqqqsp
+psqqqsp
+psssssp
+ppppppp
+ppppppp
+''',
+  # 1
+  '''
+isssssm
+is.e.sm
+is...sm
+isb..sm
+issrssm
+jjj.jjj
+.......
+''',
+  # 2
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.d...d.
+.ddodd.
+.......
+.......
+''',
+  # 3
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.d...d.
+.ddddd.
+....t..
+.......
+''',
+  # 4
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.dt..d.
+.ddddd.
+....h..
+.......
+''',
+  # 5
+  '''
+.ddgdd.
+.d.e.d.
+.g...g.
+.dcccd.
+.ddddd.
+.......
+.......
+''',
+  # 6
+  '''
+.yyyyy.
+.y.e.y.
+.y...y.
+.y...y.
+.yyyyy.
+.......
+.......
+''',
+  # 7
+  '''
+.ddddd.
+cd.e.dc
+.d...d.
+cd...dc
+.ddddd.
+.......
+.......
+''',
+  # 8
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.d...d.
+.ddgdd.
+.......
+.......
+''',
+  # 9
+  '''
+.ddgdd.
+.d.e.d.
+.g...g.
+.d...d.
+.ddddd.
+.......
+.......
+''',
+  # 10
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.dt..d.
+.ddddd.
+.......
+.......
+''',
+  # 11
+  '''
+.yyyyy.
+.y.e.y.
+.y...y.
+.ycccy.
+.yyyyy.
+.......
+.......
+''',
+  # 12
+  '''
+.ddddd.
+cd.e.dc
+.d...d.
+cd...dc
+.ddddd.
+.......
+.......
+''',
+  # 13
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.d...d.
+.ddddd.
+.......
+.......
+''',
+  # 14
+  '''
+.ddddd.
+.d.e.d.
+.d...d.
+.d...d.
+.ddddd.
+.......
+.......
+''',
+  # 15
+  '''
+.aaaaa.
+.aaaaa.
+.aaaaa.
+.aaaaa.
+.aaaaa.
+.......
+.......
+''',
+  # 16
+  '''
+.ddddd.
+.dw-wd.
+.d---d.
+.dw-wd.
+.ddddd.
+.......
+.......
+''',
+  # 17
+  '''
+.dfffd.
+.fw-wf.
+.f---f.
+.fn-wf.
+.dfffd.
+.......
+.......
+''',
+  # 18
+  '''
+.f...f.
+..w.w..
+...l...
+..w.w..
+.f...f.
+.......
+.......
+''',
+  # 19
+  '''
+.kkkkk.
+.i...m.
+.icccm.
+.i...m.
+.jjjjj.
+.......
+.......
+''',
+  # 20
+  '''
+.......
+..kkk..
+..i.m..
+..jjj..
+.......
+.......
+.......
+''',
+  # 21
+  '''
+.......
+.......
+...f...
+.......
+.......
+.......
+.......
+''',
+]

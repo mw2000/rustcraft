@@ -1,0 +1,254 @@
+# A lodge for two, its steep roof hung out over a porch on log posts. Written by .claude/skills/structures/village_lodge.py.
+name = "lodge_house"
+
+[piece]
+role = "house"
+styles = ["lodge"]
+
+[template]
+size = [9, 17, 11]
+floor = 1
+foundation = "stone_bricks"
+palette = { A = "short_grass*4|tall_grass*2|poppy|dandelion|air*6", B = "snow/air", C = "stone_brick_slab", D = "stone_bricks*3|cobblestone*3|mossy_cobblestone|mossy_stone_bricks|cracked_stone_bricks", a = "dark_planks*2/planks", b = "barrel[facing=up]", c = "crafting_table", d = "dark_planks", e = "bed", f = "door[facing=south,hinge=left]", g = "glass_pane", h = "grass", i = "dark_planks_stairs[facing=west]*14|snow", j = "lantern[hanging=true]", k = "dark_planks_slab", l = "dark_planks_stairs[facing=east]", m = "log", n = "dark_planks_stairs[facing=east]*14|snow", o = "door[facing=south,half=top,hinge=left]", p = "dark_planks_slab[half=top]", q = "log[axis=x]", r = "dark_planks_fence", s = "dark_planks_stairs[facing=south,half=top]", t = "dark_planks_stairs[facing=west]", u = "furnace[facing=west]", v = "log[axis=z]", w = "log[axis=z]*3|air", x = "path", y = "planks", z = "planks_stairs[facing=north]" }
+markers = { bed = [[3, 2, 2], [3, 2, 4]], entrance = [[4, 1, 10]], loot = [[6, 2, 2]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+hhhhhhhhh
+hDDDDDDDh
+hDDDDDDDh
+hDDDDDDDD
+hDDDDDDDD
+hDDDDDDDD
+hDDDDDDDh
+hDDDDDDDh
+hhhhhhhhh
+hhhhhhhhh
+hhhhxhhhh
+''',
+  # 1
+  '''
+AAAAAAAAA
+.DDDDDDDA
+vDyyyyyDA
+vDyyyyyDD
+vDyyyyyDD
+vDyyyyyDD
+vDyyyyyDA
+.DDDDDDDA
+.yyyyyyyA
+.yyyzyyyA
+AAAA.AAAA
+''',
+  # 2
+  '''
+.........
+.DDDDDDD.
+vDe----D.
+vD-----DD
+vDe---uDD
+vD-trl-DD
+vDc---bD.
+.DDDfDDD.
+.........
+.mrr.rrm.
+.........
+''',
+  # 3
+  '''
+....j....
+.maamaam.
+wa-----g.
+wg-----aD
+wm-----DD
+wa--p--aD
+wg-----g.
+.mgaoagm.
+.........
+.m.....m.
+.........
+''',
+  # 4
+  '''
+....s....
+.maamaam.
+.a-----v.
+.v-----aD
+.m-----DD
+.a-----aD
+.v-----v.
+.mqamaqm.
+.........
+.m.....m.
+.........
+''',
+  # 5
+  '''
+.........
+.maamaam.
+.a-----a.
+.a-----aD
+.m--j--DD
+.a-----aD
+.a-----a.
+.maamaam.
+..j...j..
+.m.....m.
+.........
+''',
+  # 6
+  '''
+n.......i
+naaamaaai
+nv-----vi
+nv-----vC
+nvqqqqqDD
+nv-----vC
+nv-----vi
+naaaaaaai
+n.......i
+nqqqqqqqi
+.........
+''',
+  # 7
+  '''
+.d.....d.
+.daamaad.
+.d.....d.
+.d.....d.
+.d.....dD
+.d.....d.
+.d.....d.
+.daaaaad.
+.d.....d.
+.daamaad.
+.........
+''',
+  # 8
+  '''
+.n.....i.
+.naamaai.
+.n.....i.
+.n.....i.
+.n.....iD
+.n.....i.
+.n.....i.
+.naagaai.
+.n.....i.
+.naamaai.
+.........
+''',
+  # 9
+  '''
+..d...d..
+..damad..
+..d...d..
+..d...d..
+..d...d.D
+..d...d..
+..d...d..
+..damad..
+..d...d..
+..damad..
+.........
+''',
+  # 10
+  '''
+..n...i..
+..namai..
+..n...i..
+..n...i..
+..n...i.D
+..n...i..
+..n...i..
+..namai..
+..n...i..
+..namai..
+.........
+''',
+  # 11
+  '''
+...d.d...
+...dmd...
+...d.d...
+...d.d...
+...d.d..D
+...d.d...
+...d.d...
+...dmd...
+...d.d...
+...dmd...
+.........
+''',
+  # 12
+  '''
+...n.i...
+...nmi...
+...n.i...
+...n.i...
+...n.i..D
+...n.i...
+...n.i...
+...nmi...
+...n.i...
+...nmi...
+.........
+''',
+  # 13
+  '''
+....d....
+....d....
+....d....
+....d....
+....d...D
+....d....
+....d....
+....d....
+....d....
+...rdr...
+.........
+''',
+  # 14
+  '''
+....k....
+....k....
+....k....
+....k....
+....k...D
+....k....
+....k....
+....k....
+....k....
+...rkr...
+.........
+''',
+  # 15
+  '''
+....B....
+....B....
+....B....
+....B....
+....B...D
+....B....
+....B....
+....B....
+....B....
+....B....
+.........
+''',
+  # 16
+  '''
+.........
+.........
+.........
+.........
+........C
+.........
+.........
+.........
+.........
+.........
+.........
+''',
+]

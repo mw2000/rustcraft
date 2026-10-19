@@ -129,7 +129,8 @@ structure.
 A shape that's easier to describe than to build, or one drawn from a seed, can be written by a
 script here, so a change is a small diff. Every built-in structure is: `watchtower.py`,
 `desert_temple.py`, `jungle_temple.py`, `forest_ruin.py`, `glacier_outpost.py`, `mineshaft.py`
-and `dungeon.py` each write their file in `assets/structures/`; edit one and rerun it.
+and `dungeon.py` each write their file in `assets/structures/`, and the `village_*.py` scripts
+the village pieces (below); edit one and rerun it.
 
 ```
 cd .claude/skills/structures && python3 desert_temple.py
@@ -148,6 +149,72 @@ and cut away at the layers given, coloured by the atlas (Pillow and NumPy):
 ```
 python3 .claude/skills/structures/preview.py assets/structures/desert_temple.toml /tmp/t.png 1 3,9
 ```
+
+## Village pieces
+
+Villages (M3.4) aren't placed as one template: they're assembled from **pieces** laid along
+their streets, one TOML file each in `assets/structures/village/`, written by
+`village_timber.py`, `village_adobe.py`, `village_lodge.py` and `village_common.py` (the farm
+and pen the timber and lodge villages share) on the helpers in `village.py` (timber frames,
+windows with shutters and flower boxes, steep and merged roofs, spires, chimneys, lamps on
+brackets). A piece is a structure file with a `[piece]` table in place of `[placement]`, which
+`Build.write_piece` writes (trimming the height to what's built):
+
+```toml
+name = "timber_cottage"
+
+[piece]
+role = "house"          # house, hall, smithy, farm, pen, tower, well or lamp
+styles = ["timber"]     # the village styles that build it: timber, adobe, lodge
+
+[template]              # as any structure's
+```
+
+The village layout codes against this contract, so every piece keeps it:
+
+- **Front to the south** (+z, the last row of every layer); the layout turns each piece to face
+  its street, which lies beyond that edge. The well may be turned any way.
+- **Layer `floor - 1` is the ground's surface**, every cell of it given (floors, plinths, path,
+  `grass` in timber and lodge gardens, `path` and sand in adobe yards), so no raw ground shows
+  where the footprint was cut or filled; layer `floor` is the first air over it. Most pieces
+  have `floor = 1`; the timber and lodge wells sink their shafts with `floor = 3`.
+- **The last row is an apron**, walkable and level with the street at layer `floor - 1`, at
+  least at the entrance, so the street's spur meets it.
+- **Markers** by kind:
+  - `entrance`: exactly one (none for a lamp), in the apron row at layer `floor`, solid under it
+    and two of air over it, just outside the way in. From it a villager (one wide, two tall,
+    stepping up a block at a time, down at most three, not climbing ladders, opening doors) can
+    walk to every `bed` and `work` marker.
+  - `bed`: houses, one a resident (small 1, medium 2, large 3): the floor cell beside a `bed`.
+  - `work`: every other role, 1–3, where the worker stands: by the forge and anvil, among the
+    wheat, behind the counter or by the tables, outside the pen's fence, at the tower's foot.
+  - `gather`: the well only, 4–8 spots round it where villagers meet by day.
+  - `animal`: the pen only, 2–4 cells inside it.
+  - `loot`: chests, rolling the `village` table, on a solid floor with room over them, inside
+    the border.
+- **Doors** one wide and two high, `door[facing=...]` facing out of the room with its
+  `half=top` over it; steps up to them a block at a time.
+- **Light:** every room has a lantern, and every cell a monster could stand on at the ground
+  is in reach of one (13 blocks), yards and backs included, as nothing spawns where block
+  light reaches. Roofs are left dark.
+- **Pens hold:** the pathfinder takes a fence as a block high, so a pen's barrier is two high
+  (a kerb or wall with a fence on it), with nothing a block high beside it inside or out (a
+  bale, a slab, a barrel), which would be a step up onto it.
+- **Sizes**, x by z with the apron: lamps 1×1 to 3×1 and at most 6 tall, wells 7×7 to 9×9 with
+  a walkable paved border all round (streets leave from the middle of each side), small houses
+  about 7×8, medium 9×10, large 11×12, halls 13×13, smithies 10×10, farms 13×11, pens 9×9,
+  towers 7×7 and 20–25 tall.
+- **Variety:** per-cell choices for weathering (moss, cracks, patched adobe, snow on a roof,
+  barrels and flowers or not) and whole choices for variants (thatch or dark plank roofs,
+  plaster or light plank walls, the terracotta band's colour, a snowy ridge or none). Every
+  whole choice draws the same number modulo its total, so give choices that should vary apart
+  different totals (2, 3, 5): `thatch/dark_planks` and `plaster*2/light_planks` vary apart,
+  where two choices of two would always agree. `preview.py` draws them as the game does.
+
+To check a piece, preview it (it draws a piece with its ground layer and its markers as dots
+in the cutaways: entrance red, bed blue, work orange, gather purple, animal pink) and walk its
+markers: a checker that loads each file, checks names, states and markers, walks from the
+entrance and lights the cells as the game does catches most mistakes before the game does.
 
 ## Checking
 

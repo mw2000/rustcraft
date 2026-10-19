@@ -1,0 +1,39 @@
+# A lamp post of the lodge village, a lantern hung from a log post's arm. Written by .claude/skills/structures/village_lodge.py.
+name = "lodge_lamp"
+
+[piece]
+role = "lamp"
+styles = ["lodge"]
+
+[template]
+size = [2, 6, 1]
+floor = 1
+foundation = "stone_bricks"
+palette = { a = "dark_planks_stairs[facing=east]", c = "cobblestone_wall", d = "dark_planks_fence", l = "lantern[hanging=true]", o = "log", p = "path", r = "dark_planks_stairs[facing=west]" }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+pp
+''',
+  # 1
+  '''
+c.
+''',
+  # 2
+  '''
+o.
+''',
+  # 3
+  '''
+ol
+''',
+  # 4
+  '''
+od
+''',
+  # 5
+  '''
+ar
+''',
+]

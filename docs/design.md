@@ -64,7 +64,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Biomes | Climate-driven desert, savanna, jungle, forest, taiga, glacier, and foothills round the mountains; grass and leaves tinted by climate and biome (§5.7) | `src/chunks/generate/biome/` |
 | Trees | Broadleaf, pine, jungle giants and acacias, by biome, placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Plants | Short, tall and wild grass, ferns and flowers on the grass, by climate, biome and the shade of crowns, drawn as crossed quads at full detail that sway in the wind (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
-| Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); seven so far, from watchtowers on hilltops to temples, ruins, lodges and mineshafts and dungeons underground | `src/chunks/generate/structures/`, `assets/structures/` |
+| Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); seven so far, from watchtowers on hilltops to temples, ruins, lodges and mineshafts and dungeons underground, and villages assembled from pieces along streets in three styles | `src/chunks/generate/structures/`, `assets/structures/` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the faces between leaves drawn only near the camera (§5.7); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
@@ -1859,6 +1859,74 @@ landmarks visible from far away (P1).
   - **Determinism:** the golden checksum changed, as the structure nearest seed 3's spawn is
     the reworked watchtower, and it now samples the nearest structure underground too.
 
+- **Built (M3.4): villages** (`src/chunks/generate/structures/village.rs`, `assets/structures/village.toml`, `assets/structures/village/`).
+  - **Placement:** `village.toml` gives villages a placement as a type's (a cell 1024 square,
+    chance 0.85) and three styles, each with the biomes it's built in and its streets' block:
+    *timber* in the base grassland, forest and foothills, *adobe* in desert and savanna, *lodge*
+    in taiga. A cell's spot stands if its biome has a style, landmarks keep clear, the ground
+    sampled every 12 blocks across the 112 square round it rises no more than 20 and is no more
+    than a quarter under water, its middle over the sea, and no surface structure of a type (all
+    listed before villages) is within its square and clearing, so villages give way to every
+    type and it stays local (INV-3). Round seeds 3, 42 and 7, 23, 16 and 7 villages in 144 km²
+    (timber and adobe there; lodges are 12 km off in the taiga), the nearest seed 3's 316 blocks
+    from its spawn: a couple every 10–20 km², a find, not a carpet.
+  - **Layout,** from the cell's hash alone (`lay_out`, a `Draws` sequence): a well of the style at
+    the spot, levelled for itself; streets three wide out from the middle of each of its sides,
+    the main way's two 24–44 long and those across it 12–30 or none, and a branch off a main one
+    now and then; each street walked a block at a time, its surface within a block of the last
+    (so it follows the ground a step at a time), stopping at water, where it would be cut or
+    raised more than 2, at what's taken, or 56 from the middle. Then pieces in turn, nearest the
+    well first: the hall, a house, the smithy, a house, the farm, the tower, a house, the pen,
+    the rest of 4–8 houses and sometimes a second farm, each at the free spot along any street's
+    side nearest the middle, turned to face the street, set back 1–2 with a short way from the
+    street to its entrance stepping evenly between the two heights, a gap of a block round it,
+    on ground rising no more than 5 (3 for the well) and levelled at its middle height; a piece
+    is tried at 16 spots before it's left out. Last, lamp posts every 9 blocks along the streets,
+    on either side. Fewer than 4 buildings and there's no village.
+  - **Pieces** are templates of a role (house, hall, smithy, farm, pen, tower, well, lamp) and
+    the styles they're built in, front to the south with an `entrance` marker on their front
+    row, and `bed`, `work`, `gather` and `animal` markers for villagers and the pen's animals
+    (the `structures` skill has the contract). 29 of them, each style with three or four houses
+    from a cottage with one bed to a house with three, a hall, a smithy, a tower, a well and a lamp, and a
+    farm and a pen (shared by timber and lodge, adobe's own): timber-framed plaster and stone
+    cottages under thatch or dark planks, an inn with a stone taproom and a jettied floor, a bell
+    tower; adobe houses on sandstone plinths banded in terracotta with roof terraces, vigas,
+    awnings, a courtyard house and a domed hall, stepped towers, a palm-shaded fountain and a
+    corral; dark-timbered lodges on stone bases under steep snowy roofs, a mead hall with a
+    hearth of embers. Each lights its own rooms and yard, as the streets' lamps light them, so
+    monsters, which need darkness, rarely come out inside a village; a test checks nine in ten
+    street blocks are lit.
+  - **Building:** every piece and stretch of path is a `Placed`, its kind a type, a piece or a
+    path (`Path`: a rectangle along x or z, up to 16 rows, each a block up, down or level from the
+    last), so chunks, LOD nodes, trees' clearings and caves take them as any structure. A path's
+    surface is its style's block (`path*6|gravel` and so on, chosen afresh for each), earth under
+    it down to the ground where it's raised and air over it where it's cut in; paths aren't drawn
+    as boxes, being flat. `Placements` remembers villages by cell (4096 of them), and `near`
+    gives the pieces and paths overlapping what asks after the types'.
+  - **New blocks:** `path` (trodden earth, breaking to dirt), `plaster`, `adobe` with stairs and
+    a slab, and `thatch` with stairs and a slab, tiles drawn by `draw.py`; plaster from 3 sand and
+    a stone, adobe from 3 dirt and a wheat, thatch from 4 wheat, at a crafting table. Paths are
+    made by nothing yet. The `village` loot table fills the chests of houses, halls and smithies
+    with food and a little metal.
+  - **LODs:** pieces are drawn as structures are, by coverage near and as boxes far, so rooftops
+    and towers show from afar; a path's surface is level 0's exactly and level 1's by coverage.
+    The structure LOD tests now take village pieces too, and a test checks streets' surfaces at
+    full detail and level 0.
+  - **Tests:** pieces load whole (every role in every style, one entrance on the front with room
+    to walk in, the markers each role needs); layout the same whatever asks and in any order,
+    and other seeds' differ; villages in their style's biomes with every kind of piece across
+    them; pieces and paths never overlapping, each on ground levelled at its middle height;
+    every door joined to the well by paths a step at a time, and ways between every pair of
+    doors; streets trodden into chunks and agreeing with level 0.
+  - **Cost** (INV-7): laying out a village samples the ground a few thousand times, about 2 ms
+    once per village on the compute pool (the 144 km² round seed 3's spawn, 23 villages and the
+    cells ruled out, 43 ms on one thread); a chunk or node near one then asks for its pieces as it
+    asks for structures.
+  - **Determinism:** the golden checksum is unchanged, as none of its samples is in a village.
+  - **Later:** shovels treading paths, blending the cut and filled ground at a street's edges,
+    snow rather than grass in the lodges' yards in snowy taiga, villages growing, roads between
+    them, and lit windows.
+
 **Style guide for structures (M2.4b on).** Every structure is reviewed in screenshots from
 several angles, near and far, before it lands. It should have:
 - *A silhouette:* varied heights, roofs that overhang, towers, chimneys, never a flat-topped box.
@@ -2576,7 +2644,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
   (§5.8).
 - ☑ **M3.3 Hostile mobs and combat.** Four monsters of our own, spawners in dungeons, swords,
   armour and blows (§5.3, §5.5, §5.8).
-- ◐ **M3.4 Villages and villagers.**
+- ◐ **M3.4 Villages and villagers.** Villages built (§5.6); villagers and trading to come.
 - ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
 
 ### Upstream ports

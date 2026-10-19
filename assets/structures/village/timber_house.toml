@@ -1,0 +1,263 @@
+# A timber house for two, jettied over its garden, its gable to the street. Written by .claude/skills/structures/village_timber.py.
+name = "timber_house"
+
+[piece]
+role = "house"
+styles = ["timber"]
+
+[template]
+size = [9, 19, 10]
+floor = 1
+foundation = "cobblestone"
+palette = { A = "log[axis=z]", B = "path", C = "planks", D = "plaster*2/light_planks", E = "poppy*3|dandelion*3|cornflower*2|air*2", F = "short_grass*4|tall_grass*2|poppy|dandelion|air*6", G = "thatch/dark_planks", H = "thatch_slab/dark_planks_slab", I = "thatch_stairs[facing=east]/dark_planks_stairs[facing=east]", J = "thatch_stairs[facing=west]/dark_planks_stairs[facing=west]", K = "trapdoor[facing=east,open=true]*3|air", L = "trapdoor[facing=south,half=top]", M = "trapdoor[facing=south,open=true]*3|air", N = "trapdoor[facing=west,open=true]*3|air", a = "barrel[facing=up]|air", b = "barrel[facing=up]", c = "cobblestone*6|mossy_cobblestone*2|stone_bricks", d = "dark_planks", e = "bed", f = "crafting_table", g = "dark_planks_stairs[facing=south,half=top]", h = "dark_planks_stairs[facing=west]", i = "bricks*3/cobblestone*2", j = "door[facing=south,half=top,hinge=left]", k = "dark_planks_fence", l = "cobblestone_stairs[facing=north]", m = "door[facing=south,hinge=left]", n = "dark_planks_stairs[facing=east]", o = "bookshelf", p = "dark_planks_slab[half=top]", q = "glass_pane", r = "brick_slab/cobblestone_slab", s = "cobblestone_wall", t = "dark_planks_stairs[facing=north,half=top]", u = "furnace[facing=west]", v = "grass", w = "lantern", x = "lantern[hanging=true]", y = "log", z = "log[axis=x]" }
+markers = { bed = [[3, 6, 3], [3, 6, 6]], entrance = [[4, 1, 9]], loot = [[2, 2, 2]] }
+# bottom to top, each layer's rows running +z down the page and +x across
+layers = [
+  # 0
+  '''
+vvvvvvvvv
+vcccccccv
+vccccccci
+vccccccci
+vccccccci
+vcccccccv
+vcccccccv
+vvvvBvvvv
+vvvvBvvvv
+vvvvBvvvv
+''',
+  # 1
+  '''
+FFFFFFFFF
+FcccccccF
+FcCdCCCci
+FcCCCCCci
+FcCCCCCci
+FcCCCCCcF
+FcccccccF
+FFFFlFFFF
+FEEF.FEEF
+FFFF.kFFF
+''',
+  # 2
+  '''
+.........
+.yDDDDDy.
+.D-dddbDi
+.D----uii
+.yhkn--yi
+.D----fD.
+.yDDmDDy.
+.........
+.........
+.....w...
+''',
+  # 3
+  '''
+....x....
+.yDDDDDy.
+.D--nd-Di
+.q-----ii
+.y-p---yi
+.q-----D.
+.yqDjDqy.
+.M.M.M.M.
+.........
+.........
+''',
+  # 4
+  '''
+....g....
+.yDDDDDy.
+.D---n-Di
+.D--x--ii
+.y-----yi
+.D-----D.
+.yDDDDDy.
+.t.t.t.t.
+.........
+.........
+''',
+  # 5
+  '''
+.........
+.yzzzzzy.
+.Ad---dAr
+.Adddddii
+.AdddddAr
+.AdddddA.
+.AdddddA.
+.yAAAAAy.
+.........
+.........
+''',
+  # 6
+  '''
+.........
+.yDDyDDy.
+.D-----D.
+.De-kk-ii
+.y----oy.
+.D----aD.
+.De----D.
+.yDDyDDy.
+...L.L...
+.........
+''',
+  # 7
+  '''
+.........
+.yDDqDDy.
+ND-----D.
+.q-----ii
+Ny-----y.
+.D-----DK
+.D-----q.
+.yDqyqDyK
+..MEMEM..
+.........
+''',
+  # 8
+  '''
+.........
+.yzzzzzy.
+.A-----A.
+.A-----ii
+.A--x--A.
+.A-----A.
+.A-----A.
+.yzzzzzy.
+.........
+.........
+''',
+  # 9
+  '''
+I.......J
+IDDDyDDDJ
+I.......J
+I.......i
+IzzzzzzzJ
+I.......J
+I.......J
+IDDDyDDDJ
+I.......J
+.........
+''',
+  # 10
+  '''
+.G.....G.
+.GDDyDDG.
+.G.....G.
+.G.....Gi
+.G.....G.
+.G.....G.
+.G.....G.
+.GDDyDDG.
+.G.....G.
+.........
+''',
+  # 11
+  '''
+.I.....J.
+.IDDyDDJ.
+.I.....J.
+.I.....Ji
+.I.....J.
+.I.....J.
+.I.....J.
+.IDqyqDJ.
+.I.....J.
+.........
+''',
+  # 12
+  '''
+..G...G..
+..GDyDG..
+..G...G..
+..G...G.i
+..G...G..
+..G...G..
+..G...G..
+..GDyDG..
+..G...G..
+.........
+''',
+  # 13
+  '''
+..I...J..
+..IDyDJ..
+..I...J..
+..I...J.i
+..I...J..
+..I...J..
+..I...J..
+..IDyDJ..
+..I...J..
+.........
+''',
+  # 14
+  '''
+...G.G...
+...GyG...
+...G.G...
+...G.G..i
+...G.G...
+...G.G...
+...G.G...
+...GyG...
+...G.G...
+.........
+''',
+  # 15
+  '''
+...I.J...
+...IyJ...
+...I.J...
+...I.J..i
+...I.J...
+...I.J...
+...I.J...
+...IyJ...
+...I.J...
+.........
+''',
+  # 16
+  '''
+....G....
+....G....
+....G....
+....G...i
+....G....
+....G....
+....G....
+....G....
+....G....
+.........
+''',
+  # 17
+  '''
+....H....
+....H....
+....H....
+....H...i
+....H....
+....H....
+....H....
+....H....
+....H....
+.........
+''',
+  # 18
+  '''
+.........
+.........
+.........
+........s
+.........
+.........
+.........
+.........
+.........
+.........
+''',
+]
