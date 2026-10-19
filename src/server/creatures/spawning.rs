@@ -26,6 +26,7 @@ use crate::player::{Player, PlayerLook};
 use crate::protocol::BlockChanged;
 use crate::server::drops::Chance;
 use crate::server::sync::BlockChanges;
+use crate::weather::{is_dark_out, Weather};
 use crate::world::World;
 
 // How near a player, in blocks across, creatures appear: not so near they're seen popping up,
@@ -77,6 +78,7 @@ pub(in crate::server) fn spawn(
     time: Res<Time>,
     rate: Res<SpawnRate>,
     clock: Res<TimeOfDay>,
+    weather: Res<Weather>,
     world: Res<World>,
     players: Query<(&Transform, &PlayerLook), With<Player>>,
     creatures: Query<(&Creature, &Transform)>,
@@ -93,7 +95,8 @@ pub(in crate::server) fn spawn(
         return;
     }
     *since = 0.0;
-    let night = clock.is_night();
+    // dark under the sky, at night or in a storm's gloom at dusk and dawn
+    let night = is_dark_out(*clock, &weather);
     let rng = &mut chance.0;
     let count = |kind: CreatureKind, at: Vec3, within: f32| {
         creatures

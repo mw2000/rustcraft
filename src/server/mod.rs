@@ -54,7 +54,7 @@ use crate::player::name::PlayerName;
 use crate::player::Player;
 use crate::protocol::{ProtocolPlugin, POSE_INTERVAL};
 use crate::save::{PlayerState, SavePlugin, WorldSave};
-use crate::weather::Weather;
+use crate::weather::{Sky, Weather};
 use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 
 /// The server's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
@@ -360,7 +360,14 @@ pub fn open_world(
         .map(TimeOfDay::from_days)
         .unwrap_or(TimeOfDay(saved.time));
     commands.insert_resource(clock);
-    commands.insert_resource(Weather::new(saved.seed, clock));
+    // a world saved before there was weather starts its seed's first spell now
+    let mut weather = saved
+        .weather
+        .unwrap_or_else(|| Weather::new(saved.seed, clock));
+    if let Some(sky) = debug_weather() {
+        weather.set(sky, clock, None);
+    }
+    commands.insert_resource(weather);
     commands.insert_resource(SubTick::default());
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
@@ -371,6 +378,17 @@ pub fn open_world(
     commands.insert_resource(creatures::Settled(settled.collect()));
     commands.insert_resource(Operators::new(saved.ops));
     commands.insert_resource(save);
+}
+
+/// The weather `RC_WEATHER` asks the world to open in, for development: `clear`, `rain` or
+/// `storm`, as `/weather` takes them.
+fn debug_weather() -> Option<Sky> {
+    let name = std::env::var("RC_WEATHER").ok()?;
+    let sky = Sky::from_name(&name);
+    if sky.is_none() {
+        warn!("RC_WEATHER is {name}, which isn't clear, rain or storm");
+    }
+    sky
 }
 
 // Sees off everyone who's joined as the world's left, which keeps their players' states to save,

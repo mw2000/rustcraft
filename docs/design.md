@@ -68,7 +68,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); seven so far, from watchtowers on hilltops to temples, ruins, lodges and mineshafts and dungeons underground, and villages assembled from pieces along streets in three styles | `src/chunks/generate/structures/`, `assets/structures/` |
 | Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the faces between leaves drawn only near the camera (§5.7); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
-| Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
+| Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping; weather run by the server, storms with rain or snow by climate, lightning, thunder and rainbows (M3.5, U-80) | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs`, `src/weather/`, `src/server/weather.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | Menus | A title screen over the horizon of a world the terrain renderer draws; worlds to play, make, rename, duplicate and delete; saved servers and joining by address; settings in tabs (video, controls with every key rebindable, audio, accessibility), saved per player; a loading screen; the pause menu with Open to Friends and Save and Quit to Title; one set of shared widgets (M-U1) | `src/menu/`, `src/session.rs`, `src/preferences.rs`, `src/controls.rs`, `src/save/worlds.rs`, `src/client/servers.rs` |
 | UI | Command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival with drags, double clicks, number keys and tooltips (M4.1) and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
@@ -351,6 +351,10 @@ The world's state beyond the seed (INV-1).
     `time_of_day`, in days. Formats 4 to 6 (`0, 4` to `0, 6`) are read with each planting time
     turned to the nearest tick and rewritten as format 7 the next time their region changes;
     a `world.toml` before format 7 has its `time_of_day` read the same way.
+  - **Since format 8 (M3.5)** `world.toml` keeps the weather's spell (`[weather]`: its number,
+    start and end ticks, the rain it eased from and to, and whether it came after rain). A
+    `world.toml` before format 8 has none, and the world starts its seed's first spell, clear,
+    as it opens.
   - `Edits` remembers which chunks changed since the last save. Every 30 s, and only if
     something changed, the main thread copies `world.toml`'s contents and the edits of the
     regions with new ones, which is quick, and the IO pool writes them, one
@@ -909,6 +913,10 @@ The world's state beyond the seed (INV-1).
   U-84's integer clock).
 - **Built (M4.3):** `ChunkEdits` has a `partial` flag, for the blocks fluids changed in a chunk
   in a tick sent together (§5.4a). `PROTOCOL_VERSION` is 25.
+- **Built (U-80, M3.5):** the server runs the weather (`server/weather.rs`) and sends
+  `WeatherSync(Weather)`, ordered, as each spell starts or an operator or waking changes it,
+  and to each client as it joins; clients work out the rain from the spell and their own
+  clock, as the server does, so nothing is sent between. `PROTOCOL_VERSION` is 28.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin`,
   `DedicatedServerPlugins` and `is_authority`, `edits.rs`, `chunks.rs`, `commands.rs`,
   `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`,
@@ -1652,6 +1660,9 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     sets the respawn point, and at night (the sun down, 0.74 to 0.24) lies the player down
     (`Asleep`), fading their screen; moving half a block gets them up. Once every player has
     been asleep for 2 seconds the clock skips to the next morning (0.26) and everyone wakes.
+    **Since M3.5** a bed can be slept in through a storm too (rain past the lightning's 0.6):
+    by day everyone sleeps to the storm's end, and they wake, by day or night, to a clear sky
+    with a rainbow if the sun's up (`Weather::wake`).
   - **HUD** (`src/hud.rs`): hearts over the hotbar's left, the food bar over its right filling
     from the right, bubbles over it while short of breath, hidden in creative and behind the
     inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
@@ -2573,7 +2584,9 @@ from high places.
   - **Spawning:** as animals do, every 2 s round each player, 24 to 48 blocks off and out of
     sight, under each kind's own cap within 64 blocks; then a monster's place must be **dark**:
     no block light at all where its feet go (`World::block_light`, spread round walls as meshes
-    are lit, from the emitters in the chunks loaded), and under the sky only at night. So no
+    are lit, from the emitters in the chunks loaded), and under the sky only at night, or since
+    M3.5 in a storm's gloom round dusk and dawn (`weather::is_dark_out`), when gloamers stay too.
+    So no
     monster ever appears within a torch's reach (13 blocks), and a lit base is safe from
     spawning however big it is; walls keep out what comes from further. Ceiling kinds look for
     the underside of their blocks with room under them, and kinds not bound to the sky take any
@@ -2672,7 +2685,8 @@ from high places.
     then) are shared by the butterflies and both birds.
   - **Settings:** "Ambient Life" in Settings' Video tab (`Video::ambient_life`, on by default):
     off, every critter goes at once and none come. `AmbientLife::rain` is the hook for weather
-    (M3.5): past 0.3 butterflies, fireflies and starlings leave and no geese fly.
+    (M3.5): past 0.3 butterflies, fireflies and starlings leave and no geese fly. **Since M3.5**
+    the weather sets it, from the rain or snow falling over the camera, and none under a roof.
   - **Cost:** measured in a headless App on a field (load average 17 to 21), the frame's median
     takes 0.14 ms more at dusk with the flock of 160 (its steering is every pair, 25,600 a frame),
     0.02 ms at night with 60 fireflies and their lights, and nothing measurable by day with
@@ -2762,7 +2776,8 @@ from high places.
     ways is a walk of the village's street tree.
   - **Later:** breeding and villages growing, villagers talking among themselves at the well,
     lamplighters lighting the lamps at dusk, trades getting better as a player trades more,
-    giving them names over their heads, and villagers sheltering from storms (M3.5).
+    giving them names over their heads. **Since M3.5** villagers go home out of a storm, as
+    at night (`place_now`).
 
 - **Built (M4.10): monsters by place** (`src/creatures/mod.rs`, `src/server/creatures/hunting.rs`,
   `spawning.rs`). Each climate's night and each depth band has monsters of its own, so where
@@ -2958,7 +2973,17 @@ README and licences but no assets, which it doesn't read.
     to, but not as one vanishes); monsters have four cries of their own (`<kind>_call`,
     `_hurt`, `_attack`, `_death`, 64 files, 0.96 MB), and animals die with a lower, slower call.
   - **Later:** furnaces crackling while lit, which the client only knows of the one open;
-    other players' blows while breaking, hurt and eating, which they aren't told of; occlusion, so a cave next door is quieter through rock; rain (M3.5).
+    other players' blows while breaking, hurt and eating, which they aren't told of; occlusion, so a cave next door is quieter through rock.
+  - **Rain and thunder** (U-80, ported from upstream #80, by Aymen Qader, with Rory Nickolls'
+    tuning): both synthesised as they play (`ambience/rain.rs`), as the wind is, and merged
+    into the mixer. Rain is soft low thumps, 140 to 380 Hz, as busy and loud as the rain
+    falling over the eyes as the climate has it (none of it snow), at half under a roof and
+    none in a cave, played once rather than looped so its endless stream isn't kept (the rain
+    half of upstream's `7c970d4`). A storm blows the wind up to at least 0.6 and quiets the
+    birds and crickets. Each lightning strike's thunder (`Thunderclap`) plays after the time
+    sound takes to come that far at 343 blocks a second: near strikes open with a crack, far
+    ones only roll, at full force within 120 blocks and fading by the log of the distance to
+    520; muffled to 0.35 in caves and under water.
 
 ---
 
@@ -3084,7 +3109,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
 - ☑ **M3.3 Hostile mobs and combat.** Four monsters of our own, spawners in dungeons, swords,
   armour and blows (§5.3, §5.5, §5.8).
 - ☑ **M3.4 Villages and villagers.** Villages assembled from pieces in three styles (§5.6), villagers keeping their day, and trading (§5.8).
-- ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
+- ☑ **M3.5 Weather.** Through upstream's weather, see U-80 below.
 
 ### Phase 4: adventure
 
@@ -3175,7 +3200,7 @@ monuments do that job here.
 Changes merged upstream (rornic/rustcraft) since the fork, brought in one PR at a time, in this
 order, each re-implemented on this codebase with its original author kept on the commit. Where
 both sides built the same thing they're merged into one system keeping the best of each
-(§8). Last checked against upstream `25cf125`.
+(§8). Last checked against upstream `25cf125` (again after U-80: nothing new merged).
 
 - ☑ **U-77 Ambience** (Aymen Qader): CC0 recordings and synthesised wind, merged into §5.10.
 - ☑ **U-78 Flora** (Aymen Qader): swaying grasses, ferns and flowers, as breakable plant blocks.
@@ -3249,11 +3274,69 @@ both sides built the same thing they're merged into one system keeping the best 
     growth hash takes its planting tick where it took its planting time's `f64` bits, so crops
     planted before it grow to a different, equally varied, schedule, as at the M-R1 follow-up.
     `RC_TIME` is still in days.
-- ☐ **U-80 Weather** (Aymen Qader, with Rory Nickolls' tuning `fbd522d`, `9307035` and the rain
+- ☑ **U-80 Weather** (Aymen Qader, with Rory Nickolls' tuning `fbd522d`, `9307035` and the rain
   half of `7c970d4`): storms, rain, a rainbow, lightning and thunder on the integer clock,
   replacing M3.5's paused WIP (branch `wip/m3.5-weather` on the fork: snow by climate, `/weather`, beds through storms, synthesised rain and thunder; it was never compiled), with our extras on top: snow by climate, rain stopping under
   roofs, an operator `/weather`, sleeping through storms, a daylight factor for the monsters'
   darkness rule, and a particle setting. Completes M3.5.
+  - Built: upstream's weather, re-implemented on the server (`src/weather/mod.rs`,
+    `server/weather.rs`) in two commits keeping its authors (Aymen's storms, lightning, thunder
+    and game clock; Rory's softer rain, calmer wind, thunder at 343 blocks a second and rarer
+    storms), then ours. The weather is a run of spells, clear and stormy in turn, each rolled
+    from the seed and its number (`spell`): the first clear for a game day after the world's
+    made, then a 95-second storm, then clear for 30 to 60 minutes of game time and storms of 90
+    to 180 seconds raining 0.75 to 1. The rain eases from where it was to where it's set, most
+    of the way in 12 seconds, worked out from the tick (`Weather::rain`), so it's the same
+    however the clock gets there and winding the clock winds it; the rainbow shows after rain,
+    once it's eased under 0.15, for 70 seconds, fading in and out over 10 (`Weather::rainbow`).
+    The server saves it (format 8, §4.3) and sends it (§4.4); `RC_WEATHER` (clear, rain or
+    storm) opens a world in that weather, for development.
+  - Looks (`weather::look`, client), easing with the storm's strength (`Gloom`): the sun and
+    moon dim to 0.45, which dims the sky and the light it sheds as they read the atmosphere,
+    and the overcast keeps 85% of the sun's direct light off the land on top (the cloud layer's
+    buffer carries it to `cloud_shadow.wesl`), so shadows all but go; the clouds darken to 0.42;
+    the view greys to 0.45 of its colour and 0.35 stops darker (the camera's colour grading,
+    left to the underwater look under water); and the fog's half-way point comes in by 60%
+    and its end by 45%, 0.95 opaque (`horizon`). Upstream's darkening, the sun's light alone,
+    barely showed on this renderer. 14,000 streaks in a 48 by 32 by 48 box round
+    the camera, wrapped as it moves, the share shown as hard as it rains; lightning (rain past
+    0.6) every 7 to 22 seconds of real time, 30 to 520 blocks off, mostly ahead, one bolt at a
+    time: a white-hot core a pixel or two wide for its distance in a faint additive glow,
+    jagged at every scale with a branch or two, shown for 0.2 s with a moment's dark between
+    its strokes, the flash of 3.2 stops with a fainter flicker after carrying the strike; and the
+    rainbow, a band 42° round the point opposite the sun, 700 blocks off, while the sun's
+    between the horizon and 0.6 up. Thunder is the ambience's (§5.10).
+  - Ours on top: what falls goes by the climate over the camera (`weather::precipitation`):
+    snow where snow lies as generation has it (under 0.25, the snowy grass of the taiga and
+    glaciers, and above the snow line, turning over 30 blocks below it), drawn as slow,
+    swaying flakes among the streaks in `rain.wesl`, and in hot, dry lands only 0.3 of the
+    rain, so no lightning. None falls under a roof or in a cave: `RoofMap` holds, for the 48 by
+    48 columns round the camera, the top of the highest block in the box rain can't fall
+    through (solid, or water), or that something roofs it over above (the chunk's `roofed`),
+    and the shader hides what's under it, so the rain stops on the ground and at the eaves. It's
+    mapped as the camera moves to another block and every half second for edits, decoding each
+    chunk once. `/weather clear|rain|storm [seconds]` for operators (rain is a shower of 0.45,
+    under the lightning; storm 0.9), after which the seed's spells go on. Beds work through a
+    storm (§5.5). Monsters' darkness rule (§5.8) counts the open as dark when the daylight
+    through the clouds (`daylight × (1 − 0.7 × rain)`) is under 0.35, as well as at night: in
+    the heaviest storm, about an hour of game time before dusk and after dawn. Villagers go
+    home out of storms, and critters shelter from rain and snow (§5.8). "Rain and Snow" in
+    Settings' Video tab draws none, a third or all of it (`Particles`, high by default).
+  - Tests: the seed's spells the same every time, clear and stormy in turn, the same however
+    the clock gets there; the first storm coming, clearing and leaving a rainbow; the rain
+    easing without jumps and held winding back; `/weather` setting and the seed going on after,
+    parsed, and for operators only; waking clearing it; a storm's gloom dark at dusk but not at
+    noon; snow by climate and height and little in deserts; the server moving the spells on and
+    telling clients; a joiner told the weather and a change, and refused `/weather`
+    (`tests/multiplayer.rs`); sleeping through a storm by day and waking from rain at night;
+    villagers home in a storm; the roof map stopping rain under planks, glass and the ground,
+    and under a roof far above; the particle setting; saving the weather and reading format 7;
+    the mixer hearing rain and storms; thunder louder and brighter near, and rain playing once.
+  - Cost: per frame, a few resource reads and a material written only as it changes; the roof
+    map, only while something's falling, as the camera changes block or twice a second, decodes
+    at most 48 chunks and scans 2,304 columns. The streaks are one draw of 56,000 vertices,
+    those not shown put outside the view in the vertex shader, and none at all while it's dry
+    or with "Rain and Snow" off. Not measured on a GPU (lavapipe only; see M-P1).
 
 ### Playtest
 
@@ -3270,6 +3353,15 @@ both sides built the same thing they're merged into one system keeping the best 
 Everything noted in review or by a milestone as not done, in one place, grouped by area. Each
 points at the section that explains it. Tick them off here as they're done; add new ones as
 they're found.
+
+**Weather (M3.5, U-80)**
+- ☐ Lightning is the client's own, at random near each camera, so players together see
+  different strikes and hear different thunder; strikes start no fires and hurt no one. The
+  server could roll strikes from the seed and the tick and send where they land.
+- ☐ Rain falls through glass and leaves roofs more than 16 blocks above the camera, as the
+  roof map trusts a chunk's `roofed` (what blocks light) above the rain box; snow doesn't settle
+  and rain fills nothing; crops don't grow faster in rain.
+- ☐ The rain's streaks have no motion vectors, so TAA can smear them a little, as upstream's.
 
 **World and generation**
 - ☐ A plain snow block (or a snow layer) for roofs and drifts: snow's dirt-and-snow sides show
@@ -3666,7 +3758,8 @@ For agents and contributors:
   drawn near only, §5.7, and full detail out to 24 chunks, M-U1, and #83/#84's fixes (Aymen
   Qader, Rory Nickolls): the wind not retaining samples, far leaf shadows blurred, level 2's
   trees as leaf cells and the staggered LOD cross-fade, U-83/84, and #84's integer clock (Rory
-  Nickolls): the time in whole ticks, U-84.
+  Nickolls): the time in whole ticks, U-84, and #80's weather (Aymen Qader, with Rory Nickolls'
+  tuning from #84): storms, lightning, thunder and rainbows on the server, U-80 and M3.5.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.
 - **Screenshots:** anything visual is checked in the real game with the `screenshot` skill, which

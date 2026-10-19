@@ -5,11 +5,12 @@ use bevy::math::Vec3;
 
 use crate::creatures::CreatureKind;
 use crate::game_mode::GameMode;
+use crate::weather::Sky;
 
 // Each way to type a command as `/help` lists it, what it does, and whether only operators may
 // run it: those that change the world or other players. The clock's keys are listed too, as
 // they wind everyone's.
-const USAGES: [(&str, &str, bool); 18] = [
+const USAGES: [(&str, &str, bool); 19] = [
     (
         "/tp <x> <y> <z>",
         "teleport there; ~ means where you are, ~10 ten blocks on from it",
@@ -49,6 +50,11 @@ const USAGES: [(&str, &str, bool); 18] = [
     (
         "/summon <creature> [<x> <y> <z>]",
         "bring a creature, such as a sheep, where you are or there",
+        true,
+    ),
+    (
+        "/weather clear|rain|storm [seconds]",
+        "change everyone's weather, for as long as asked or a usual spell of it",
         true,
     ),
     (
@@ -135,6 +141,11 @@ pub(crate) enum Command {
     Summon {
         kind: CreatureKind,
         at: Vec3,
+    },
+    /// Turns the weather to `sky` for `seconds` of game time, or a usual spell of it.
+    Weather {
+        sky: Sky,
+        seconds: Option<f64>,
     },
 }
 
@@ -245,6 +256,24 @@ pub(crate) fn parse(line: &str, from: Vec3, op: bool) -> Result<Command, String>
                     ),
                 }),
                 _ => Err("Usage: /summon <creature> [<x> <y> <z>]".into()),
+            }
+        }
+        "weather" => {
+            let usage = "Usage: /weather clear|rain|storm [seconds]";
+            let sky = args.first().and_then(|name| Sky::from_name(name));
+            let seconds = |text: &str| {
+                text.parse()
+                    .ok()
+                    .filter(|&seconds: &f64| seconds.is_finite() && seconds > 0.0)
+                    .ok_or_else(|| format!("{text} isn't a number of seconds"))
+            };
+            match (sky, &args[..]) {
+                (Some(sky), [_]) => Ok(Command::Weather { sky, seconds: None }),
+                (Some(sky), [_, time]) => Ok(Command::Weather {
+                    sky,
+                    seconds: Some(seconds(time)?),
+                }),
+                _ => Err(usage.into()),
             }
         }
         "list" => Ok(Command::List),
@@ -539,6 +568,33 @@ mod tests {
     }
 
     #[test]
+    fn test_weather_takes_a_sky_by_name_and_how_long_in_seconds() {
+        assert_eq!(
+            Ok(Command::Weather {
+                sky: Sky::Storm,
+                seconds: None
+            }),
+            parse("/weather storm", HERE)
+        );
+        assert_eq!(
+            Ok(Command::Weather {
+                sky: Sky::Clear,
+                seconds: Some(90.0)
+            }),
+            parse("/weather clear 90", HERE)
+        );
+        for bad in [
+            "/weather",
+            "/weather hail",
+            "/weather rain -5",
+            "/weather rain soon",
+            "/weather rain 5 6",
+        ] {
+            assert!(parse(bad, HERE).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn test_only_operators_may_change_things_and_are_told_of_them() {
         let refused = super::parse("/gamemode", HERE, false).unwrap_err();
         assert!(refused.contains("permission to use /gamemode"), "{refused}");
@@ -550,6 +606,7 @@ mod tests {
             "/pos1",
             "/structure list",
             "/summon sheep",
+            "/weather clear",
         ] {
             assert!(super::parse(line, HERE, false).is_err(), "{line}");
         }

@@ -17,6 +17,7 @@ use crate::items::Item;
 use crate::player::{Player, BODY};
 use crate::server::{Blow, HeldItem};
 use crate::survival::Vitals;
+use crate::weather::{is_dark_out, Weather};
 use crate::world::World;
 
 /// How often a monster looks about for prey, and for light it shuns, in seconds.
@@ -438,12 +439,13 @@ pub(in crate::server) fn fly_missiles(
 /// and has those that fade by day vanish once it's day where they're under the sky.
 pub(in crate::server) fn despawn(
     clock: Res<TimeOfDay>,
+    weather: Res<Weather>,
     world: Res<World>,
     players: Query<&Transform, With<Player>>,
     creatures: Query<(Entity, &Creature, &Transform), Without<Vanishing>>,
     mut commands: Commands,
 ) {
-    let day = !clock.is_night();
+    let day = !is_dark_out(*clock, &weather);
     for (entity, creature, body) in &creatures {
         let properties = creature.0.properties();
         if !properties.despawns {

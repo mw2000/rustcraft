@@ -28,7 +28,7 @@ use crate::chunks::generate::WATER_LEVEL;
 use crate::client::player::LocalPlayer;
 use crate::clock::TimeOfDay;
 use crate::weather::look::{Thunderclap, THUNDER_SPEED};
-use crate::weather::Weather;
+use crate::weather::{precipitation, Weather};
 use crate::world::World;
 use rain::{RainSound, Thunder, RAIN_PLAYBACK};
 use wind::{wind_strength, Dial, Gust, Wind, WindDials, WIND_PLAYBACK};
@@ -71,6 +71,8 @@ const STORM_WIND: f32 = 0.6;
 // Rain's volume at its heaviest, and thunder's, as upstream played them.
 const RAIN_VOLUME: f32 = 1.0;
 const THUNDER_VOLUME: f32 = 1.0;
+// How loud rain is heard on the roof over the eyes, against out in it.
+const ROOF_RAIN: f32 = 0.5;
 // How loud thunder is heard in a cave, through the rock, and under water.
 const MUFFLED_THUNDER: f32 = 0.35;
 // How long between owls' hoots in the woods at night, in seconds, at the least and most, and
@@ -214,7 +216,10 @@ struct Surroundings {
     humidity: f32,
     /// The time of day, in days.
     time: f32,
-    /// How hard it's raining, 0 to 1.
+    /// How hard the storm is, 0 to 1, wherever the eyes are.
+    storm: f32,
+    /// How hard the rain's heard, 0 to 1: as hard as it falls here, as the climate has it
+    /// (none of it snow), and muffled under a roof.
     rain: f32,
 }
 
@@ -246,7 +251,7 @@ fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
 /// speed; the sea near it, unless it's frozen; birds by day where it's mild, more among trees,
 /// crickets by night, both thinning up the mountains and off the ground, and owls at night in
 /// the woods; a desert's air where it's hot and dry; and leaves under the trees' crowns, for the
-/// wind to stir; and rain, which blows the wind up and quiets the birds and crickets.
+/// wind to stir; and storms, which blow the wind up and quiet the birds and crickets, and rain.
 /// Biomes come in by their climate and trees, so a new one sounds right without being named
 /// here. Thunder's heard everywhere, muffled in caves and under water.
 fn mix(s: &Surroundings) -> Mix {
@@ -278,12 +283,12 @@ fn mix(s: &Surroundings) -> Mix {
     let lowland = 1.0 - smoothstep(60.0, 160.0, s.height);
     let near = |from, to| 1.0 - smoothstep(from, to, s.altitude);
     let wooded = smoothstep(0.02, 0.2, s.trees);
-    // birds and crickets fall silent in the rain
-    let wildlife = mild * lowland * (1.0 - arid) * near(15.0, 90.0) * (1.0 - s.rain);
+    // birds and crickets fall silent in a storm
+    let wildlife = mild * lowland * (1.0 - arid) * near(15.0, 90.0) * (1.0 - s.storm);
     mix.wind = wind_strength(s.altitude, s.speed)
         .max(0.75 * smoothstep(90.0, 250.0, s.height))
         .max(0.6 * cold)
-        .max(STORM_WIND * s.rain);
+        .max(STORM_WIND * s.storm);
     mix.rain = s.rain;
     set(
         Loop::Sea,
@@ -325,6 +330,9 @@ impl Surroundings {
         // the eyes' own column counts as much as the ring round it
         let around: f32 = ring(CANOPY_REACH).map(|s| cover(&s)).sum();
         let canopy = (8.0 * cover(&here) + around) / 16.0;
+        let storm = weather.rain(*time);
+        let falling = precipitation(storm, climate, eyes.y - WATER_LEVEL as f32);
+        let roofed = world.is_under_ground(block);
         Self {
             height: eyes.y - WATER_LEVEL as f32,
             altitude: eyes.y - here.height.max(WATER_LEVEL as f64) as f32,
@@ -339,7 +347,8 @@ impl Surroundings {
             temperature: climate.temperature,
             humidity: climate.humidity,
             time: time.days(),
-            rain: weather.rain(*time),
+            storm,
+            rain: falling.rain * if roofed { ROOF_RAIN } else { 1.0 },
         }
     }
 }
@@ -675,6 +684,7 @@ mod tests {
             temperature: 0.5,
             humidity: 0.5,
             time: NOON,
+            storm: 0.0,
             rain: 0.0,
         }
     }
@@ -783,6 +793,7 @@ mod tests {
     fn test_rain_is_heard_blows_the_wind_up_and_quiets_birds_and_crickets() {
         let raining = |surroundings: Surroundings| {
             mix(&Surroundings {
+                storm: 0.9,
                 rain: 0.9,
                 ..surroundings
             })

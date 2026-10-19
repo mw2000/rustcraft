@@ -2,6 +2,11 @@
 //! falling round the camera, lightning forking down in the heaviest of it, lighting everything
 //! for a moment, and a rainbow opposite the sun once it clears. Ported from rornic/rustcraft
 //! #80, by Aymen Qader. Its thunder is heard through `client::sound`, as `Thunderclap`s.
+//!
+//! Our own on top: what falls is snow where it's cold, as `weather::precipitation` has it by
+//! the climate over the camera, and none falls under a roof, in a house or a cave: a map of the
+//! roofs over the columns round the camera (`RoofMap`) hides the streaks under them. How much
+//! is drawn is the player's "Rain and Snow" setting (`Particles`).
 
 use std::f32::consts::{PI, TAU};
 
@@ -10,6 +15,7 @@ use bevy::{
     camera::{visibility::NoFrustumCulling, Exposure},
     light::{NotShadowCaster, NotShadowReceiver},
     math::ops,
+    math::{I64Vec2, I64Vec3, U16Vec3},
     pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypePath,
@@ -21,12 +27,15 @@ use bevy::{
     shader::ShaderRef,
 };
 
-use super::{Weather, STRIKE_RAIN};
+use super::{precipitation, Weather, STRIKE_RAIN};
 use crate::block::BlockType;
+use crate::chunks::chunk::{linear_index, ChunkCoordinate, CELLS, CHUNK_SIZE};
+use crate::chunks::generate::WATER_LEVEL;
 use crate::client::critters::AmbientLife;
 use crate::client::player::WorldCamera;
 use crate::clock::TimeOfDay;
 use crate::clouds::{CloudMaterial, CLOUD_BASE};
+use crate::preferences::{Particles, Preferences};
 use crate::sky::{camera_exposure, moon_illuminance, sun_direction, sun_illuminance, Moon, Sun};
 use crate::tonemap::dry_color_grading;
 use crate::world::World;
@@ -43,11 +52,13 @@ impl Plugin for WeatherLookPlugin {
         .add_message::<Thunderclap>()
         .init_resource::<Overhead>()
         .init_resource::<Gloom>()
+        .init_resource::<RoofMap>()
         .add_systems(Startup, spawn_weather)
         .add_systems(
             Update,
             (
                 look_up,
+                map_roofs,
                 (darken_sky, fall_rain, strike_lightning, show_rainbow),
             )
                 .chain(),
@@ -73,8 +84,12 @@ pub struct Gloom(pub f32);
 struct Overhead {
     /// How hard the storm is, 0 to 1, which darkens the sky wherever the camera is.
     storm: f32,
-    /// How hard it's raining round the camera, which is none under water or above the clouds.
+    /// How hard it's raining and snowing round the camera, as the climate has it, which is none
+    /// under water or above the clouds.
     rain: f32,
+    snow: f32,
+    /// Whether the camera's in a cave, where no lightning's seen.
+    in_cave: bool,
     /// Whether the camera's under water, whose own look the storm leaves be.
     underwater: bool,
     /// How strong the rainbow is, 0 to 1.
@@ -91,6 +106,8 @@ const STORM_SUN: f32 = 0.45;
 // kept, and stops darker.
 const STORM_SATURATION: f32 = 0.45;
 const STORM_EXPOSURE: f32 = -0.35;
+// How far under the ground's surface, in blocks, the camera must be for a cave.
+const CAVE_DEPTH: f32 = 3.0;
 
 fn look_up(
     weather: Res<Weather>,
@@ -105,25 +122,160 @@ fn look_up(
     let eye = camera
         .single()
         .map_or(Vec3::ZERO, GlobalTransform::translation);
-    let underwater = world
-        .as_ref()
-        .is_some_and(|world| world.get_block_at(eye.floor().as_i64vec3()) == BlockType::Water);
-    // none under water, nor once high above the clouds' base
-    let dry = world.is_none() || underwater || eye.y > CLOUD_BASE;
-    let now = Overhead {
-        storm,
-        rain: if dry { 0.0 } else { storm },
-        underwater,
-        rainbow: weather.rainbow(*clock),
-    };
+    let block = eye.floor().as_i64vec3();
+    let (mut now, mut sheltered) = (
+        Overhead {
+            storm,
+            rainbow: weather.rainbow(*clock),
+            ..default()
+        },
+        true,
+    );
+    if let Some(world) = world.filter(|_| storm > 0.0) {
+        let noise = world.region_store.noise();
+        let (x, z) = (eye.x as f64, eye.z as f64);
+        let falling = precipitation(storm, noise.climate(x, z), eye.y - WATER_LEVEL as f32);
+        // none under water, nor once high above the clouds' base
+        now.underwater = world.get_block_at(block) == BlockType::Water;
+        let dry = now.underwater || eye.y > CLOUD_BASE;
+        if !dry {
+            (now.rain, now.snow) = (falling.rain, falling.snow);
+        }
+        sheltered = world.is_under_ground(block);
+        let ground = noise.sample(x, z).height as f32;
+        now.in_cave = sheltered && eye.y < ground - CAVE_DEPTH;
+    }
     overhead.set_if_neq(now);
     gloom.set_if_neq(Gloom(if eye.y > CLOUD_BASE { 0.0 } else { storm }));
-    // birds and insects shelter from it
+    // birds and insects shelter from it, unless they're under a roof too
     if let Some(mut life) = life {
-        if life.rain != now.rain {
-            life.rain = now.rain;
+        let rain = if sheltered { 0.0 } else { now.rain + now.snow };
+        if life.rain != rain {
+            life.rain = rain;
         }
     }
+}
+
+// The roof map's columns across, round the camera's, matching `ROOFS` in `rain.wesl`: the rain
+// box's width.
+const ROOF_SPAN: i64 = 48;
+const ROOF_COLUMNS: usize = (ROOF_SPAN * ROOF_SPAN) as usize;
+// What the roof map holds for a column open to the sky through the rain box, and for one roofed
+// over above it.
+const OPEN: f32 = -1.0e9;
+const ROOFED: f32 = 1.0e9;
+// How often the roofs are looked at again while the camera stays in one block, for edits, in
+// seconds.
+const ROOF_INTERVAL: f32 = 0.5;
+
+/// Over each column round the camera, where what falls stops: the top of the highest block in
+/// it that rain can't fall through, in the rain box's height, `ROOFED` if there's one above the
+/// box and `OPEN` if there's none, x then z, from `origin`.
+#[derive(Resource)]
+struct RoofMap {
+    origin: I64Vec2,
+    roofs: Vec<f32>,
+}
+
+impl Default for RoofMap {
+    fn default() -> Self {
+        Self {
+            origin: I64Vec2::ZERO,
+            roofs: vec![OPEN; ROOF_COLUMNS],
+        }
+    }
+}
+
+// What rain and snow can't fall through: anything solid, and water, where they meet it.
+fn stops_rain(block: BlockType) -> bool {
+    block.is_solid() || block == BlockType::Water
+}
+
+/// Maps the roofs round `eye` in `world`, over the columns `ROOF_SPAN` across round it, between
+/// `low` and `high`: chunk by chunk, each decoded once, from the top of the one at `high` down.
+fn map_roofs_round(world: &World, eye: I64Vec3, low: i64, high: i64) -> (I64Vec2, Vec<f32>) {
+    let origin = eye.xz() - I64Vec2::splat(ROOF_SPAN / 2);
+    let mut roofs = vec![OPEN; ROOF_COLUMNS];
+    let size = CHUNK_SIZE as i64;
+    let first = origin.div_euclid(I64Vec2::splat(size));
+    let last = (origin + I64Vec2::splat(ROOF_SPAN - 1)).div_euclid(I64Vec2::splat(size));
+    let (bottom, top) = (low.div_euclid(size), high.div_euclid(size));
+    let mut cells = Box::new([BlockType::Air; CELLS]);
+    for cx in first.x..=last.x {
+        for cz in first.y..=last.y {
+            // the columns of this chunk column in the map, as local and map coordinates
+            let columns: Vec<(u16, u16, usize)> = (0..size)
+                .flat_map(|lx| (0..size).map(move |lz| (lx, lz)))
+                .filter_map(|(lx, lz)| {
+                    let at = I64Vec2::new(cx * size + lx, cz * size + lz) - origin;
+                    let inside = at.x >= 0 && at.y >= 0 && at.x < ROOF_SPAN && at.y < ROOF_SPAN;
+                    let index = (at.x * ROOF_SPAN + at.y) as usize;
+                    inside.then_some((lx as u16, lz as u16, index))
+                })
+                .collect();
+            for cy in (bottom..=top).rev() {
+                let coord = ChunkCoordinate(I64Vec3::new(cx, cy, cz));
+                let Some(data) = world.get_chunk_data(coord) else {
+                    continue;
+                };
+                if cy == top {
+                    for &(lx, lz, index) in &columns {
+                        if data.roofed.contains(lx, lz) {
+                            roofs[index] = ROOFED;
+                        }
+                    }
+                }
+                if data.empty() {
+                    continue;
+                }
+                data.decode_into(&mut cells);
+                for &(lx, lz, index) in &columns {
+                    if roofs[index] != OPEN {
+                        continue;
+                    }
+                    let lowest = (low - cy * size).clamp(0, size - 1) as u16;
+                    for ly in (lowest..CHUNK_SIZE).rev() {
+                        if stops_rain(cells[linear_index(U16Vec3::new(lx, ly, lz))]) {
+                            roofs[index] = (cy * size + ly as i64 + 1) as f32;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (origin, roofs)
+}
+
+// Maps the roofs round the camera while anything's falling, as it moves to another block and
+// every `ROOF_INTERVAL` for edits.
+fn map_roofs(
+    time: Res<Time>,
+    overhead: Res<Overhead>,
+    world: Option<Res<World>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
+    mut map: ResMut<RoofMap>,
+    // the camera's block as it was last mapped, and how long ago
+    mut mapped: Local<Option<(I64Vec3, f32)>>,
+) {
+    let (Some(world), Ok(camera)) = (world, camera.single()) else {
+        return;
+    };
+    if overhead.rain + overhead.snow <= 0.0 {
+        *mapped = None;
+        return;
+    }
+    let eye = camera.translation().floor().as_i64vec3();
+    if let Some((at, since)) = mapped.as_mut() {
+        *since += time.delta_secs();
+        if *at == eye && *since < ROOF_INTERVAL {
+            return;
+        }
+    }
+    *mapped = Some((eye, 0.0));
+    let half = (RAIN_BOX.y / 2.0).ceil() as i64;
+    let (origin, roofs) = map_roofs_round(&world, eye, eye.y - half, eye.y + half);
+    *map = RoofMap { origin, roofs };
 }
 
 // Lightning's flash, in stops brighter: held, then dying away, in seconds, with a fainter
@@ -259,12 +411,52 @@ macro_rules! effect_material {
     };
 }
 
-effect_material!(
-    /// The streaks of rain, falling in `rain.wesl`.
-    RainMaterial,
-    vertex: "shaders/rain.wesl".into(),
-    fragment: "shaders/rain.wesl"
-);
+/// The streaks of rain and flakes of snow, falling in `rain.wesl`.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct RainMaterial {
+    // how much falls, 0..1, how bright the light on it is, and the wind it slants in
+    #[uniform(0)]
+    params: Vec4,
+    // how much of what falls is snow, and the roof map's origin
+    #[uniform(1)]
+    look: Vec4,
+    // the roof map, `RoofMap::roofs` four to an element
+    #[uniform(2)]
+    roofs: [Vec4; ROOF_COLUMNS / 4],
+}
+
+impl Material for RainMaterial {
+    fn vertex_shader() -> ShaderRef {
+        "shaders/rain.wesl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "shaders/rain.wesl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Premultiplied
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
+}
+
 effect_material!(
     /// The rainbow's band, coloured in `rainbow.wesl`.
     RainbowMaterial,
@@ -311,7 +503,11 @@ fn spawn_weather(
     mut rainbows: ResMut<Assets<RainbowMaterial>>,
     mut standard: ResMut<Assets<StandardMaterial>>,
 ) {
-    let rain = rains.add(RainMaterial { params: Vec4::ZERO });
+    let rain = rains.add(RainMaterial {
+        params: Vec4::ZERO,
+        look: Vec4::ZERO,
+        roofs: [Vec4::splat(OPEN); ROOF_COLUMNS / 4],
+    });
     let rainbow = rainbows.add(RainbowMaterial { params: Vec4::ZERO });
     commands.spawn((
         RainCurtain,
@@ -441,16 +637,6 @@ trait HasParams {
     fn set_params(&mut self, params: Vec4);
 }
 
-impl HasParams for RainMaterial {
-    fn params(&self) -> Vec4 {
-        self.params
-    }
-
-    fn set_params(&mut self, params: Vec4) {
-        self.params = params;
-    }
-}
-
 impl HasParams for RainbowMaterial {
     fn params(&self) -> Vec4 {
         self.params
@@ -464,6 +650,8 @@ impl HasParams for RainbowMaterial {
 fn fall_rain(
     overhead: Res<Overhead>,
     clock: Res<TimeOfDay>,
+    preferences: Option<Res<Preferences>>,
+    map: Res<RoofMap>,
     handles: Option<Res<WeatherHandles>>,
     mut rains: ResMut<Assets<RainMaterial>>,
     mut curtains: Query<&mut Visibility, With<RainCurtain>>,
@@ -471,12 +659,35 @@ fn fall_rain(
     let Some(handles) = handles else {
         return;
     };
+    let density = preferences.map_or(Particles::default(), |p| p.video.particles);
+    let falling = overhead.rain + overhead.snow;
+    let amount = falling * density.density();
     for mut visibility in &mut curtains {
-        show_if(&mut visibility, overhead.rain > 0.0);
+        show_if(&mut visibility, amount > 0.0);
+    }
+    if amount <= 0.0 {
+        return;
     }
     let light = unlit_light(&clock) * (1.0 - 0.5 * overhead.storm);
-    let params = Vec4::new(overhead.rain, light, RAIN_WIND.x, RAIN_WIND.y);
-    set_params(&mut rains, &handles.rain, params);
+    let params = Vec4::new(amount, light, RAIN_WIND.x, RAIN_WIND.y);
+    let snow = overhead.snow / falling;
+    let look = Vec4::new(snow, map.origin.x as f32, map.origin.y as f32, 0.0);
+    let Some(material) = rains.get(&handles.rain) else {
+        return;
+    };
+    let (params_changed, look_changed) = (material.params != params, material.look != look);
+    if !(params_changed || look_changed || map.is_changed()) {
+        return;
+    }
+    if let Some(mut material) = rains.get_mut(&handles.rain) {
+        material.params = params;
+        material.look = look;
+        if map.is_changed() {
+            for (element, roofs) in material.roofs.iter_mut().zip(map.roofs.as_chunks::<4>().0) {
+                *element = Vec4::from_array(*roofs);
+            }
+        }
+    }
 }
 
 // Lightning strikes this often in the heaviest rain, at the least and most, in seconds, from
@@ -532,7 +743,8 @@ fn strike_lightning(
     let (Some(handles), Some(world), Ok(camera)) = (handles, world, camera.single()) else {
         return;
     };
-    if overhead.storm < STRIKE_RAIN {
+    // only where it's falling, not in a desert's thin rain, and never seen in a cave
+    if overhead.storm < STRIKE_RAIN || overhead.rain + overhead.snow < 0.3 || overhead.in_cave {
         return;
     }
     let left = strike_in.get_or_insert(6.0);
@@ -697,4 +909,67 @@ fn show_rainbow(
 fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
     let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chunks::chunk::ChunkData;
+    use crate::edits::Edits;
+
+    // A world of seed 1 with only air loaded round the origin, 4 chunks up and down from 512.
+    fn open_world() -> World {
+        let mut world = World::from_save(1, Edits::default(), 16);
+        for x in -3..=3 {
+            for z in -3..=3 {
+                for y in 28..=36 {
+                    let coord = ChunkCoordinate(I64Vec3::new(x, y, z));
+                    world.insert_chunk(coord, ChunkData::default());
+                }
+            }
+        }
+        world
+    }
+
+    fn roof_over(world: &World, eye: I64Vec3, column: I64Vec2) -> f32 {
+        let (origin, roofs) = map_roofs_round(world, eye, eye.y - 16, eye.y + 16);
+        let at = column - origin;
+        roofs[(at.x * ROOF_SPAN + at.y) as usize]
+    }
+
+    #[test]
+    fn test_rain_stops_under_a_roof_and_on_the_ground_but_not_in_the_open() {
+        let mut world = open_world();
+        let eye = I64Vec3::new(5, 520, 5);
+        // open sky
+        assert_eq!(OPEN, roof_over(&world, eye, I64Vec2::new(5, 5)));
+        // a roof of planks over the camera, and glass over the column beside it
+        world.edit(I64Vec3::new(5, 524, 5), BlockType::Planks);
+        world.edit(I64Vec3::new(6, 524, 5), BlockType::Glass);
+        assert_eq!(525.0, roof_over(&world, eye, I64Vec2::new(5, 5)));
+        assert_eq!(525.0, roof_over(&world, eye, I64Vec2::new(6, 5)));
+        // the ground under the camera: what falls stops on it
+        world.edit(I64Vec3::new(-10, 510, 12), BlockType::Stone);
+        assert_eq!(511.0, roof_over(&world, eye, I64Vec2::new(-10, 12)));
+        // the columns round about stay open, out to the map's edge
+        assert_eq!(OPEN, roof_over(&world, eye, I64Vec2::new(5 + 23, 5 - 24)));
+    }
+
+    #[test]
+    fn test_a_roof_far_above_the_rain_box_covers_it_as_a_cave_does() {
+        let mut world = open_world();
+        let eye = I64Vec3::new(0, 520, 0);
+        // stone in the chunk above the box, which roofs the chunk the box's top is in over
+        world.edit(I64Vec3::new(2, 570, 3), BlockType::Stone);
+        assert_eq!(ROOFED, roof_over(&world, eye, I64Vec2::new(2, 3)));
+        assert_eq!(OPEN, roof_over(&world, eye, I64Vec2::new(3, 3)));
+    }
+
+    #[test]
+    fn test_the_particle_setting_sets_how_much_is_drawn() {
+        assert_eq!(0.0, Particles::Off.density());
+        assert!(Particles::Low.density() > 0.0 && Particles::Low.density() < 0.5);
+        assert_eq!(1.0, Particles::High.density());
+        assert_eq!(Particles::High, Particles::default());
+    }
 }

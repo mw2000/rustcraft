@@ -467,6 +467,7 @@ type Thinking<'a> = (
 pub(super) fn think(
     time: Res<Time>,
     clock: Res<crate::clock::TimeOfDay>,
+    weather: Res<crate::weather::Weather>,
     world: Res<World>,
     players: Players,
     dins: Query<&Din>,
@@ -484,6 +485,8 @@ pub(super) fn think(
         .map(|change| change.message.block.as_vec3() + Vec3::splat(0.5))
         .collect();
     clatter.dedup();
+    // villagers go home out of a storm
+    let storm = weather.is_stormy(*clock);
     // monsters, which villagers run from, and villagers players are trading with
     let monsters: Vec<Vec3> = creatures
         .iter()
@@ -702,8 +705,9 @@ pub(super) fn think(
                         .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
                         .map(|&from| Doing::Flee { from }),
                 },
-                Behaviour::Routine => townsfolk
-                    .map(|townsfolk| Doing::Keep(place_now(townsfolk.0.villager.seed, &clock))),
+                Behaviour::Routine => townsfolk.map(|townsfolk| {
+                    Doing::Keep(place_now(townsfolk.0.villager.seed, &clock, storm))
+                }),
                 // still hanging, with nothing else to do
                 Behaviour::Wander if stance.clinging => Some(Doing::Cling),
                 Behaviour::Wander => Some(match mind.doing {

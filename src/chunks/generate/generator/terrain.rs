@@ -35,7 +35,7 @@ pub(super) const SNOW_LINE: i64 = 220;
 pub(super) const SNOW_LINE_PER_DEGREE: f64 = 800.0;
 
 // At or above this temperature it's too hot for snow, and the heights are bare rock.
-pub(super) const SNOW_MAX_TEMPERATURE: f32 = 0.62;
+pub const SNOW_MAX_TEMPERATURE: f32 = 0.62;
 
 // Below this temperature even the grass is under a layer of snow.
 pub const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
@@ -73,7 +73,7 @@ pub(super) fn freeze_cell(
 }
 
 // Height above the sea where snow starts to settle, lower in the cold.
-pub(super) fn snow_line(temperature: f32) -> i64 {
+pub fn snow_line(temperature: f32) -> i64 {
     (SNOW_LINE as f64 + (temperature as f64 - 0.5) * SNOW_LINE_PER_DEGREE)
         .max(COLDEST_SNOW_LINE as f64) as i64
 }

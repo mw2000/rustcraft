@@ -20,7 +20,7 @@ use crate::client::models::SkinPreview;
 use crate::client::player::OwnSkin;
 use crate::controls::{Action, Binding, Bindings};
 use crate::preferences::{
-    redraw_for_settings, skins_dir, Crosshair, Preferences, Preset, SkinSettings,
+    redraw_for_settings, skins_dir, Crosshair, Particles, Preferences, Preset, SkinSettings,
 };
 use crate::skin::{default_skin, read_skin, ArmStyle, DEFAULT_SKINS};
 
@@ -86,6 +86,7 @@ enum Setting {
     Shadows,
     Clouds,
     AmbientLife,
+    RainAndSnow,
     Sensitivity,
     InvertY,
     Master,
@@ -185,6 +186,7 @@ impl Setting {
             Setting::Shadows => ("Shadows", on_off(p.video.shadows)),
             Setting::Clouds => ("Clouds", on_off(p.video.clouds)),
             Setting::AmbientLife => ("Ambient Life", on_off(p.video.ambient_life)),
+            Setting::RainAndSnow => ("Rain and Snow", p.video.particles.label()),
             Setting::InvertY => ("Invert Mouse", on_off(p.controls.invert_y)),
             Setting::HurtTilt => ("Hurt Tilt", on_off(p.accessibility.hurt_tilt)),
             Setting::LargerText => ("Larger Text", on_off(p.accessibility.larger_text)),
@@ -217,6 +219,13 @@ impl Setting {
             Setting::Shadows => toggle(&mut p.video.shadows),
             Setting::Clouds => toggle(&mut p.video.clouds),
             Setting::AmbientLife => toggle(&mut p.video.ambient_life),
+            Setting::RainAndSnow => {
+                let at = Particles::ALL
+                    .iter()
+                    .position(|&c| c == p.video.particles)
+                    .unwrap_or(0);
+                p.video.particles = Particles::ALL[(at + 1) % Particles::ALL.len()];
+            }
             Setting::InvertY => toggle(&mut p.controls.invert_y),
             Setting::HurtTilt => toggle(&mut p.accessibility.hurt_tilt),
             Setting::LargerText => toggle(&mut p.accessibility.larger_text),
@@ -368,7 +377,14 @@ fn video(page: &mut ChildSpawnerCommands, p: &Preferences) {
         page,
         p,
         &[
-            &[Preset, RenderDistance, FullDetail, FieldOfView, UiScale],
+            &[
+                Preset,
+                RenderDistance,
+                FullDetail,
+                FieldOfView,
+                UiScale,
+                RainAndSnow,
+            ],
             &[FrameCap, Fullscreen, Vsync, Shadows, Clouds, AmbientLife],
         ],
     );

@@ -81,6 +81,39 @@ pub struct Video {
     pub clouds: bool,
     /// Butterflies, fireflies and birds about the world, see `client::critters`.
     pub ambient_life: bool,
+    /// How much rain and snow is drawn falling round the camera, see `weather::look`.
+    pub particles: Particles,
+}
+
+/// How much falling rain and snow is drawn: none, a third of it, or all of it.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Particles {
+    Off,
+    Low,
+    #[default]
+    High,
+}
+
+impl Particles {
+    pub const ALL: [Particles; 3] = [Particles::Off, Particles::Low, Particles::High];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Particles::Off => "Off",
+            Particles::Low => "Low",
+            Particles::High => "High",
+        }
+    }
+
+    /// How much of the rain or snow falling is drawn, 0 to 1.
+    pub fn density(self) -> f32 {
+        match self {
+            Particles::Off => 0.0,
+            Particles::Low => 0.35,
+            Particles::High => 1.0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -194,6 +227,7 @@ impl Preferences {
                 shadows: true,
                 clouds: true,
                 ambient_life: true,
+                particles: Particles::default(),
             },
             controls: ControlSettings {
                 sensitivity: 1.0,
@@ -511,6 +545,7 @@ mod tests {
             .bindings
             .set(Action::Jump, Binding::Key(KeyCode::KeyJ));
         changed.accessibility.crosshair = Crosshair::Dot;
+        changed.video.particles = Particles::Low;
         changed.write(&file).unwrap();
         assert_eq!(changed, Preferences::read(&file, defaults.clone()));
         assert_eq!(256, changed.renderer(renderer).render_distance);

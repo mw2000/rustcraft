@@ -1,4 +1,5 @@
 use bevy::ecs::resource::Resource;
+use bevy::math::Vec3;
 
 /// Seconds in a game day.
 pub const DAY_SECONDS: f32 = 600.0;
@@ -15,6 +16,23 @@ pub const START_TIME: f64 = 0.4;
 const DUSK: u64 = DAY_TICKS * 74 / 100;
 const DAWN: u64 = DAY_TICKS * 24 / 100;
 const MORNING: u64 = DAY_TICKS * 26 / 100;
+
+/// Where the sun is at noon: its path across the sky is the great circle through this and the
+/// horizon, see `sky::path_basis`.
+pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
+
+/// How high the sun is `days` through the day, from -1 straight down to 1 straight up, as
+/// `sky::sun_direction` has it: its path rises to `SUN_DIRECTION` at noon and crosses the
+/// horizon at 0.25 and 0.75. For what the server decides by daylight, which has no sky.
+pub fn sun_height(days: f32) -> f32 {
+    SUN_DIRECTION.normalize().y * (std::f32::consts::TAU * (days.fract() - 0.25)).sin()
+}
+
+/// How much it's day `days` through the day, from 0 at night to 1 once the sun's well up, for
+/// what's about by day.
+pub fn daylight(days: f32) -> f32 {
+    ((sun_height(days) + 0.05) / 0.25).clamp(0.0, 1.0)
+}
 
 /// The time in ticks since midnight of day 0, see `TICKS_PER_SECOND`, `DAY_TICKS` and
 /// `START_TIME`. The server runs it (`server::run_clock`) and clients keep to it

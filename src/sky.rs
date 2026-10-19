@@ -20,14 +20,13 @@ use bevy::{
 
 use std::f32::consts::{PI, TAU};
 
+pub use crate::clock::SUN_DIRECTION;
 use crate::clock::{SubTick, TimeOfDay, START_TIME};
 use crate::curvature::WORLD_CURVE;
 
 /// How opaque fog gets at its far end.
 pub const FOG_MAX_OPACITY: f32 = 0.8;
 
-/// Where the sun is at noon: its path across the sky is the great circle through this and the horizon, see `path_basis`.
-pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
 // How far past opposite the sun the moon rides, in radians, which keeps it nearly full.
 const MOON_LAG: f32 = 0.5;
 /// Warm, to stand out against the cool light from the sky.
@@ -254,6 +253,14 @@ mod tests {
         for time in [0.0, 0.1, 0.3, 0.6, 0.9] {
             assert!((sun_direction(time).length() - 1.0).abs() < 1e-5);
             assert!((moon_direction(time).length() - 1.0).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn test_the_server_knows_how_high_the_sun_is_as_the_sky_has_it() {
+        for time in [0.0, 0.1, 0.25, 0.3, 0.5, 0.74, 0.9] {
+            let height = crate::clock::sun_height(time);
+            assert!((height - sun_direction(time).y).abs() < 1e-5, "{time}");
         }
     }
 

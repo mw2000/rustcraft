@@ -80,6 +80,7 @@ fn field_of(seed: u32, surface: BlockType, centre: I64Vec3) -> App {
         .insert_resource(SpawnRate(None))
         .init_resource::<Dormant>()
         .init_resource::<Spawners>()
+        .init_resource::<crate::weather::Weather>()
         .init_resource::<Blows>()
         .add_message::<FromClient<HitCreature>>()
         .add_message::<FromClient<UseCreature>>()

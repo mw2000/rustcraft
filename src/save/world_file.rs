@@ -12,13 +12,15 @@ use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
 use crate::skin::{ArmStyle, Skin};
 use crate::survival::{SpawnBed, Vitals};
+use crate::weather::Weather;
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 /// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), format 3 added
 /// containers to the region files (M1.6), format 4 crops (M1.9b) and format 5 blocks' states
-/// (M2.4a), format 6 crops' planting times as `f64`s (M-R1) and format 7 the time and crops'
-/// planting times in whole ticks (U-84), each reading the files before it as they were.
-pub const FORMAT_VERSION: u32 = 7;
+/// (M2.4a), format 6 crops' planting times as `f64`s (M-R1), format 7 the time and crops'
+/// planting times in whole ticks (U-84) and format 8 the weather (M3.5), each reading the files
+/// before it as they were.
+pub const FORMAT_VERSION: u32 = 8;
 // The first format to count the time in ticks rather than days.
 const TICKS_FORMAT: i64 = 7;
 
@@ -44,6 +46,10 @@ pub struct WorldFile {
     /// are gone (M3.4); older games ignore it, finding no villagers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub settled: Vec<[i64; 2]>,
+    /// The weather's spell, which worlds saved before format 8 had none of: they start the
+    /// seed's first spell as they open.
+    #[serde(default)]
+    pub weather: Option<Weather>,
     /// The host's player, once they've played in it, the only one saved until M0.6.
     pub player: Option<PlayerState>,
 }
@@ -195,6 +201,7 @@ impl WorldFile {
             ops: Vec::new(),
             new_player_mode: GameMode::default(),
             settled: Vec::new(),
+            weather: None,
             player: None,
         }
     }
@@ -313,7 +320,7 @@ mod tests {
         let ticks = WorldFile::new(1, TimeOfDay(0)).to_toml();
         let in_days = |format: u32, days: &str| {
             let text = ticks
-                .replace("format = 7", &format!("format = {format}"))
+                .replace("format = 8", &format!("format = {format}"))
                 .replace("time = 0", &format!("time_of_day = {days}"));
             WorldFile::from_toml(&text).map(|file| file.time)
         };
@@ -325,7 +332,7 @@ mod tests {
         // and once saved again, it's in ticks
         let file = WorldFile::from_toml(
             &ticks
-                .replace("format = 7", "format = 6")
+                .replace("format = 8", "format = 6")
                 .replace("time = 0", "time_of_day = 12.75"),
         )
         .unwrap();
@@ -337,6 +344,22 @@ mod tests {
         assert!(again.contains("time = 153000") && !again.contains("time_of_day"));
         // but a format 7 file in days is damaged
         assert!(in_days(7, "12.75").is_err());
+    }
+
+    #[test]
+    fn test_the_weather_is_saved_and_a_format_7_world_has_none_yet() {
+        use crate::weather::{Sky, Weather};
+        let mut file = WorldFile::new(9, TimeOfDay(4_800));
+        let mut weather = Weather::new(9, TimeOfDay(4_800));
+        weather.set(Sky::Storm, TimeOfDay(5_000), Some(100.0));
+        file.weather = Some(weather);
+        let text = file.to_toml();
+        assert!(text.contains("[weather]"), "{text}");
+        assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+        let format_7 = WorldFile::new(9, TimeOfDay(4_800))
+            .to_toml()
+            .replace("format = 8", "format = 7");
+        assert_eq!(None, WorldFile::from_toml(&format_7).unwrap().weather);
     }
 
     #[test]

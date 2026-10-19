@@ -2240,3 +2240,30 @@ fn test_a_joiner_trades_with_a_villager_and_is_refused_without_payment() {
     });
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn test_everyone_has_the_servers_weather_which_only_operators_change() {
+    use rustcraft::weather::Weather;
+    let dir = temp_dir("weather");
+    let mut gathering = Gathering::new(&dir, &["guest"], false);
+    let weather =
+        |gathering: &Gathering, app: usize| *gathering.apps[app].world().resource::<Weather>();
+    // told it as they joined: the seed's first spell, from when the world opened
+    gathering.update_until(|gathering| weather(gathering, 1) == weather(gathering, 0));
+    assert_eq!(0, weather(&gathering, 1).spell);
+
+    gathering.run(1, "/weather storm");
+    assert!(gathering.answer(1).contains("permission"));
+    assert_eq!(0.0, weather(&gathering, 0).to);
+    gathering.run(0, "/weather storm 300");
+    assert_eq!("The weather's turning to storm", gathering.answer(0));
+    gathering.update_until(|gathering| {
+        let (host, guest) = (weather(gathering, 0), weather(gathering, 1));
+        host == guest && host.to > 0.6
+    });
+    // and the guest's rain is the server's, worked out from its clock
+    let clock = *gathering.apps[0].world().resource::<TimeOfDay>();
+    let later = TimeOfDay(clock.0 + 400);
+    assert!(weather(&gathering, 1).is_stormy(later));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

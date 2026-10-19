@@ -18,7 +18,8 @@ Then read the PNG. Off NixOS, install Xvfb, ImageMagick and Mesa's Vulkan driver
 (`mesa-vulkan-drivers` on Debian/Ubuntu) and run the same `xvfb-run` line without `nix-shell`.
 
 - `RC_WORLD` skips the title screen into that world; `RC_SEED` picks a new world's seed;
-  `RC_TIME` sets the time of day in days (0 midnight, 0.5 noon). The world is made under the
+  `RC_TIME` sets the time of day in days (0 midnight, 0.5 noon). `RC_WEATHER` (`clear`, `rain` or
+  `storm`) opens the world in that weather, which takes about 12 s to come on. The world is made under the
   screenshot's own folder (`XDG_DATA_HOME`), never the player's.
 - `BEVY_ASSET_ROOT` must be the repo when running `target/release/rustcraft` directly, or Bevy
   can't find its shaders and the world draws as a flat tan plane.

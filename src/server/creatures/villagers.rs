@@ -97,10 +97,13 @@ pub fn townsperson(settler: Settler) -> impl Bundle {
     )
 }
 
-/// Where a villager with `seed` is at `time`: at home from dusk to just after dawn, at the well
-/// at noon and in the evening, and otherwise at work, each a little earlier or later than the
-/// others, so they don't all set off at once.
-pub fn place_now(seed: u64, time: &TimeOfDay) -> Place {
+/// Where a villager with `seed` is at `time`: at home from dusk to just after dawn, or out of
+/// a `storm`, at the well at noon and in the evening, and otherwise at work, each a little
+/// earlier or later than the others, so they don't all set off at once.
+pub fn place_now(seed: u64, time: &TimeOfDay, storm: bool) -> Place {
+    if storm {
+        return Place::Home;
+    }
     let early = (seed >> 20) % 1000;
     let t = f64::from(time.days()) + early as f64 / 1000.0 * 0.04 - 0.02;
     match t {

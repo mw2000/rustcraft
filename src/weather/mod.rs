@@ -8,6 +8,11 @@
 //! are told each spell as it starts (`WeatherSync`) and work out how far its rain has got from
 //! their own clock, as the server does. How it looks and sounds is the client's (`look`, and the
 //! rain and thunder in `client::sound`).
+//!
+//! On top of upstream's: what falls goes by the climate where it falls (`precipitation`), snow
+//! where it's cold and little in deserts; an operator can set the weather (`/weather`, `set`);
+//! beds can be slept in through a storm, which waking clears (`wake`); and a storm's gloom
+//! counts as dark for monsters round dusk and dawn (`is_dark_out`).
 
 #[cfg(feature = "client")]
 pub mod look;
@@ -15,8 +20,12 @@ pub mod look;
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
+use crate::chunks::generate::biome::Climate;
+use crate::chunks::generate::generator::{
+    snow_line, SNOWY_GRASS_TEMPERATURE, SNOW_MAX_TEMPERATURE,
+};
 use crate::chunks::generate::trees::hash;
-use crate::clock::{TimeOfDay, TICKS_PER_SECOND};
+use crate::clock::{daylight, TimeOfDay, TICKS_PER_SECOND};
 
 // The first storm comes a game day after the world's made, in the same part of the day, so
 // the sun's still up for a rainbow after it; later ones come and go at random, well apart. How
@@ -38,6 +47,59 @@ const RAINBOW_RAIN: f32 = 0.15;
 pub const STRIKE_RAIN: f32 = 0.6;
 // What the seed's spells are rolled with, so they aren't the same rolls as anything else's.
 const SALT: u64 = 0x0057_4541_5448_4552;
+// How hard `/weather rain` and `/weather storm` set it raining: a shower under the lightning's
+// `STRIKE_RAIN`, and a storm's.
+const SHOWER_RAIN: f32 = 0.45;
+const SET_STORM_RAIN: f32 = 0.9;
+/// How much of the sun's and moon's light gets through the clouds in the heaviest rain.
+pub const STORM_LIGHT: f32 = 0.3;
+// How little daylight, through the clouds, counts as dark for monsters under the sky, as night
+// does: in the heaviest storm, the hour or so either side of night.
+const DARK_DAYLIGHT: f32 = 0.35;
+// How much of the rain still falls in the driest deserts, and the humidity under which hot lands
+// get less, down to that below the first.
+const DESERT_RAIN: f32 = 0.3;
+const DRY: (f32, f32) = (0.25, 0.42);
+// The temperature over which dry lands are deserts, rather than cold lands, which snow.
+const HOT: (f32, f32) = (0.45, 0.6);
+// How far below the snow line snow starts falling instead of rain, in blocks.
+const SLEET_BAND: f32 = 30.0;
+
+/// What `/weather` sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sky {
+    Clear,
+    /// Rain, under the lightning's.
+    Rain,
+    /// Rain with lightning and thunder.
+    Storm,
+}
+
+impl Sky {
+    pub const ALL: [Sky; 3] = [Sky::Clear, Sky::Rain, Sky::Storm];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Sky::Clear => "clear",
+            Sky::Rain => "rain",
+            Sky::Storm => "storm",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|sky| sky.name() == name)
+    }
+
+    // How hard it rains, and how long it lasts unless it's said, in seconds: as long as the
+    // seed's spells of it last at most.
+    fn spell(self) -> (f32, f64) {
+        match self {
+            Sky::Clear => (0.0, CLEAR_SECONDS.1),
+            Sky::Rain => (SHOWER_RAIN, STORM_SECONDS.1),
+            Sky::Storm => (SET_STORM_RAIN, STORM_SECONDS.1),
+        }
+    }
+}
 
 /// The world's weather: the spell it's in, from tick `since` to `until`, in which the rain eases
 /// from `from` toward `to`, 0 for a clear spell. Clear and stormy spells come in turn, each
@@ -109,9 +171,42 @@ impl Weather {
         rising.min(going).clamp(0.0, 1.0) as f32
     }
 
-    /// Whether it's raining hard enough at `now` for lightning: a storm.
+    /// Whether it's raining hard enough at `now` for lightning: a storm, which beds can be
+    /// slept through as nights can.
     pub fn is_stormy(&self, now: TimeOfDay) -> bool {
         self.rain(now) > STRIKE_RAIN
+    }
+
+    /// How much of the sun's and moon's light gets through the clouds at `now`, 0 to 1.
+    pub fn shade(&self, now: TimeOfDay) -> f32 {
+        1.0 - (1.0 - STORM_LIGHT) * self.rain(now)
+    }
+
+    /// Turns the weather to `sky` from `now`, for `seconds` or the longest of the seed's spells
+    /// of it, easing from how it is; then the seed's spells go on, the next of the other kind.
+    pub fn set(&mut self, sky: Sky, now: TimeOfDay, seconds: Option<f64>) {
+        let (to, longest) = sky.spell();
+        let rain = self.rain(now);
+        *self = Self {
+            spell: self.spell,
+            since: now.0,
+            until: now.0.saturating_add(ticks(seconds.unwrap_or(longest))),
+            from: rain,
+            to,
+            after_rain: to == 0.0 && (rain > RAINBOW_RAIN || self.to > 0.0),
+        };
+    }
+
+    /// Wakes sleepers at `now` to a clear sky, if it was raining, with a rainbow if the sun's
+    /// up: sleeping skips a storm as it does the night.
+    pub fn wake(&mut self, now: TimeOfDay) {
+        if self.to == 0.0 && self.rain(now) <= RAINBOW_RAIN {
+            return;
+        }
+        self.set(Sky::Clear, now, None);
+        // the rain's over while they slept
+        self.from = 0.0;
+        self.after_rain = true;
     }
 
     /// Moves on to the seed's next spells, as many as have ended by `now`, each starting as the
@@ -150,6 +245,65 @@ impl Weather {
     fn seconds_in(&self, now: TimeOfDay) -> f64 {
         now.0.saturating_sub(self.since) as f64 / TICKS_PER_SECOND as f64
     }
+}
+
+/// Whether it's dark enough under the sky at `now` for monsters: at night, as ever, and in a
+/// storm's gloom while the sun's low, which in the heaviest is the hour or so either side.
+pub fn is_dark_out(now: TimeOfDay, weather: &Weather) -> bool {
+    now.is_night() || daylight(now.days()) * weather.shade(now) < DARK_DAYLIGHT
+}
+
+/// What falls, each from 0 to 1.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Precipitation {
+    pub rain: f32,
+    pub snow: f32,
+}
+
+impl Precipitation {
+    pub fn total(self) -> f32 {
+        self.rain + self.snow
+    }
+}
+
+/// What falls of rain `rain` hard, 0 to 1, where the climate is `climate`, `above_sea` blocks
+/// up: snow where it's cold enough for snow to lie, as generation has it (the snowy grass of
+/// the taiga and glaciers, and the heights above the snow line), rain elsewhere, and in hot,
+/// dry lands only a little of either.
+pub fn precipitation(rain: f32, climate: Climate, above_sea: f32) -> Precipitation {
+    let wet = smoothstep(DRY.0, DRY.1, climate.humidity);
+    let hot = smoothstep(HOT.0, HOT.1, climate.temperature);
+    let wet = 1.0 - hot * (1.0 - wet);
+    let falling = rain * (wet + (1.0 - wet) * DESERT_RAIN);
+    let snow = snowing(climate.temperature, above_sea);
+    Precipitation {
+        rain: falling * (1.0 - snow),
+        snow: falling * snow,
+    }
+}
+
+// How much of what falls is snow, 0 to 1, at `temperature` `above_sea` blocks up: all of it
+// where even the grass is under snow, and on the heights above the snow line, which it turns to
+// over the band below.
+fn snowing(temperature: f32, above_sea: f32) -> f32 {
+    let cold = 1.0
+        - smoothstep(
+            SNOWY_GRASS_TEMPERATURE - 0.03,
+            SNOWY_GRASS_TEMPERATURE + 0.03,
+            temperature,
+        );
+    let high = if temperature < SNOW_MAX_TEMPERATURE {
+        let line = snow_line(temperature) as f32;
+        smoothstep(line - SLEET_BAND, line, above_sea)
+    } else {
+        0.0
+    };
+    cold.max(high)
+}
+
+fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 // Whether the seed's spell `n` is a storm: every other one, from the second.
@@ -293,6 +447,99 @@ mod tests {
         assert_eq!(0.0, weather.rainbow(TimeOfDay(10_000)));
         let clear = Weather::new(SEED, TimeOfDay(0));
         assert_eq!(0.0, clear.rainbow(TimeOfDay(200)));
+    }
+
+    #[test]
+    fn test_an_operators_weather_eases_in_and_the_seeds_go_on_after() {
+        let mut weather = Weather::new(SEED, TimeOfDay(0));
+        weather.set(Sky::Storm, TimeOfDay(100), Some(60.0));
+        assert_eq!(
+            (0, 100, 1_300),
+            (weather.spell, weather.since, weather.until)
+        );
+        assert_eq!(0.0, weather.rain(TimeOfDay(100)));
+        assert!(weather.is_stormy(TimeOfDay(1_000)));
+        // a shower never lightens
+        let mut shower = weather;
+        shower.set(Sky::Rain, TimeOfDay(1_000), None);
+        assert!(!shower.is_stormy(TimeOfDay(5_000)) && shower.rain(TimeOfDay(5_000)) > 0.4);
+        // after the storm the seed's next clear spell, and a rainbow
+        weather.run(SEED, TimeOfDay(1_300));
+        assert_eq!((2, 0.0), (weather.spell, weather.to));
+        assert!(weather.rainbow(TimeOfDay(1_300 + ticks(30.0))) > 0.9);
+        // clearing a storm leaves a rainbow, and the seed's next storm comes after
+        let mut cleared = Weather::new(SEED, TimeOfDay(0));
+        cleared.run(SEED, TimeOfDay(cleared.until + 400));
+        assert_eq!(1, cleared.spell);
+        cleared.set(Sky::Clear, TimeOfDay(cleared.until - 1), Some(10.0));
+        assert!(cleared.after_rain);
+        cleared.run(SEED, TimeOfDay(cleared.until));
+        assert_eq!(3, cleared.spell);
+        assert!(cleared.to >= STORM_RAIN.0);
+        for sky in Sky::ALL {
+            assert_eq!(Some(sky), Sky::from_name(sky.name()));
+        }
+        assert_eq!(None, Sky::from_name("hail"));
+    }
+
+    #[test]
+    fn test_waking_clears_rain_and_storms_but_leaves_a_clear_sky_alone() {
+        let mut weather = Weather::new(SEED, TimeOfDay(0));
+        weather.set(Sky::Storm, TimeOfDay(100), None);
+        let woke = TimeOfDay(2_000);
+        weather.wake(woke);
+        assert_eq!((0.0, 0.0), (weather.to, weather.rain(woke)));
+        assert!(weather.rainbow(TimeOfDay(2_000 + ticks(20.0))) > 0.9);
+        let clear = Weather::new(SEED, TimeOfDay(0));
+        let mut woken = clear;
+        woken.wake(TimeOfDay(50));
+        assert_eq!(clear, woken);
+    }
+
+    #[test]
+    fn test_a_storms_gloom_is_dark_round_dusk_but_not_at_noon() {
+        let clear = Weather::new(SEED, TimeOfDay(0));
+        let mut storm = clear;
+        storm.set(Sky::Storm, TimeOfDay(0), Some(1e9));
+        let at = |days: f64| TimeOfDay::from_days(days);
+        let late = at(10.72);
+        assert!(!is_dark_out(late, &clear) && is_dark_out(late, &storm));
+        let noon = at(10.5);
+        assert!(!is_dark_out(noon, &clear) && !is_dark_out(noon, &storm));
+        for night in [10.0, 10.9] {
+            assert!(is_dark_out(at(night), &clear));
+        }
+        // and only modestly: an hour or so of game time either side, not the afternoon
+        assert!(!is_dark_out(at(10.62), &storm));
+    }
+
+    fn climate(temperature: f32, humidity: f32) -> Climate {
+        Climate {
+            temperature,
+            humidity,
+        }
+    }
+
+    #[test]
+    fn test_snow_falls_in_the_cold_and_up_high_and_deserts_get_little_rain() {
+        let meadow = precipitation(0.9, climate(0.5, 0.5), 10.0);
+        assert_eq!((0.9, 0.0), (meadow.rain, meadow.snow));
+        // the taiga's snowy half and glaciers
+        for temperature in [0.05, 0.2] {
+            let cold = precipitation(0.9, climate(temperature, 0.5), 10.0);
+            assert_eq!((0.0, 0.9), (cold.rain, cold.snow), "{temperature}");
+        }
+        // on a temperate mountain above the snow line, and rain lower down it
+        let line = snow_line(0.5) as f32;
+        assert_eq!(0.0, precipitation(0.9, climate(0.5, 0.5), line + 5.0).rain);
+        assert_eq!(0.0, precipitation(0.9, climate(0.5, 0.5), line - 40.0).snow);
+        // too hot for snow however high
+        assert_eq!(0.0, precipitation(0.9, climate(0.7, 0.5), 600.0).snow);
+        let desert = precipitation(0.9, climate(0.9, 0.1), 10.0);
+        assert!(desert.snow == 0.0 && desert.rain > 0.0 && desert.rain < 0.3);
+        // a cold, dry land isn't a desert: it snows
+        assert_eq!(0.9, precipitation(0.9, climate(0.1, 0.1), 10.0).snow);
+        assert_eq!(0.0, precipitation(0.0, climate(0.1, 0.5), 0.0).total());
     }
 
     #[test]

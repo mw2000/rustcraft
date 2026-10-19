@@ -552,6 +552,7 @@ struct Savable<'w, 's> {
     containers: ResMut<'w, Containers>,
     crops: ResMut<'w, Crops>,
     clock: Res<'w, TimeOfDay>,
+    weather: Option<Res<'w, crate::weather::Weather>>,
     operators: Res<'w, Operators>,
     dormant: Option<Res<'w, Dormant>>,
     creatures: Query<
@@ -589,6 +590,7 @@ impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
         let mut file = WorldFile::new(self.world.seed(), *self.clock);
         file.ops = self.operators.names().to_vec();
+        file.weather = self.weather.as_deref().copied();
         file.new_player_mode = save.new_player_mode;
         file.settled = self
             .settled

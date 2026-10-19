@@ -58,6 +58,7 @@ fn village(time: f64) -> (App, Arc<Village>) {
         .init_resource::<Dormant>()
         .init_resource::<Spawners>()
         .init_resource::<Settled>()
+        .init_resource::<crate::weather::Weather>()
         .add_message::<FromClient<HitCreature>>()
         .add_message::<FromClient<UseCreature>>()
         .add_message::<FromClient<Trade>>()
@@ -206,6 +207,22 @@ fn test_villagers_go_to_work_by_day_through_their_doors_and_home_at_night() {
         .filter(|d| d.state.open())
         .count();
     assert_eq!(0, open, "doors left open");
+}
+
+#[test]
+fn test_villagers_go_home_out_of_a_storm() {
+    let (mut app, village) = village(0.5);
+    let now = TimeOfDay::from_days(0.5);
+    let mut storm = crate::weather::Weather::new(VILLAGE_SEED, now);
+    storm.set(crate::weather::Sky::Storm, TimeOfDay(0), Some(1e6));
+    app.insert_resource(storm);
+    settled(&mut app, &village);
+    run(&mut app, 80.0);
+    let (home, all) = at_place(&mut app, Place::Home, 2.0);
+    assert!(
+        home * 3 >= all * 2,
+        "{home} of {all} home at noon in a storm"
+    );
 }
 
 #[test]
