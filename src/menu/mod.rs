@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{observe, Activate};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 
+use crate::client::player::OwnSkin;
 use crate::controls::{Action, Bindings, Controls};
 use crate::preferences::Preferences;
 use crate::session;
@@ -144,6 +145,7 @@ impl Plugin for MenuPlugin {
             .init_resource::<Menu>()
             .init_resource::<Bindings>()
             .init_resource::<Preferences>()
+            .init_resource::<OwnSkin>()
             .add_plugins((TabNavigationPlugin, widgets::WidgetsPlugin))
             .add_systems(
                 Update,

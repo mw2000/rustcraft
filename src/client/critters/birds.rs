@@ -1,6 +1,7 @@
 //! Birds: a murmuration of starlings wheeling over open land at dusk, and by day now and then a
 //! skein of geese migrating high over in a V, every skein of a day the same way.
 
+use crate::client::player::WorldCamera;
 use bevy::{math::ops, prelude::*};
 use rand::RngExt;
 
@@ -150,7 +151,7 @@ fn gather_flock(
     mut dice: ResMut<CritterDice>,
     assets: Option<Res<BirdAssets>>,
     mut murmuration: ResMut<Murmuration>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     starlings: Query<Entity, With<Starling>>,
 ) {
     let (Some(assets), Some(camera)) = (assets, eye(&camera)) else {
@@ -250,7 +251,7 @@ fn flock(
     time: Res<Time>,
     world: Res<World>,
     mut murmuration: ResMut<Murmuration>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     mut starlings: Query<(&mut Starling, &mut Transform)>,
 ) {
     let Some(camera) = eye(&camera) else {
@@ -360,7 +361,7 @@ fn fly_geese(
     life: Res<AmbientLife>,
     mut dice: ResMut<CritterDice>,
     assets: Option<Res<BirdAssets>>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     mut geese: Query<(Entity, &mut Goose, &mut Transform)>,
     mut next: Local<Option<f32>>,
 ) {

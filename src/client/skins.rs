@@ -283,18 +283,18 @@ impl Wearing {
     }
 }
 
-/// The meshes players' models are drawn with, and the material of each skin worn, which every
+/// The meshes players' models are drawn with, and the materials of each skin worn, which every
 /// model wearing it shares.
 #[derive(Resource)]
 pub struct SkinLooks {
     pub meshes: SkinMeshes,
-    defaults: Vec<(Handle<ModelMaterial>, Handle<Image>)>,
-    own: HashMap<u64, (Handle<ModelMaterial>, Handle<Image>)>,
+    defaults: Vec<Dressed>,
+    own: HashMap<u64, Dressed>,
 }
 
 impl SkinLooks {
     /// How the player called `name` wearing `skin`, if they've one of their own, is drawn,
-    /// their skin's material made the first time it's worn.
+    /// their skin's materials made the first time it's worn.
     pub fn dress(
         &mut self,
         name: &PlayerName,
@@ -302,43 +302,49 @@ impl SkinLooks {
         images: &mut Assets<Image>,
         materials: &mut ModelMaterials,
     ) -> Dressed {
-        let ((material, image), arms) = match skin {
-            Some(skin) => {
-                let looks = self
-                    .own
-                    .entry(skin.hash())
-                    .or_insert_with(|| material(&skin.pixels(), images, materials));
-                (looks.clone(), skin.arms())
-            }
-            None => {
-                let index = default_skin(name);
-                (self.defaults[index].clone(), DEFAULT_SKINS[index].1)
-            }
-        };
-        Dressed {
-            wearing: Wearing::of(name, skin),
-            material,
-            image,
-            arms,
+        match skin {
+            Some(skin) => self
+                .own
+                .entry(skin.hash())
+                .or_insert_with(|| {
+                    let wearing = Wearing::Own(skin.hash());
+                    dressed(&skin.pixels(), wearing, skin.arms(), images, materials)
+                })
+                .clone(),
+            None => self.defaults[default_skin(name)].clone(),
         }
     }
 }
 
-/// How a player's drawn: what they wear, its material and picture, and their arms.
+/// How a player's drawn: what they wear, its picture and its materials, in the world and in
+/// view (the skin's preview), and their arms.
+#[derive(Clone)]
 pub struct Dressed {
     pub wearing: Wearing,
-    pub material: Handle<ModelMaterial>,
     pub image: Handle<Image>,
+    pub material: Handle<ModelMaterial>,
+    pub in_view: Handle<ModelMaterial>,
     pub arms: ArmStyle,
 }
 
-// A skin's picture, sharp as its pixels are, and the material drawing it, its overlay cut out
-// where it's clear.
-fn material(
+/// How a skin's picture is drawn, its overlay cut out where it's clear, in the world or in view.
+pub fn skin_look(image: &Handle<Image>, in_view: bool) -> ModelLook {
+    ModelLook {
+        texture: Some(image.clone()),
+        alpha_mode: AlphaMode::Mask(0.5),
+        in_view,
+        ..ModelLook::lit()
+    }
+}
+
+// A skin's picture, sharp as its pixels are, and its materials.
+fn dressed(
     pixels: &SkinPixels,
+    wearing: Wearing,
+    arms: ArmStyle,
     images: &mut Assets<Image>,
     materials: &mut ModelMaterials,
-) -> (Handle<ModelMaterial>, Handle<Image>) {
+) -> Dressed {
     let mut image = Image::new(
         Extent3d {
             width: SKIN_SIZE as u32,
@@ -352,12 +358,13 @@ fn material(
     );
     image.sampler = ImageSampler::nearest();
     let image = images.add(image);
-    let material = materials.add(ModelLook {
-        texture: Some(image.clone()),
-        alpha_mode: AlphaMode::Mask(0.5),
-        ..ModelLook::lit()
-    });
-    (material, image)
+    Dressed {
+        wearing,
+        material: materials.add(skin_look(&image, false)),
+        in_view: materials.add(skin_look(&image, true)),
+        image,
+        arms,
+    }
 }
 
 pub(super) fn load_skins(
@@ -368,13 +375,15 @@ pub(super) fn load_skins(
 ) {
     let defaults = DEFAULT_SKINS
         .iter()
-        .map(|(name, _)| {
+        .enumerate()
+        .map(|(index, &(name, arms))| {
             let path = crate::settings::asset_path(&format!("assets/textures/skins/{name}.png"));
             let bytes = std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
             let (pixels, _) =
                 decode(&bytes).unwrap_or_else(|e| panic!("{} isn't a skin: {e}", path.display()));
-            material(&pixels, &mut images, &mut materials)
+            let wearing = Wearing::Default(index);
+            dressed(&pixels, wearing, arms, &mut images, &mut materials)
         })
         .collect();
     commands.insert_resource(SkinLooks {

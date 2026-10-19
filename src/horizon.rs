@@ -1,9 +1,7 @@
+use crate::client::player::WorldCamera;
 use bevy::{
-    camera::{Camera3d, Projection},
-    ecs::{
-        query::With,
-        system::{Query, Res, ResMut},
-    },
+    camera::Projection,
+    ecs::system::{Query, Res, ResMut},
     math::FloatExt,
     pbr::{DistanceFog, FogFalloff},
     time::Time,
@@ -45,7 +43,7 @@ pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
 pub fn update_horizon(
     time: Res<Time>,
     mut lods: ResMut<LodLoader>,
-    mut camera: Query<(&GlobalTransform, &mut DistanceFog, &mut Projection), With<Camera3d>>,
+    mut camera: Query<(&GlobalTransform, &mut DistanceFog, &mut Projection), WorldCamera>,
 ) {
     let Ok((transform, mut fog, mut projection)) = camera.single_mut() else {
         return;

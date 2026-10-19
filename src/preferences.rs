@@ -2,6 +2,7 @@
 //! theirs under the data directory, over the defaults in `assets/settings.toml`, and applied as
 //! they're changed wherever that's possible.
 
+use crate::client::player::WorldCamera;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -10,13 +11,15 @@ use bevy::text::{RemSize, DEFAULT_REM_SIZE_PX};
 use bevy::window::{MonitorSelection, PresentMode, PrimaryWindow, WindowMode};
 use serde::{Deserialize, Serialize};
 
+use crate::client::player::OwnSkin;
 use crate::client::sound::volume::{Volumes, OLD_VOLUMES_FILE};
 use crate::clouds::CloudTile;
 use crate::controls::Bindings;
 use crate::menu::GameState;
 use crate::player::name::PlayerName;
-use crate::save::write_atomically;
+use crate::save::{data_dir, write_atomically};
 use crate::settings::{RendererSettings, Settings};
+use crate::skin::{read_skin, ArmStyle, Skin};
 use crate::sky::Sun;
 
 /// The file under the data directory the player's settings are kept in.
@@ -35,6 +38,7 @@ pub struct Preferences {
     pub controls: ControlSettings,
     pub audio: Volumes,
     pub accessibility: Accessibility,
+    pub skin: SkinSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -71,6 +75,19 @@ pub struct Accessibility {
     pub hurt_tilt: bool,
     pub larger_text: bool,
     pub crosshair: Crosshair,
+}
+
+/// The skin the player wears (M-A4): a PNG file of theirs, or none for the default their name
+/// gives them, and the arms it's drawn with.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SkinSettings {
+    pub file: String,
+    pub arms: ArmStyle,
+}
+
+/// Where the player can keep skins for the Skin settings to list.
+pub fn skins_dir() -> PathBuf {
+    data_dir().join("skins")
 }
 
 /// What marks the middle of the screen, where blocks are reached for.
@@ -166,6 +183,7 @@ impl Preferences {
                 larger_text: false,
                 crosshair: Crosshair::default(),
             },
+            skin: SkinSettings::default(),
         }
     }
 
@@ -267,12 +285,14 @@ impl Plugin for PreferencesPlugin {
         .insert_resource(preferences.controls.bindings.clone())
         .insert_resource(preferences.audio)
         .insert_resource(preferences)
+        .init_resource::<OwnSkin>()
         .add_systems(
             Update,
             (
                 (
                     follow_bindings,
                     follow_volumes,
+                    follow_skin,
                     apply_video,
                     save_preferences,
                 )
@@ -291,13 +311,45 @@ fn follow_volumes(preferences: Res<Preferences>, mut volumes: ResMut<Volumes>) {
     volumes.set_if_neq(preferences.audio);
 }
 
+// Wears the skin chosen as it changes, read from its file, or the default if it can't be.
+fn follow_skin(
+    preferences: Res<Preferences>,
+    mut own: ResMut<OwnSkin>,
+    mut worn: Local<Option<SkinSettings>>,
+) {
+    if worn.as_ref() == Some(&preferences.skin) {
+        return;
+    }
+    *worn = Some(preferences.skin.clone());
+    let chosen = &preferences.skin;
+    *own = if chosen.file.is_empty() {
+        OwnSkin::default()
+    } else {
+        let skin = read_skin(Path::new(&chosen.file))
+            .and_then(|(png, _)| Skin::new(png, chosen.arms).map_err(|error| error.to_string()));
+        match skin {
+            Ok(skin) => OwnSkin {
+                skin: Some(skin),
+                problem: None,
+            },
+            Err(error) => {
+                warn!("couldn't wear the skin in {}: {error}", chosen.file);
+                OwnSkin {
+                    skin: None,
+                    problem: Some(error),
+                }
+            }
+        }
+    };
+}
+
 /// Applies the video settings and the larger text, all but the renderer's distances, which
 /// `redraw_for_settings` does.
 #[allow(clippy::too_many_arguments)]
 fn apply_video(
     preferences: Res<Preferences>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    mut cameras: Query<&mut Projection, With<Camera3d>>,
+    mut cameras: Query<&mut Projection, WorldCamera>,
     mut suns: Query<&mut DirectionalLight, With<Sun>>,
     mut clouds: Query<&mut Visibility, With<CloudTile>>,
     mut ui_scale: ResMut<UiScale>,

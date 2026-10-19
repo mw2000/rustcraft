@@ -2,6 +2,7 @@
 //! a world, which the game's own terrain renderer draws (P1), nearer than in the game to keep the
 //! menus cheap.
 
+use crate::client::player::WorldCamera;
 use bevy::prelude::*;
 use bevy::ui_widgets::{observe, Activate};
 
@@ -105,7 +106,7 @@ pub(super) fn open(page: Page) -> impl FnMut(On<Activate>, ResMut<Menu>) {
 // Draws the scenery's world and hangs the camera over it.
 fn show_scenery(
     settings: Res<Settings>,
-    cameras: Query<Entity, With<Camera3d>>,
+    cameras: Query<Entity, WorldCamera>,
     mut commands: Commands,
 ) {
     let renderer = RendererSettings {

@@ -12,6 +12,7 @@ mod footsteps;
 mod surface;
 pub mod volume;
 
+use crate::client::player::WorldCamera;
 use bevy::audio::{PlaybackMode, SpatialListener, SpatialScale, Volume};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -272,7 +273,7 @@ struct OneShot(f32);
 // The camera's where the player hears from, once it's hung from them.
 fn listen_from_the_camera(
     mut commands: Commands,
-    cameras: Query<Entity, (With<Camera3d>, Added<ChildOf>)>,
+    cameras: Query<Entity, (WorldCamera, Added<ChildOf>)>,
 ) {
     for camera in &cameras {
         commands

@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::io::Cursor;
+use std::path::Path;
 use std::sync::Arc;
 
 use bevy::ecs::component::Component;
@@ -63,6 +64,14 @@ impl Skin {
 
     pub fn arms(&self) -> ArmStyle {
         self.arms
+    }
+
+    /// The same skin, drawn with `arms`.
+    pub fn with_arms(&self, arms: ArmStyle) -> Self {
+        Self {
+            arms,
+            ..self.clone()
+        }
     }
 
     /// What tells the file apart from others, for keeping one copy of each.
@@ -272,6 +281,20 @@ fn mirror_limb(skin: &mut SkinPixels, from: (usize, usize), to: (usize, usize)) 
             }
         }
     }
+}
+
+/// The skin in the file at `path`, and the arms its alpha says it's drawn for, or what's wrong
+/// with it. A file too big is refused before it's read.
+pub fn read_skin(path: &Path) -> Result<(Vec<u8>, ArmStyle), String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| error.to_string())?
+        .len();
+    if size > MAX_SKIN_BYTES as u64 {
+        return Err(SkinError::TooBig(size as usize).to_string());
+    }
+    let png = std::fs::read(path).map_err(|error| error.to_string())?;
+    let (_, arms) = decode(&png).map_err(|error| error.to_string())?;
+    Ok((png, arms))
 }
 
 /// Which of the `DEFAULT_SKINS` the player called `name` wears, the same everywhere.

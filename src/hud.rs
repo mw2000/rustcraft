@@ -5,6 +5,7 @@
 //! sleep, and the death screen. And eating, by holding
 //! right click with food selected, which the server times. And in any mode, the crosshair.
 
+use crate::client::player::WorldCamera;
 use std::f32::consts::{PI, TAU};
 
 use bevy::picking::Pickable;
@@ -422,7 +423,7 @@ fn flash_hurt(
     preferences: Res<Preferences>,
     player: Query<(&Vitals, Ref<Bruise>, &Transform, &PlayerLook), With<LocalPlayer>>,
     mut flash: Query<&mut BackgroundColor, With<HurtFlash>>,
-    mut cameras: Query<&mut Transform, (With<Camera3d>, Without<LocalPlayer>)>,
+    mut cameras: Query<&mut Transform, (WorldCamera, Without<LocalPlayer>)>,
     mut marks: Query<(&mut UiTransform, &mut Visibility, &Children), With<BlowMark>>,
     mut colours: Query<&mut BackgroundColor, Without<HurtFlash>>,
     mut last_health: Local<Option<u8>>,

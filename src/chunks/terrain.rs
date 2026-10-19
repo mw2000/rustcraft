@@ -1,3 +1,4 @@
+use crate::client::player::WorldCamera;
 use bevy::prelude::*;
 
 use super::chunk_loader::{
@@ -68,7 +69,7 @@ impl Plugin for TerrainPlugin {
     }
 }
 
-fn camera_placed(cameras: Query<(), (With<Camera>, With<ChildOf>)>) -> bool {
+fn camera_placed(cameras: Query<(), (WorldCamera, With<ChildOf>)>) -> bool {
     !cameras.is_empty()
 }
 

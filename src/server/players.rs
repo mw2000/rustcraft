@@ -25,9 +25,10 @@ use crate::player::physics::top_speed;
 use crate::player::{arriving, Movement, Player, PlayerLook, PlayerOwner, BODY};
 use crate::protocol::{
     name_from_user_data, CommandOutput, GameModeChanged, InventoryChanged, PlayerMoved, PlayerPose,
-    PlayerSwung, Swing, Teleport, Welcome,
+    PlayerSwung, SetSkin, Swing, Teleport, Welcome,
 };
 use crate::save::{PlayerState, WorldSave};
+use crate::skin::Skin;
 use crate::survival::{SpawnBed, Vitals};
 use crate::world::World;
 
@@ -47,16 +48,27 @@ pub struct HeldItem(pub Option<Item>);
 #[derive(Component, Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Worn(pub [Option<Item>; 4]);
 
-/// A player as the server spawns them, to everyone but their owner a replicated entity.
-pub(super) fn spawning(state: &PlayerState, owner: ClientId, name: PlayerName) -> impl Bundle {
-    (
+/// A player as the server spawns them, to everyone but their owner a replicated entity, in
+/// the skin they were saved wearing until their client tells it theirs.
+pub(super) fn spawn_player(
+    commands: &mut Commands,
+    save: &WorldSave,
+    state: &PlayerState,
+    owner: ClientId,
+    name: PlayerName,
+) -> Entity {
+    let mut player = commands.spawn((
         arriving(state),
         PlayerOwner(owner),
         name,
         HeldItem::default(),
         Worn::default(),
         Replicated,
-    )
+    ));
+    if let Some(skin) = save.skin(state) {
+        player.insert(skin);
+    }
+    player.id()
 }
 
 // A player's shown to every client but its owner's, which moves its own.
@@ -145,7 +157,8 @@ pub(super) fn welcome(
         at: time.elapsed(),
         teleports: 0,
     };
-    commands.spawn((spawning(&player, client, name.clone()), check));
+    let spawned = spawn_player(&mut commands, &save, &player, client, name.clone());
+    commands.entity(spawned).insert(check);
     commands
         .entity(authorized.entity)
         .insert(SyncedArea::default());
@@ -155,6 +168,7 @@ pub(super) fn welcome(
             seed: world.seed(),
             checksum: checksum.get(),
             player,
+            name: name.clone(),
             you: client,
         },
     });
@@ -174,6 +188,7 @@ type Leaving<'a> = (
     &'a Inventory,
     &'a Vitals,
     &'a SpawnBed,
+    Option<&'a Skin>,
 );
 
 /// Sees a client off as it disconnects: keeps its player's state to save, despawns them, which
@@ -191,12 +206,13 @@ pub(super) fn see_off(
     allowances.forget(client);
     chat.forget(client);
     let leaving = players.iter().find(|(_, owner, ..)| owner.0 == client);
-    if let Some((player, _, name, body, look, state, mode, hotbar, inventory, vitals, bed)) =
+    if let Some((player, _, name, body, look, state, mode, hotbar, inventory, vitals, bed, skin)) =
         leaving
     {
         let state = PlayerState::of(body, *look, state.movement, *mode, *hotbar, inventory)
-            .surviving(*vitals, *bed);
-        save.left(name, state);
+            .surviving(*vitals, *bed)
+            .wearing(skin);
+        save.left(name, state, skin);
         commands.entity(player).despawn();
         announce(&mut output, format!("{} left the game", name.as_str()));
         info!("{client} left");
@@ -351,6 +367,30 @@ pub(super) fn relay_swings(
             targets: SendTargets::AllExcept(client_id),
             message: PlayerSwung { player },
         });
+    }
+}
+
+/// Puts on each player the skin their client's chosen, which was checked as it was read, or
+/// takes theirs off for the default skin, and so shows it to everyone else.
+pub(super) fn receive_skins(
+    mut skins: MessageReader<FromClient<SetSkin>>,
+    players: Query<(Entity, &PlayerOwner, Option<&Skin>)>,
+    mut commands: Commands,
+) {
+    for FromClient { client_id, message } in skins.read() {
+        let Some((player, _, worn)) = players.iter().find(|(_, owner, _)| owner.0 == *client_id)
+        else {
+            continue;
+        };
+        match &message.0 {
+            Some(skin) if worn != Some(skin) => {
+                commands.entity(player).insert(skin.clone());
+            }
+            None if worn.is_some() => {
+                commands.entity(player).remove::<Skin>();
+            }
+            _ => {}
+        }
     }
 }
 

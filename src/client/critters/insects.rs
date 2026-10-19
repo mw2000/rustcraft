@@ -1,6 +1,7 @@
 //! Butterflies flitting over the flowers by day, and fireflies drifting and blinking by water and
 //! in the woods at night, round wherever the camera is near the ground. Both leave under water.
 
+use crate::client::player::WorldCamera;
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
@@ -275,7 +276,7 @@ fn spawn_insects(
     clock: Res<TimeOfDay>,
     life: Res<AmbientLife>,
     mut dice: ResMut<CritterDice>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     mut insects: Query<(Entity, &mut Insect, &Transform, Has<Butterfly>)>,
 ) {
     let (Some(assets), Some(camera)) = (assets, eye(&camera)) else {
@@ -409,7 +410,7 @@ fn fly_butterflies(
     time: Res<Time>,
     world: Res<World>,
     mut dice: ResMut<CritterDice>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     mut butterflies: Query<(&mut Insect, &mut Butterfly, &mut Transform)>,
 ) {
     let (t, dt) = (time.elapsed_secs(), time.delta_secs());

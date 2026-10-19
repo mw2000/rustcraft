@@ -1,3 +1,4 @@
+use crate::client::player::WorldCamera;
 use bevy::{
     asset::Asset,
     camera::visibility::NoFrustumCulling,
@@ -83,7 +84,7 @@ fn spawn_dome<M: Material + Default>(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<M>>,
-    camera: Query<Entity, With<Camera3d>>,
+    camera: Query<Entity, WorldCamera>,
 ) {
     let Ok(camera) = camera.single() else {
         return;

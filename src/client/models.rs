@@ -7,6 +7,9 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
+use bevy::app::{HierarchyPropagatePlugin, Propagate};
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{Hdr, RenderTarget};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
@@ -15,14 +18,17 @@ use super::animation::{self, arm_swing, breath, ease, ease_angle, stride_swing, 
 use super::drops::DropLooks;
 use super::model_light::{coloured, ModelLook, ModelMaterial, ModelMaterials};
 use super::others::{move_seen, ArmSwing, SeenPlayer};
+use super::player::{ModelCamera, OwnSkin, WorldCamera};
 use super::skins::{self, load_skins, Part, SkinLooks, Wearing, BODY, HEAD, LEGS, PIXEL};
 use crate::clouds::spawn_clouds;
 use crate::items::{Item, Piece};
 use crate::player::name::PlayerName;
 use crate::player::PlayerLook;
+use crate::preferences::Preferences;
 use crate::server::drops::SIZE;
 use crate::server::{HeldItem, Worn};
 use crate::skin::{ArmStyle, Skin};
+use crate::tonemap::TONEMAPPING;
 
 // Radians a block walked, and how far the legs swing at a walk, the arms a little less.
 const STRIDE: f32 = 2.2;
@@ -43,15 +49,36 @@ const LABEL_HEIGHT: f32 = 2.4;
 // boots and helmets a little more.
 const ARMOUR_GROW: f32 = 0.75;
 const BOOT_GROW: f32 = 1.0;
+// The skin's preview is drawn on a layer of its own, out of the way high over the world, so
+// it's lit as under the open sky, turning this many radians
+// a second, seen from in front and a little above with a narrow lens.
+const PREVIEW_LAYER: usize = 2;
+const PREVIEW_AT: Vec3 = Vec3::new(0.0, 100_000.0, 0.0);
+const PREVIEW_TURNING: f32 = 0.6;
+const PREVIEW_EYE: Vec3 = Vec3::new(0.0, 1.4, -6.0);
+const PREVIEW_FOV: f32 = 26.0;
 
 /// Draws other players. Needs the renderer, and `DrawDropsPlugin` for what they hold.
 pub struct DrawPlayersPlugin;
 
 impl Plugin for DrawPlayersPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<HierarchyPropagatePlugin<RenderLayers>>() {
+            app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate));
+        }
         app.add_systems(Startup, (load_skins, make_looks).after(spawn_clouds))
             .add_observer(draw_player)
-            .add_systems(Update, (walk.after(move_seen), dress, hold, wear))
+            .add_observer(draw_preview)
+            .add_systems(
+                Update,
+                (
+                    walk.after(move_seen),
+                    (follow_preview, dress).chain(),
+                    hold,
+                    wear,
+                    turn_previews,
+                ),
+            )
             // where the camera's moved to this frame
             .add_systems(PostUpdate, place_labels.after(TransformSystems::Propagate));
     }
@@ -116,6 +143,8 @@ struct Model {
     // the boxes of each piece of armour, in the order of the armour slots
     armour: [Vec<(Entity, Cover)>; 4],
     wearing: Option<Wearing>,
+    // drawn in view by a camera of its own, as the skin's preview is, rather than in the world
+    in_view: bool,
     stride: f32,
     swing: f32,
     last: Vec3,
@@ -240,12 +269,128 @@ fn spawn_model(
         held,
         armour,
         wearing: None,
+        in_view: false,
         stride: 0.0,
         swing: 0.0,
         last: Vec3::ZERO,
         yaw: None,
         look: Vec2::ZERO,
         seed: animation::hash(body.to_bits() as u32, 1).to_bits(),
+    }
+}
+
+/// A picture of the player's model in the skin they've chosen, turning slowly, for the Skin
+/// settings: on a UI node whose `ImageNode` it's drawn into, the model and what draws it going
+/// with it.
+#[derive(Component)]
+pub struct SkinPreview;
+
+// What draws a preview: a stand-in for the player, their model on a turntable and a camera, on
+// a layer of their own, the model lit in view (`ModelLook::in_view`).
+#[derive(Component)]
+#[relationship(relationship_target = Previewing)]
+struct PreviewOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PreviewOf, linked_spawn)]
+struct Previewing(Vec<Entity>);
+
+#[derive(Component)]
+struct StandIn;
+
+#[derive(Component)]
+struct Turntable;
+
+fn draw_preview(
+    add: On<Add<SkinPreview>>,
+    pictures: Query<&ImageNode>,
+    skins: Res<SkinLooks>,
+    looks: Res<PlayerLooks>,
+    mut commands: Commands,
+) {
+    let Ok(picture) = pictures.get(add.entity) else {
+        return;
+    };
+    let layer = RenderLayers::layer(PREVIEW_LAYER);
+    let of = || PreviewOf(add.entity);
+    // dressed as they are by `follow_preview`
+    let player = commands.spawn((of(), StandIn)).id();
+    let turntable = commands
+        .spawn((
+            of(),
+            Turntable,
+            Transform::from_translation(PREVIEW_AT),
+            Visibility::Visible,
+            Propagate(layer.clone()),
+        ))
+        .id();
+    let body = commands
+        .spawn((
+            Transform::default(),
+            Visibility::Inherited,
+            PlayerLook::default(),
+            ArmSwing::default(),
+            ChildOf(turntable),
+        ))
+        .id();
+    let model = spawn_model(body, player, &skins, &looks, &mut commands);
+    commands.entity(body).insert(Model {
+        in_view: true,
+        ..model
+    });
+    let middle = PREVIEW_AT + Vec3::Y;
+    commands.spawn((
+        of(),
+        Camera3d::default(),
+        Camera {
+            // before the world's, into the picture
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            ..default()
+        },
+        RenderTarget::Image(picture.image.clone().into()),
+        Projection::Perspective(PerspectiveProjection {
+            fov: PREVIEW_FOV.to_radians(),
+            ..default()
+        }),
+        Transform::from_translation(PREVIEW_AT + PREVIEW_EYE).looking_at(middle, Vec3::Y),
+        // toned as the world is, and with the fog the model's shaders declare, which it's never in
+        Hdr,
+        DistanceFog::default(),
+        TONEMAPPING,
+        ModelCamera,
+        layer,
+    ));
+}
+
+// Dresses each preview's stand-in as the player is: by the name they play under, in the skin
+// they've chosen.
+fn follow_preview(
+    own: Res<OwnSkin>,
+    preferences: Res<Preferences>,
+    stand_ins: Query<(Entity, Option<&Skin>, Ref<StandIn>)>,
+    mut commands: Commands,
+) {
+    for (stand_in, worn, new) in &stand_ins {
+        let mut stand_in = commands.entity(stand_in);
+        if new.is_added() || preferences.is_changed() {
+            stand_in.insert(preferences.player_name());
+        }
+        match &own.skin {
+            Some(skin) if worn != Some(skin) => {
+                stand_in.insert(skin.clone());
+            }
+            None if worn.is_some() => {
+                stand_in.remove::<Skin>();
+            }
+            _ => {}
+        }
+    }
+}
+
+fn turn_previews(time: Res<Time>, mut turntables: Query<&mut Transform, With<Turntable>>) {
+    for mut turntable in &mut turntables {
+        turntable.rotate_y(PREVIEW_TURNING * time.delta_secs());
     }
 }
 
@@ -269,6 +414,11 @@ fn dress(
         }
         let dressed = skins.dress(name, skin, &mut images, &mut materials);
         model.wearing = Some(dressed.wearing);
+        let material = if model.in_view {
+            dressed.in_view
+        } else {
+            dressed.material
+        };
         let arms = skins.meshes.arms(dressed.arms);
         let chestplate = worn.and_then(|worn| worn.0[Piece::Chestplate.slot()]);
         for (side, arm) in arms.iter().enumerate() {
@@ -287,7 +437,7 @@ fn dress(
         {
             commands
                 .entity(part)
-                .insert(MeshMaterial3d(dressed.material.clone()));
+                .insert(MeshMaterial3d(material.clone()));
         }
     }
 }
@@ -424,7 +574,7 @@ fn wear(
 // Places each name over its player's head where the camera sees it, hidden if it's behind the
 // camera or far off, and takes it away once they've gone.
 fn place_labels(
-    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    camera: Query<(&Camera, &GlobalTransform), WorldCamera>,
     seen: Query<(&GlobalTransform, &InheritedVisibility), With<SeenPlayer>>,
     mut labels: Query<(
         Entity,

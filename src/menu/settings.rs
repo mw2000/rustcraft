@@ -1,23 +1,37 @@
-//! Settings, in tabs: Video, Controls (with a key for every action), Audio and Accessibility.
-//! Each widget shows one of the player's `Preferences`, changes it as it's used, and follows it
-//! as anything else changes it, such as a preset.
+//! Settings, in tabs: Video, Controls (with a key for every action), Audio, Accessibility and
+//! Skin. Each widget shows one of the player's `Preferences`, changes it as it's used, and
+//! follows it as anything else changes it, such as a preset.
+
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
+use bevy::text::{EditableText, TextEdit};
 use bevy::ui::Selected;
 use bevy::ui_widgets::{observe, Activate, ValueChange};
 use bevy::ui_widgets::{SliderRange, SliderStep, SliderValue};
 
 use super::widgets::{
-    choice, choice_text, column, first, gap, heading, label, list, note, on_off, relabel, slider,
-    stepped, tab, text_button, ERROR_TEXT, WIDE,
+    choice, choice_text, column, first, gap, heading, label, list, list_row, note, on_off, relabel,
+    row, slider, stepped, tab, text_button, text_field, typed, ERROR_TEXT, QUIET_TEXT, WIDE,
 };
 use super::{back, Menu, Page};
+use crate::client::models::SkinPreview;
+use crate::client::player::OwnSkin;
 use crate::controls::{Action, Binding, Bindings};
-use crate::preferences::{redraw_for_settings, Crosshair, Preferences, Preset};
+use crate::preferences::{
+    redraw_for_settings, skins_dir, Crosshair, Preferences, Preset, SkinSettings,
+};
+use crate::skin::{default_skin, read_skin, ArmStyle, DEFAULT_SKINS};
 
 // Two columns of settings, each this wide.
 const COLUMN: f32 = 380.0;
 const BINDINGS_HEIGHT: f32 = 300.0;
+// The skin's preview, in pixels, and the list of skins kept beside it.
+const PREVIEW: UVec2 = UVec2::new(200, 320);
+const SKINS_HEIGHT: f32 = 132.0;
+// The longest path a skin's file field takes, in characters.
+const MAX_PATH: usize = 1024;
 
 /// The tabs of the Settings page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,14 +40,16 @@ pub enum SettingsTab {
     Controls,
     Audio,
     Accessibility,
+    Skin,
 }
 
 impl SettingsTab {
-    const ALL: [SettingsTab; 4] = [
+    const ALL: [SettingsTab; 5] = [
         SettingsTab::Video,
         SettingsTab::Controls,
         SettingsTab::Audio,
         SettingsTab::Accessibility,
+        SettingsTab::Skin,
     ];
 
     fn name(self) -> &'static str {
@@ -42,6 +58,7 @@ impl SettingsTab {
             SettingsTab::Controls => "Controls",
             SettingsTab::Audio => "Audio",
             SettingsTab::Accessibility => "Accessibility",
+            SettingsTab::Skin => "Skin",
         }
     }
 }
@@ -78,6 +95,7 @@ enum Setting {
     HurtTilt,
     LargerText,
     Crosshair,
+    Arms,
 }
 
 /// A slider's range, step and how it shows its value.
@@ -171,6 +189,13 @@ impl Setting {
             Setting::HurtTilt => ("Hurt Tilt", on_off(p.accessibility.hurt_tilt)),
             Setting::LargerText => ("Larger Text", on_off(p.accessibility.larger_text)),
             Setting::Crosshair => ("Crosshair", p.accessibility.crosshair.label()),
+            Setting::Arms => (
+                "Arms",
+                match p.skin.arms {
+                    ArmStyle::Classic => "Classic",
+                    ArmStyle::Slim => "Slim",
+                },
+            ),
             _ => ("", ""),
         }
     }
@@ -202,6 +227,12 @@ impl Setting {
                     .unwrap_or(0);
                 p.accessibility.crosshair = Crosshair::ALL[(at + 1) % Crosshair::ALL.len()];
             }
+            Setting::Arms => {
+                p.skin.arms = match p.skin.arms {
+                    ArmStyle::Classic => ArmStyle::Slim,
+                    ArmStyle::Slim => ArmStyle::Classic,
+                }
+            }
             _ => {}
         }
     }
@@ -211,6 +242,17 @@ impl Setting {
 #[derive(Component)]
 struct BindingButton(Action);
 
+// The field the skin's file is typed in, a row of the skins kept in the skins directory, and
+// what's said of the skin worn.
+#[derive(Component)]
+struct SkinField;
+
+#[derive(Component)]
+struct SkinRow(PathBuf);
+
+#[derive(Component)]
+struct SkinStatus;
+
 pub(super) fn build(app: &mut App) {
     app.add_observer(slide).add_observer(choose).add_systems(
         Update,
@@ -218,6 +260,7 @@ pub(super) fn build(app: &mut App) {
             take_binding.run_if(resource_exists::<Rebinding>),
             show_settings.run_if(resource_changed::<Preferences>),
             show_bindings,
+            show_skin_status,
             apply_on_close,
         )
             .chain(),
@@ -228,6 +271,8 @@ pub(super) fn spawn(
     In(root): In<Entity>,
     menu: Res<Menu>,
     preferences: Res<Preferences>,
+    // none without a renderer, as in tests
+    mut images: Option<ResMut<Assets<Image>>>,
     mut commands: Commands,
 ) {
     let Some(&Page::Settings(shown)) = menu.top() else {
@@ -260,6 +305,7 @@ pub(super) fn spawn(
                 SettingsTab::Controls => controls(page, &preferences),
                 SettingsTab::Audio => audio(page, &preferences),
                 SettingsTab::Accessibility => accessibility(page, &preferences),
+                SettingsTab::Skin => skin(page, &preferences, images.as_deref_mut()),
             }
             page.spawn(gap(8.0));
             page.spawn((
@@ -374,6 +420,181 @@ fn percent(volume: f32) -> String {
 fn accessibility(page: &mut ChildSpawnerCommands, p: &Preferences) {
     use Setting::*;
     columns(page, p, &[&[HurtTilt, LargerText], &[Crosshair]]);
+}
+
+// The preview of the skin worn, beside the file it's from, the skins kept in the skins directory,
+// the arms it's drawn with and what's said of it.
+fn skin(page: &mut ChildSpawnerCommands, p: &Preferences, images: Option<&mut Assets<Image>>) {
+    let preview_image = images.map(|images| {
+        images.add(Image::new_target_texture(
+            PREVIEW.x,
+            PREVIEW.y,
+            TextureFormat::Rgba8Unorm,
+            Some(TextureFormat::Rgba8UnormSrgb),
+        ))
+    });
+    let dir = skins_dir();
+    // made for the player to find, as it's where they're told to keep their skins
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        warn!("couldn't make {}: {error}", dir.display());
+    }
+    let kept = kept_skins(&dir);
+    page.spawn(Node {
+        column_gap: Val::Px(16.0),
+        align_items: AlignItems::Start,
+        ..default()
+    })
+    .with_children(|columns| {
+        let mut preview = columns.spawn((
+            Node {
+                width: Val::Px(PREVIEW.x as f32),
+                height: Val::Px(PREVIEW.y as f32),
+                border: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BorderColor::all(Color::BLACK),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+        ));
+        if let Some(image) = preview_image {
+            preview.insert((ImageNode::new(image), SkinPreview));
+        }
+        columns
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|column| {
+                column.spawn((label("PNG file"), TextColor(QUIET_TEXT)));
+                column.spawn(row()).with_children(|row| {
+                    row.spawn((
+                        SkinField,
+                        text_field(&p.skin.file, MAX_PATH, COLUMN - 108.0),
+                    ));
+                    row.spawn((text_button("Use", 100.0), observe(use_typed)));
+                });
+                column
+                    .spawn(list(COLUMN, SKINS_HEIGHT))
+                    .observe(use_kept)
+                    .with_children(|list| {
+                        if kept.is_empty() {
+                            list.spawn(note("No skins kept here yet.", COLUMN - 16.0));
+                        }
+                        for path in kept {
+                            let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                            list.spawn((SkinRow(path.clone()), list_row()))
+                                .insert_if(Selected, || Path::new(&p.skin.file) == path)
+                                .with_child(label(&name));
+                        }
+                    });
+                widget(column, p, Setting::Arms);
+                column.spawn((
+                    text_button("Default Skin", COLUMN),
+                    observe(|_: On<Activate>, mut preferences: ResMut<Preferences>| {
+                        preferences.skin = SkinSettings::default();
+                    }),
+                ));
+                column.spawn((SkinStatus, note("", COLUMN)));
+            });
+    });
+    page.spawn(note(
+        &format!(
+            "A skin's a 64×64 or 64×32 PNG of up to 32 KB, in Minecraft's layout. Keep yours in \
+             {} to choose them here.",
+            dir.display()
+        ),
+        COLUMN * 2.0,
+    ));
+}
+
+// The PNG files in `dir`, by name.
+fn kept_skins(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut kept: Vec<PathBuf> = entries
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        })
+        .collect();
+    kept.sort();
+    kept
+}
+
+// Wears the skin in the file at `path`, with the arms it says it's drawn for, or says why it
+// can't, wearing what was worn before.
+fn wear_file(path: &Path, preferences: &mut Preferences, own: &mut OwnSkin) {
+    match read_skin(path) {
+        Ok((_, arms)) => {
+            preferences.skin = SkinSettings {
+                file: path.to_string_lossy().into_owned(),
+                arms,
+            };
+        }
+        Err(error) => own.problem = Some(error),
+    }
+}
+
+fn use_typed(
+    _: On<Activate>,
+    field: Query<&EditableText, With<SkinField>>,
+    mut preferences: ResMut<Preferences>,
+    mut own: ResMut<OwnSkin>,
+) {
+    let path = field.single().map(typed).unwrap_or_default();
+    if path.is_empty() {
+        preferences.skin = SkinSettings::default();
+    } else {
+        wear_file(Path::new(&path), &mut preferences, &mut own);
+    }
+}
+
+// Selecting a skin kept wears it, so the arrow keys go through them on the preview.
+fn use_kept(
+    selected: On<ValueChange<Entity>>,
+    rows: Query<&SkinRow>,
+    mut preferences: ResMut<Preferences>,
+    mut own: ResMut<OwnSkin>,
+    mut fields: Query<&mut EditableText, With<SkinField>>,
+) {
+    if let Ok(SkinRow(path)) = rows.get(selected.value) {
+        wear_file(path, &mut preferences, &mut own);
+        for mut field in &mut fields {
+            field.clear();
+            field.queue_edit(TextEdit::Insert(path.to_string_lossy().as_ref().into()));
+        }
+    }
+}
+
+// What's said of the skin worn: whose it is, or why the one chosen can't be worn.
+fn show_skin_status(
+    own: Res<OwnSkin>,
+    preferences: Res<Preferences>,
+    mut status: Query<(&mut Text, &mut TextColor), With<SkinStatus>>,
+) {
+    if !own.is_changed() && !preferences.is_changed() && status.iter().all(|(t, _)| !t.0.is_empty())
+    {
+        return;
+    }
+    let (text, colour) = match (&own.problem, &own.skin) {
+        (Some(problem), _) => (format!("Couldn't wear that skin: {problem}."), ERROR_TEXT),
+        (None, Some(_)) => ("Wearing your own skin.".to_owned(), QUIET_TEXT),
+        (None, None) => {
+            let (name, _) = DEFAULT_SKINS[default_skin(&preferences.player_name())];
+            (
+                format!("Wearing the {name}, the default skin for your name."),
+                QUIET_TEXT,
+            )
+        }
+    };
+    for (mut shown, mut shown_colour) in &mut status {
+        if shown.0 != text {
+            shown.0.clone_from(&text);
+        }
+        shown_colour.set_if_neq(TextColor(colour));
+    }
 }
 
 fn slide(

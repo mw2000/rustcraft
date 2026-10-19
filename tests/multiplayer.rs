@@ -28,7 +28,7 @@ use rustcraft::chunks::generate::WORLD_HEIGHT;
 use rustcraft::client::creatures::{Dying, Fading, SeenCreature};
 use rustcraft::client::join::{connect, GenerationChecksum, LeftServer};
 use rustcraft::client::others::SeenPlayer;
-use rustcraft::client::player::LocalPlayer;
+use rustcraft::client::player::{LocalPlayer, OwnSkin};
 use rustcraft::client::ClientPlugin;
 use rustcraft::clock::TimeOfDay;
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
@@ -51,6 +51,7 @@ use rustcraft::server::creatures::{creature, Health, SpawnRate};
 use rustcraft::server::drops::DroppedItem;
 use rustcraft::server::{serve, Console, DedicatedServerPlugins, ServerPlugin, WorldToOpen};
 use rustcraft::settings::Settings;
+use rustcraft::skin::{ArmStyle, Skin};
 use rustcraft::survival::{Bruise, Vitals};
 use rustcraft::world::{LeaveWorld, World};
 
@@ -1024,24 +1025,16 @@ fn test_players_get_names_of_their_own_and_see_everyone_else() {
     });
     let everyone = names(&mut apps[0]);
     assert_eq!(["guest", "guest2", "host"], everyone[..]);
-    // each sees the host and the other, but not themselves, whom they draw where they are
+    // each is told the name it's been given, and sees the host and the other, but not
+    // themselves, whom they draw where they are
     let mut own = Vec::new();
     for client in &mut apps[1..] {
-        let shown = names(client);
-        assert!(
-            shown.len() == 2 && shown.contains(&"host".into()),
-            "{shown:?}"
-        );
-        own.extend(
-            everyone
-                .iter()
-                .filter(|name| !shown.contains(name))
-                .cloned(),
-        );
         let local = local_player(client);
+        let name = client.world().get::<PlayerName>(local).unwrap();
+        own.push(name.as_str().to_owned());
+        assert_eq!(everyone, names(client));
         assert!(seen(client).iter().all(|&(player, _)| player != local));
     }
-    assert_eq!(2, own.len());
     assert_ne!(own[0], own[1]);
     let second = &own[1];
     assert!(lines.contains(&format!("{second} joined the game")));
@@ -1055,7 +1048,76 @@ fn test_players_get_names_of_their_own_and_see_everyone_else() {
         lines.extend(printed(&apps[1], &mut said));
         seen(&mut apps[1]).len() == 1 && lines.contains(&format!("{second} left the game"))
     });
-    assert_eq!(["host"], names(&mut apps[1])[..]);
+    assert_eq!(2, names(&mut apps[1]).len());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// The skin `client` draws the player called `name` in, once it's seen them.
+fn skin_seen(client: &mut App, name: &str) -> Option<Skin> {
+    let mut seen = client.world_mut().query::<&SeenPlayer>();
+    let mut players = client.world_mut().query::<(&PlayerName, Option<&Skin>)>();
+    let world = client.world();
+    seen.iter(world)
+        .filter_map(|seen| players.get(world, seen.0).ok())
+        .find(|(shown, _)| shown.as_str() == name)
+        .and_then(|(_, skin)| skin.cloned())
+}
+
+#[test]
+fn test_a_skin_chosen_is_shown_to_everyone_else_and_saved_with_its_player() {
+    let dir = temp_dir("skins");
+    let (server, mut sockets) = host(&dir, 2, true);
+    let checksum = GenerationChecksum::default();
+    let second = joiner(&server, sockets.pop().unwrap(), "watcher", None, checksum);
+    let first = joiner(&server, sockets.pop().unwrap(), "wearer", None, checksum);
+    let mut apps = [server, first, second];
+    update_all_until(&mut apps, |apps| {
+        apps[1..].iter_mut().all(|client| seen(client).len() == 2)
+    });
+    let png = std::fs::read("assets/textures/skins/miner.png").unwrap();
+    let skin = Skin::new(png, ArmStyle::Slim).unwrap();
+    apps[1].world_mut().resource_mut::<OwnSkin>().skin = Some(skin.clone());
+    update_all_until(&mut apps, |apps| {
+        skin_seen(&mut apps[2], "wearer").as_ref() == Some(&skin)
+    });
+    // on the server's player, and the wearer's own, as it draws them itself
+    let mut named = apps[0].world_mut().query::<(Entity, &PlayerName)>();
+    let wearer = named
+        .iter(apps[0].world())
+        .find(|(_, name)| name.as_str() == "wearer")
+        .unwrap()
+        .0;
+    let players = [wearer, local_player(&mut apps[1])];
+    assert!(players
+        .iter()
+        .enumerate()
+        .all(|(i, &player)| { apps[i].world().get::<Skin>(player) == Some(&skin) }));
+    assert_eq!(None, skin_seen(&mut apps[1], "watcher"));
+
+    // back to the default, which everyone sees
+    apps[1].world_mut().resource_mut::<OwnSkin>().skin = None;
+    update_all_until(&mut apps, |apps| {
+        skin_seen(&mut apps[2], "watcher").is_none() && {
+            let mut skins = apps[2].world_mut().query::<(&PlayerName, &Skin)>();
+            skins.iter(apps[2].world()).next().is_none()
+        }
+    });
+
+    // and on again as they leave, which keeps it in the world's save
+    apps[1].world_mut().resource_mut::<OwnSkin>().skin = Some(skin.clone());
+    update_all_until(&mut apps, |apps| {
+        skin_seen(&mut apps[2], "wearer").is_some()
+    });
+    apps[1]
+        .world_mut()
+        .resource_mut::<RenetClient>()
+        .disconnect();
+    update_all_until(&mut apps, |apps| seen(&mut apps[2]).len() == 1);
+    let [server, ..] = apps;
+    exit(server);
+    let (save, ..) = WorldSave::open(dir.clone(), None).unwrap();
+    let state = save.player(&PlayerName::new("wearer")).unwrap();
+    assert_eq!(Some(skin), save.skin(&state));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

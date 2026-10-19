@@ -1,9 +1,9 @@
+use crate::client::player::WorldCamera;
 use bevy::{
     app::{App, Plugin, PostUpdate},
     asset::{Assets, Handle, RenderAssetUsages},
-    camera::{primitives::Frustum, visibility::VisibilitySystems, Camera3d, Projection},
+    camera::{primitives::Frustum, visibility::VisibilitySystems, Projection},
     ecs::{
-        query::With,
         resource::Resource,
         schedule::IntoScheduleConfigs,
         system::{Query, ResMut},
@@ -112,7 +112,7 @@ fn frame(eye: Vec3, curve: Curve) -> [f32; 4] {
 fn update_curvature(
     mut curvature: ResMut<Curvature>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
 ) {
     let Ok(transform) = camera.single() else {
         return;
@@ -131,9 +131,7 @@ fn update_curvature(
 /// still lies flat above it. Each side of the camera's frustum that faces down is loosened by
 /// as far as anything drawn can drop, letting through everything the curve could bring into
 /// view. Rebuilt from the camera every frame, as Bevy only rebuilds it when the camera moves.
-fn loosen_frustum(
-    mut cameras: Query<(&GlobalTransform, &Projection, &mut Frustum), With<Camera3d>>,
-) {
+fn loosen_frustum(mut cameras: Query<(&GlobalTransform, &Projection, &mut Frustum), WorldCamera>) {
     for (transform, projection, mut frustum) in &mut cameras {
         let Projection::Perspective(perspective) = projection else {
             continue;

@@ -1,9 +1,9 @@
+use crate::client::player::WorldCamera;
 use std::time::{Duration, Instant};
 
 use bevy::prelude::Resource;
 use bevy::{
     asset::Handle,
-    camera::Camera,
     ecs::hierarchy::ChildOf,
     ecs::{
         component::Component,
@@ -260,7 +260,7 @@ pub fn gather_chunks(
     mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
-    camera_query: Query<&GlobalTransform, (With<Camera>, With<ChildOf>)>,
+    camera_query: Query<&GlobalTransform, (WorldCamera, With<ChildOf>)>,
     generating_chunks_query: Query<(), With<GenerateChunkData>>,
 ) {
     let loader = &mut *chunk_loader;

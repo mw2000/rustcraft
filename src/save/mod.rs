@@ -15,7 +15,7 @@ use bevy::ecs::{
     schedule::{common_conditions::resource_exists, IntoScheduleConfigs},
     system::{Commands, Query, Res, ResMut, SystemParam},
 };
-use bevy::log::{error, info};
+use bevy::log::{error, info, warn};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::tasks::{block_on, futures, IoTaskPool, Task};
 use bevy::time::{Real, Time};
@@ -35,19 +35,21 @@ use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
 use crate::server::creatures::{saved, Dormant, Health, Life, Settled, Townsfolk};
 use crate::server::Operators;
+use crate::skin::Skin;
 use crate::survival::{SpawnBed, Vitals};
 use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 use region::{ChunkEdits, Region};
-pub use world_file::{PlayerState, WorldFile};
+pub use world_file::{PlayerState, SavedSkin, WorldFile};
 
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(30);
 const WORLD_FILE: &str = "world.toml";
 const EDITS_DIR: &str = "edits";
 const PLAYERS_DIR: &str = "players";
+const SKINS_DIR: &str = "skins";
 
 /// Saves the world (§4.3): its edits, containers and crops, `world.toml` with the host's player,
-/// each player who's joined from elsewhere as `players/<name>.toml`, and its creatures by region
-/// in `creatures/`, every so often if they've changed, as such a player leaves, and as the game
+/// each player who's joined from elsewhere as `players/<name>.toml`, the skins they wear in
+/// `skins/`, and its creatures by region in `creatures/`, every so often if they've changed, as such a player leaves, and as the game
 /// quits.
 pub struct SavePlugin;
 
@@ -104,6 +106,9 @@ pub struct WorldSave {
     players: HashMap<String, PlayerState>,
     // those of them changed since they were last written
     unsaved_players: HashSet<String>,
+    // the skins players wear, by their files' names, and those not yet written
+    skins: HashMap<String, Skin>,
+    unsaved_skins: HashSet<String>,
     // the creatures read as the world opened, until the server takes them
     opened_creatures: Vec<SavedCreature>,
     // each region's creatures as they were last written, and the regions to write whatever
@@ -121,8 +126,8 @@ struct Writing {
     contents: Contents,
 }
 
-// What a save writes: the regions of edits, the players and the regions of creatures.
-type Contents = (Vec<Region>, Vec<String>, Vec<Region>);
+// What a save writes: the regions of edits, the players, the regions of creatures and the skins.
+type Contents = (Vec<Region>, Vec<String>, Vec<Region>, Vec<String>);
 
 /// What's changed since the last save, copied from the game to be written apart from it.
 struct Snapshot {
@@ -132,6 +137,7 @@ struct Snapshot {
     players: Vec<(String, PlayerState)>,
     // each region's creatures, none to remove its file
     creatures: Vec<(Region, Vec<SavedCreature>)>,
+    skins: Vec<(String, Skin)>,
 }
 
 impl WorldSave {
@@ -240,6 +246,26 @@ impl WorldSave {
             Err(error) => return Err(error),
         }
 
+        // the skins of those who wear their own, any that can't be read left off
+        let mut skins = HashMap::new();
+        for saved in players
+            .values()
+            .chain(&file.player)
+            .filter_map(|p| p.skin.as_ref())
+        {
+            if !saved.is_named_by_hash() || skins.contains_key(&saved.file) {
+                continue;
+            }
+            let path = dir.join(SKINS_DIR).join(&saved.file);
+            match fs::read(&path).map(|png| Skin::new(png, saved.arms)) {
+                Ok(Ok(skin)) => {
+                    skins.insert(saved.file.clone(), skin);
+                }
+                Ok(Err(error)) => warn!("{} isn't a skin: {error}", path.display()),
+                Err(error) => warn!("couldn't read the skin {}: {error}", path.display()),
+            }
+        }
+
         let save = Self {
             dir,
             unsaved: HashSet::new(),
@@ -248,6 +274,8 @@ impl WorldSave {
             new_player_mode: file.new_player_mode,
             players,
             unsaved_players: HashSet::new(),
+            skins,
+            unsaved_skins: HashSet::new(),
             opened_creatures: written_creatures.values().flatten().copied().collect(),
             written_creatures,
             unsaved_creatures: HashSet::new(),
@@ -267,9 +295,17 @@ impl WorldSave {
         self.players.get(name.as_str()).cloned()
     }
 
-    /// Keeps the state of the player from elsewhere called `name` as they leave, to save soon.
-    pub fn left(&mut self, name: &PlayerName, state: PlayerState) {
+    /// The skin `state` wears, if it's their own and it could be read.
+    pub fn skin(&self, state: &PlayerState) -> Option<Skin> {
+        let saved = state.skin.as_ref()?;
+        Some(self.skins.get(&saved.file)?.with_arms(saved.arms))
+    }
+
+    /// Keeps the state of the player from elsewhere called `name` as they leave, and the skin
+    /// they wear, to save soon.
+    pub fn left(&mut self, name: &PlayerName, state: PlayerState, skin: Option<&Skin>) {
         self.keep_player(name, state);
+        self.keep_skin(skin);
         self.save_soon();
     }
 
@@ -293,6 +329,18 @@ impl WorldSave {
         if self.players.get(name.as_str()) != Some(&state) {
             self.unsaved_players.insert(name.as_str().to_owned());
             self.players.insert(name.as_str().to_owned(), state);
+        }
+    }
+
+    // Keeps a skin worn, to be written if it's new.
+    fn keep_skin(&mut self, skin: Option<&Skin>) {
+        let Some(skin) = skin else {
+            return;
+        };
+        let file = SavedSkin::of(skin).file;
+        if !self.skins.contains_key(&file) {
+            self.unsaved_skins.insert(file.clone());
+            self.skins.insert(file, skin.clone());
         }
     }
 
@@ -345,12 +393,21 @@ impl WorldSave {
                 (name, state)
             })
             .collect();
+        let skins = self
+            .unsaved_skins
+            .drain()
+            .map(|file| {
+                let skin = self.skins[&file].clone();
+                (file, skin)
+            })
+            .collect();
         Snapshot {
             dir: self.dir.clone(),
             world_file,
             regions,
             players,
             creatures: Vec::new(),
+            skins,
         }
     }
 
@@ -398,12 +455,14 @@ impl WorldSave {
     }
 
     // A failed save leaves what it was writing to be written next time.
-    fn finished(&mut self, result: io::Result<()>, (regions, players, creatures): Contents) {
+    fn finished(&mut self, result: io::Result<()>, contents: Contents) {
+        let (regions, players, creatures, skins) = contents;
         if let Err(error) = result {
             error!("couldn't save the world in {}: {error}", self.dir.display());
             self.unsaved.extend(regions);
             self.unsaved_players.extend(players);
             self.unsaved_creatures.extend(creatures);
+            self.unsaved_skins.extend(skins);
             self.written = None;
         }
     }
@@ -415,6 +474,7 @@ impl Snapshot {
             && self.regions.is_empty()
             && self.players.is_empty()
             && self.creatures.is_empty()
+            && self.skins.is_empty()
     }
 
     // What to write again if writing it fails.
@@ -422,7 +482,8 @@ impl Snapshot {
         let regions = self.regions.keys().copied().collect();
         let players = self.players.iter().map(|(name, _)| name.clone()).collect();
         let creatures = self.creatures.iter().map(|(region, _)| *region).collect();
-        (regions, players, creatures)
+        let skins = self.skins.iter().map(|(file, _)| file.clone()).collect();
+        (regions, players, creatures, skins)
     }
 
     fn write(self) -> io::Result<()> {
@@ -442,6 +503,13 @@ impl Snapshot {
             for (name, state) in self.players {
                 let text = toml::to_string(&state).expect("players always encode");
                 write_atomically(&players_dir.join(name + ".toml"), text.as_bytes())?;
+            }
+        }
+        if !self.skins.is_empty() {
+            let skins_dir = self.dir.join(SKINS_DIR);
+            fs::create_dir_all(&skins_dir)?;
+            for (file, skin) in self.skins {
+                write_atomically(&skins_dir.join(file), skin.png())?;
             }
         }
         if !self.creatures.is_empty() {
@@ -509,6 +577,7 @@ struct Savable<'w, 's> {
             Option<&'static PlayerName>,
             &'static Vitals,
             &'static SpawnBed,
+            Option<&'static Skin>,
         ),
     >,
 }
@@ -524,10 +593,13 @@ impl Savable<'_, '_> {
             .flat_map(|settled| settled.0.iter().map(|&(x, z)| [x, z]))
             .collect();
         file.player = save.host.clone();
-        for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players
+        for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed, skin) in
+            &self.players
         {
             let state = PlayerState::of(body, *look, player.movement, *mode, *hotbar, inventory)
-                .surviving(*vitals, *bed);
+                .surviving(*vitals, *bed)
+                .wearing(skin);
+            save.keep_skin(skin);
             match (owner.0, name) {
                 (ClientId::Server, _) => file.player = Some(state),
                 (_, Some(name)) => save.keep_player(name, state),

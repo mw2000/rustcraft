@@ -21,6 +21,11 @@
 //! with what they hold (M3.3). Villagers are replicated with their `Villager`, its style and
 //! seed, and a player trading with one is sent its offers as `TradeOffers` and makes them with
 //! `Trade` (M3.4).
+//!
+//! A client tells the server the skin its player wears with `SetSkin` as it joins and whenever
+//! it's changed, which the server checks and puts on their player as their `Skin`, replicated
+//! to everyone else with the rest of them, or takes off for the default skin their name gives
+//! them (M-A4).
 
 use std::time::Duration;
 
@@ -51,6 +56,7 @@ use crate::save::PlayerState;
 use crate::server::creatures::Whereabouts;
 use crate::server::drops::DroppedItem;
 use crate::server::{HeldItem, Worn};
+use crate::skin::Skin;
 use crate::survival::{Bruise, Vitals};
 use crate::trading::Offer;
 
@@ -59,7 +65,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -148,7 +154,10 @@ impl Plugin for ProtocolPlugin {
             .add_mapped_server_message::<PlayerSwung>(Channel::Unreliable)
             // in order, as a blow's knock is felt after the one before
             .add_server_message::<Struck>(Channel::Ordered)
-            .replicate::<Worn>();
+            .replicate::<Worn>()
+            // in order, as the last skin chosen is the one worn
+            .add_client_message::<SetSkin>(Channel::Ordered)
+            .replicate::<Skin>();
         // A client whose versions differ is refused as it connects, in replicon's check that
         // both sides registered the same messages, and told so with a `ProtocolMismatch`.
         app.world_mut()
@@ -258,13 +267,14 @@ pub struct PickBlock {
 
 /// What a client joining is told as the server lets it in: the world's seed, to generate its
 /// terrain from (INV-1), the checksum of what the seed generates, which the client checks its
-/// own against (`world_checksum`, D-3), where its player is, and who it is to the server, to
-/// tell its own edits by.
+/// own against (`world_checksum`, D-3), where its player is, the name it's given, made unique,
+/// and who it is to the server, to tell its own edits by.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Welcome {
     pub seed: u32,
     pub checksum: u64,
     pub player: PlayerState,
+    pub name: PlayerName,
     #[serde(with = "client_id")]
     pub you: ClientId,
 }
@@ -588,6 +598,11 @@ pub struct Trade {
 /// time, the one they last right-clicked.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TradeOffers(pub Option<Vec<(Offer, u8)>>);
+
+/// A client's player putting on `skin`, or the default skin their name gives them with none,
+/// as they join and whenever they change it. A skin that isn't one is refused as it's read.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SetSkin(pub Option<Skin>);
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself
 // when it plays too, which goes as no entity.

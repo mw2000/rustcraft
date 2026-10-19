@@ -153,6 +153,7 @@ impl Plugin for ServerPlugin {
                         (creatures::open_trades, creatures::make_trades).chain(),
                     ),
                     players::relay_swings,
+                    players::receive_skins,
                 )
                     .after(ClientSystems::Send)
                     .before(ServerSystems::Send)
@@ -317,7 +318,13 @@ pub fn open_world(
             .unwrap_or_else(|| PlayerState::arriving_at(world.spawn(), saved.new_player_mode));
         let [x, y, z] = arrival.position;
         info!("spawned at {x:?}, {y:?}, {z:?}");
-        commands.spawn(players::spawning(&arrival, ClientId::Server, name.clone()));
+        players::spawn_player(
+            &mut commands,
+            &save,
+            &arrival,
+            ClientId::Server,
+            name.clone(),
+        );
     }
     commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
     commands.insert_resource(players::WorldChecksum::of(saved.seed));

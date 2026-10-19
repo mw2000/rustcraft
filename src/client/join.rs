@@ -142,7 +142,7 @@ pub(super) fn arrive(
         server: welcome.checksum,
         task: AsyncComputeTaskPool::get().spawn(async move { checksum(seed) }),
     });
-    commands.spawn((arriving(&welcome.player), LocalPlayer));
+    commands.spawn((arriving(&welcome.player), welcome.name.clone(), LocalPlayer));
     let [x, y, z] = welcome.player.position;
     info!("joined a world with seed {seed}, at {x:?}, {y:?}, {z:?}");
 }

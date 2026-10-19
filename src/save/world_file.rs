@@ -9,6 +9,7 @@ use crate::game_mode::GameMode;
 use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::{Movement, PlayerLook};
+use crate::skin::{ArmStyle, Skin};
 use crate::survival::{SpawnBed, Vitals};
 
 /// The version of the save format, raised whenever a change to it would mislead an older game.
@@ -64,6 +65,33 @@ pub struct PlayerState {
     // and before health, whole
     #[serde(default)]
     pub vitals: Vitals,
+    /// The skin they wear, if they've one of their own, kept in the world's `skins/` (M-A4).
+    #[serde(default)]
+    pub skin: Option<SavedSkin>,
+}
+
+/// A player's own skin as their save names it: its file in the world's `skins/`, named by its
+/// hash so each is kept once however many wear it, and the arms it's drawn with.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SavedSkin {
+    pub file: String,
+    pub arms: ArmStyle,
+}
+
+impl SavedSkin {
+    pub fn of(skin: &Skin) -> Self {
+        Self {
+            file: format!("{:016x}.png", skin.hash()),
+            arms: skin.arms(),
+        }
+    }
+
+    /// Whether its file's name is one `of` would give, so it's never read from anywhere else.
+    pub fn is_named_by_hash(&self) -> bool {
+        self.file
+            .strip_suffix(".png")
+            .is_some_and(|hash| hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+    }
 }
 
 impl PlayerState {
@@ -84,6 +112,7 @@ impl PlayerState {
             hotbar: Hotbar::default(),
             inventory: None,
             vitals: Vitals::default(),
+            skin: None,
         }
     }
 
@@ -106,6 +135,7 @@ impl PlayerState {
             hotbar,
             inventory: Some(inventory.clone()),
             vitals: Vitals::default(),
+            skin: None,
         }
     }
 
@@ -114,6 +144,14 @@ impl PlayerState {
         Self {
             vitals,
             bed: bed.0.map(|bed| bed.to_array()),
+            ..self
+        }
+    }
+
+    /// The same, wearing `skin`, or the default skin with none.
+    pub fn wearing(self, skin: Option<&Skin>) -> Self {
+        Self {
+            skin: skin.map(SavedSkin::of),
             ..self
         }
     }
@@ -207,6 +245,39 @@ mod tests {
         assert!(text.contains("movement = \"walk\""), "{text}");
         assert!(text.contains("game_mode = \"survival\""), "{text}");
         assert_eq!(file, WorldFile::from_toml(&text).unwrap());
+    }
+
+    #[test]
+    fn test_a_players_skin_is_saved_by_its_files_hash_and_arms() {
+        use super::SavedSkin;
+        use crate::skin::{ArmStyle, Skin};
+        let png = std::fs::read("assets/textures/skins/ranger.png").unwrap();
+        let skin = Skin::new(png, ArmStyle::Slim).unwrap();
+        let mut file = WorldFile::new(1, 0.5);
+        let player = PlayerState::arriving_at(Vec3::ONE, GameMode::default());
+        file.player = Some(player.clone().wearing(Some(&skin)));
+        let text = file.to_toml();
+        assert!(text.contains("arms = \"slim\""), "{text}");
+        let read = WorldFile::from_toml(&text).unwrap();
+        let saved = read.player.unwrap().skin.unwrap();
+        assert_eq!(SavedSkin::of(&skin), saved);
+        assert!(saved.is_named_by_hash());
+        // and only a name it gives is ever read
+        for name in [
+            "../world.toml",
+            "0123456789abcdef.toml",
+            "xyz.png",
+            "0123.png",
+        ] {
+            let named = SavedSkin {
+                file: name.into(),
+                ..saved.clone()
+            };
+            assert!(!named.is_named_by_hash(), "{name}");
+        }
+        // with none, nothing's written, and an old save reads as wearing none
+        assert!(!WorldFile::new(1, 0.5).to_toml().contains("skin"));
+        assert_eq!(None, player.wearing(None).skin);
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod glow;
 mod insects;
 mod wings;
 
+use crate::client::player::WorldCamera;
 use std::f32::consts::TAU;
 
 use bevy::prelude::*;
@@ -159,7 +160,7 @@ fn ease(t: f32) -> f32 {
 }
 
 /// Where the camera is, if there's one.
-fn eye(camera: &Query<&GlobalTransform, With<Camera3d>>) -> Option<GlobalTransform> {
+fn eye(camera: &Query<&GlobalTransform, WorldCamera>) -> Option<GlobalTransform> {
     camera.single().ok().copied()
 }
 

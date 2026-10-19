@@ -93,6 +93,9 @@ pub struct ModelMaterial {
     // what the land bends around, see `curvature::Curvature`
     #[storage(8, read_only)]
     curvature: Handle<ShaderBuffer>,
+    /// The open sky's light on parts drawn in view, which the camera drawing them doesn't have.
+    #[uniform(9)]
+    pub daylight: LinearRgba,
     pub alpha_mode: AlphaMode,
     look: ModelKey,
 }
@@ -110,6 +113,9 @@ pub struct ModelLook {
     pub double_sided: bool,
     // drawn as bright as they are whatever the light, as monsters' eyes are
     pub glows: bool,
+    // drawn in view by a camera of its own, as the first-person hand is, lit by the light in
+    // its tag against its material's `daylight` rather than the world's lights
+    pub in_view: bool,
 }
 
 impl ModelLook {
@@ -122,6 +128,7 @@ impl ModelLook {
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
             glows: false,
+            in_view: false,
         }
     }
 
@@ -165,6 +172,7 @@ pub struct ModelKey {
     cut_out: bool,
     double_sided: bool,
     glows: bool,
+    in_view: bool,
 }
 
 impl From<&ModelMaterial> for ModelKey {
@@ -217,6 +225,7 @@ impl Material for ModelMaterial {
             (look.textured, "TEXTURED"),
             (look.cut_out, "CUT_OUT"),
             (look.glows, "GLOWS"),
+            (look.in_view, "IN_VIEW"),
         ] {
             if on {
                 defs.push(def.into());
@@ -248,11 +257,13 @@ impl ModelMaterials<'_> {
                 cut_out: matches!(look.alpha_mode, AlphaMode::Mask(_)),
                 double_sided: look.double_sided,
                 glows: look.glows,
+                in_view: look.in_view,
             },
             texture: look.texture,
             cloud_pattern: self.clouds.pattern.clone(),
             cloud_layer: self.clouds.layer.clone(),
             curvature: self.curvature.buffer.clone(),
+            daylight: LinearRgba::WHITE,
             alpha_mode: look.alpha_mode,
         };
         self.materials.add(material)

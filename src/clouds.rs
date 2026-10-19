@@ -1,3 +1,4 @@
+use crate::client::player::WorldCamera;
 use std::f64::consts::TAU;
 
 use bevy::{
@@ -562,7 +563,7 @@ fn drift_clouds(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut shown: Local<Vec2>,
     lods: Res<CloudMeshes>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     mut tiles: Query<(&CloudTile, &mut Transform, &mut Mesh3d)>,
 ) {
     let Ok(camera) = camera.single() else {

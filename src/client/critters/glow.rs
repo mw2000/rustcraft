@@ -3,6 +3,7 @@
 //! nearest that are lit up, and `point_lights.wesl` adds their light to the world shader's.
 //! There are never more than `MAX_FIREFLY_LIGHTS`, and none at all while no firefly's about.
 
+use crate::client::player::WorldCamera;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
@@ -57,7 +58,7 @@ pub(super) fn nearest_lit(
 #[allow(clippy::type_complexity)]
 fn light_fireflies(
     mut commands: Commands,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, WorldCamera>,
     fireflies: Query<(&Firefly, &Transform), Without<FireflyLight>>,
     mut lights: Query<
         (Entity, &mut PointLight, &mut Transform, &mut Visibility),

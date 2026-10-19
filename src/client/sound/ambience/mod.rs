@@ -9,6 +9,7 @@
 
 mod wind;
 
+use crate::client::player::WorldCamera;
 use std::f32::consts::TAU;
 use std::time::Duration;
 
@@ -346,7 +347,7 @@ fn look_around(
     mut again: ResMut<LookAgain>,
     world: Option<Res<World>>,
     clock: Res<TimeOfDay>,
-    eyes: Query<&GlobalTransform, (With<Camera3d>, With<ChildOf>)>,
+    eyes: Query<&GlobalTransform, (WorldCamera, With<ChildOf>)>,
     player: Query<(), With<LocalPlayer>>,
     mut wanted: ResMut<Mix>,
     mut last: Local<Option<Vec3>>,
@@ -450,7 +451,7 @@ fn hoot(
     wanted: Res<Mix>,
     volumes: Res<Volumes>,
     owl: Option<Res<Owl>>,
-    ears: Query<&GlobalTransform, (With<Camera3d>, With<ChildOf>)>,
+    ears: Query<&GlobalTransform, (WorldCamera, With<ChildOf>)>,
     mut wait: Local<Option<f32>>,
 ) {
     let mut rng = rand::rng();

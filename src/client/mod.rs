@@ -42,6 +42,7 @@ impl Plugin for ClientPlugin {
             .init_resource::<edits::Predictions>()
             .init_resource::<edits::WaitingEdits>()
             .init_resource::<join::Teleports>()
+            .init_resource::<player::OwnSkin>()
             .add_systems(
                 LeaveWorld,
                 (
@@ -107,6 +108,7 @@ impl Plugin for ClientPlugin {
                 (
                     clock::follow_clock.run_if(not(is_authority)),
                     join::send_pose.run_if(in_state(ClientState::Connected)),
+                    player::wear_own_skin,
                     join::report_connection,
                     (
                         others::see_players,

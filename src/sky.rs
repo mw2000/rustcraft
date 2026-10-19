@@ -1,3 +1,4 @@
+use crate::client::player::WorldCamera;
 use bevy::{
     asset::Assets,
     camera::{Camera3d, Exposure},
@@ -186,7 +187,7 @@ pub fn spawn_atmosphere(mut commands: Commands, mut media: ResMut<Assets<Scatter
 /// planet as it takes for its horizon to dip that far, darkening as it would from a plane.
 /// Low down, where the land's edge dips no further than the Earth's would, nothing moves.
 pub fn match_sky_horizon(
-    camera: Query<(&GlobalTransform, &DistanceFog), With<Camera3d>>,
+    camera: Query<(&GlobalTransform, &DistanceFog), WorldCamera>,
     mut planets: Query<(&Atmosphere, &mut GlobalTransform), Without<Camera3d>>,
 ) {
     let Ok((camera, fog)) = camera.single() else {
