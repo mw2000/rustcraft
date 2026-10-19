@@ -19,7 +19,7 @@ use crate::building::{other_half, toggled};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::generate::structures::village::{Role, Village, ANIMAL, BED, GATHER, WORK};
 use crate::chunks::generate::trees::hash;
-use crate::clock::{day_fraction, TimeOfDay};
+use crate::clock::TimeOfDay;
 use crate::creatures::path::Walker;
 use crate::creatures::{CreatureKind, SavedCreature, Settler, Villager};
 use crate::player::{Player, PlayerOwner};
@@ -100,9 +100,9 @@ pub fn townsperson(settler: Settler) -> impl Bundle {
 /// Where a villager with `seed` is at `time`: at home from dusk to just after dawn, at the well
 /// at noon and in the evening, and otherwise at work, each a little earlier or later than the
 /// others, so they don't all set off at once.
-pub fn place_now(seed: u64, time: f64) -> Place {
+pub fn place_now(seed: u64, time: &TimeOfDay) -> Place {
     let early = (seed >> 20) % 1000;
-    let t = f64::from(day_fraction(time)) + early as f64 / 1000.0 * 0.04 - 0.02;
+    let t = f64::from(time.days()) + early as f64 / 1000.0 * 0.04 - 0.02;
     match t {
         t if !(0.27..0.75).contains(&t) => Place::Home,
         t if (0.48..0.54).contains(&t) || t >= 0.69 => Place::Well,
@@ -142,7 +142,7 @@ pub(in crate::server) fn settle(
                 continue;
             }
             settled.0.insert(cell);
-            for saved in villagers(&village, world.seed(), clock.0) {
+            for saved in villagers(&village, world.seed(), &clock) {
                 let settler = saved.settler.expect("villagers are settled");
                 commands.spawn((creature(saved, 0.0), townsperson(settler)));
             }
@@ -154,7 +154,7 @@ pub(in crate::server) fn settle(
 }
 
 // The villagers of `village` in the world of `seed` as it's settled at `time`, each at home.
-fn villagers(village: &Village, seed: u32, time: f64) -> Vec<SavedCreature> {
+fn villagers(village: &Village, seed: u32, time: &TimeOfDay) -> Vec<SavedCreature> {
     let of = |kind: &'static str| {
         let markers = village.pieces.iter().map(|piece| piece.markers());
         markers.flatten().filter(move |(k, _)| *k == kind)
@@ -213,7 +213,7 @@ fn villagers(village: &Village, seed: u32, time: f64) -> Vec<SavedCreature> {
                 home,
                 work,
                 well: wells[i % wells.len()],
-                stock: Stock::of(calling, seed, time.floor() as u64),
+                stock: Stock::of(calling, seed, time.day()),
             };
             SavedCreature {
                 settler: Some(settler),
@@ -422,7 +422,7 @@ pub(in crate::server) fn make_trades(
     mut chance: ResMut<Chance>,
     mut commands: Commands,
 ) {
-    let day = clock.0.floor() as u64;
+    let day = clock.day();
     for FromClient { client_id, message } in trades.read() {
         let Some((_, _, body, mut inventory, Some(trading))) =
             players.iter_mut().find(|(_, o, ..)| o.0 == *client_id)
@@ -473,7 +473,7 @@ pub(in crate::server) fn send_offers(
     mut offers: MessageWriter<ToClients<TradeOffers>>,
     mut commands: Commands,
 ) {
-    let day = clock.0.floor() as u64;
+    let day = clock.day();
     for (player, owner, body, mut trading) in &mut players {
         let send = |offers: Option<Vec<(Offer, u8)>>| ToClients {
             targets: SendTargets::Single(owner.0),

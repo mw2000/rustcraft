@@ -20,7 +20,7 @@ use bevy::{
 
 use std::f32::consts::{PI, TAU};
 
-use crate::clock::{day_fraction, TimeOfDay, START_TIME};
+use crate::clock::{SubTick, TimeOfDay, START_TIME};
 use crate::curvature::WORLD_CURVE;
 
 /// How opaque fog gets at its far end.
@@ -65,7 +65,7 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
             angular_size: SUN_DISC_SIZE,
             intensity: SUN_DISC_INTENSITY,
         },
-        shining_from(sun_direction(START_TIME)),
+        shining_from(sun_direction(START_TIME as f32)),
         CascadeShadowConfigBuilder {
             num_cascades: cascades.max(1),
             first_cascade_far_bound: FIRST_CASCADE_DISTANCE,
@@ -97,13 +97,14 @@ pub fn moon() -> impl Bundle {
             ..Default::default()
         },
         Moon,
-        shining_from(moon_direction(START_TIME)),
+        shining_from(moon_direction(START_TIME as f32)),
     )
 }
 
-// Where the sun is on its path at `time` days, in radians: 0 as it rises, a quarter turn at noon.
-fn sun_angle(time: f64) -> f32 {
-    TAU * (day_fraction(time) - 0.25)
+// Where the sun is on its path at `days` through the day, in radians: 0 as it rises, a quarter
+// turn at noon.
+fn sun_angle(days: f32) -> f32 {
+    TAU * (days.fract() - 0.25)
 }
 
 // The sun's path across the sky as a circle through `east` and `peak`, which are square to each other.
@@ -118,27 +119,31 @@ fn on_path(angle: f32) -> Vec3 {
     east * angle.cos() + peak * angle.sin()
 }
 
-/// Toward the sun at `time` days.
-pub fn sun_direction(time: f64) -> Vec3 {
+/// Toward the sun `time` of the way through the day, see `TimeOfDay::days`.
+pub fn sun_direction(time: f32) -> Vec3 {
     on_path(sun_angle(time))
 }
 
-/// Toward the moon at `time` days: opposite the sun, so it rises as the sun sets.
-pub fn moon_direction(time: f64) -> Vec3 {
+/// Toward the moon `time` of the way through the day: opposite the sun, so it rises as the sun
+/// sets.
+pub fn moon_direction(time: f32) -> Vec3 {
     on_path(sun_angle(time) + PI + MOON_LAG)
 }
 
-/// Moves the sun and moon to the time of day: the sky, fog and light all follow them.
+/// Moves the sun and moon to the time of day, between ticks as far as the clock's got toward the
+/// next, so they move on every frame: the sky, fog and light all follow them.
 pub fn move_sky(
     clock: Res<TimeOfDay>,
+    sub: Res<SubTick>,
     mut sun: Query<&mut Transform, (With<Sun>, Without<Moon>)>,
     mut moon: Query<&mut Transform, (With<Moon>, Without<Sun>)>,
 ) {
+    let days = clock.drawn_days(&sub);
     if let Ok(mut transform) = sun.single_mut() {
-        *transform = shining_from(sun_direction(clock.0));
+        *transform = shining_from(sun_direction(days));
     }
     if let Ok(mut transform) = moon.single_mut() {
-        *transform = shining_from(moon_direction(clock.0));
+        *transform = shining_from(moon_direction(days));
     }
 }
 
@@ -219,10 +224,13 @@ mod tests {
 
     #[test]
     fn test_the_sun_moves_the_same_however_many_days_have_passed() {
-        for days in [1_000.0, 1_000_000.0] {
+        use crate::clock::{TimeOfDay, DAY_TICKS};
+        for days in [1_000, 1_000_000, 100_000_000_000] {
             for fraction in [0.0, 0.3, 0.625, 0.9] {
-                let (now, then) = (sun_direction(days + fraction), sun_direction(fraction));
-                assert!((now - then).length() < 1e-4, "{days} {fraction}");
+                let ticks = days * DAY_TICKS + (fraction * DAY_TICKS as f64) as u64;
+                let now = sun_direction(TimeOfDay(ticks).days());
+                let then = sun_direction(fraction as f32);
+                assert!((now - then).length() < 1e-5, "{days} {fraction}");
             }
         }
     }

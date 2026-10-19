@@ -30,7 +30,7 @@ use rustcraft::client::join::{connect, GenerationChecksum, LeftServer};
 use rustcraft::client::others::SeenPlayer;
 use rustcraft::client::player::{LocalPlayer, OwnSkin};
 use rustcraft::client::ClientPlugin;
-use rustcraft::clock::TimeOfDay;
+use rustcraft::clock::{SubTick, TimeOfDay, DAY_TICKS};
 use rustcraft::containers::{Containers, FUEL, INPUT, OUTPUT};
 use rustcraft::creatures::{
     Condition, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature, Stance,
@@ -500,7 +500,7 @@ fn test_a_client_sees_wheat_grow() {
         server.update();
     }
     // days later, it's ripe, and the client's told
-    server.world_mut().resource_mut::<TimeOfDay>().0 = now + 4.0;
+    server.world_mut().resource_mut::<TimeOfDay>().0 = now + 4 * DAY_TICKS;
     update_until(&mut server, &mut client, |_, client| {
         client_has_edit(client, wheat, BlockType::RipeWheat)
     });
@@ -1613,7 +1613,7 @@ fn test_a_message_reaches_only_its_target_and_list_names_everyone() {
 fn test_only_operators_wind_everyones_clock() {
     let dir = temp_dir("winding");
     let mut gathering = Gathering::new(&dir, &["guest"], false);
-    let clock = |gathering: &Gathering| gathering.apps[0].world().resource::<TimeOfDay>().0;
+    let clock = |gathering: &Gathering| drawn_time(&gathering.apps[0]);
     // how far the clock goes in a wait, a lot more if it's wound on
     let waited = |gathering: &mut Gathering| {
         let before = clock(gathering);
@@ -1639,6 +1639,13 @@ fn test_only_operators_wind_everyones_clock() {
     gathering.wait();
     assert!(waited(&mut gathering) > unwound * 10.0);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// The clock in `app`, in ticks, with the part of the next, which moves on every frame however
+// short.
+fn drawn_time(app: &App) -> f64 {
+    let sub = app.world().resource::<SubTick>().0;
+    app.world().resource::<TimeOfDay>().0 as f64 + f64::from(sub)
 }
 
 // A dedicated server for the world in `dir`, with seed 3, as `rustcraft-server` runs it: no
@@ -1676,9 +1683,9 @@ fn test_a_dedicated_server_has_no_player_of_its_own_and_takes_commands_from_its_
     server.update();
     assert_eq!(vec!["Nobody's here"], printed(&server, &mut answers));
     // and the clock runs with nobody here
-    let started = server.world().resource::<TimeOfDay>().0;
+    let started = drawn_time(&server);
     server.update();
-    assert!(server.world().resource::<TimeOfDay>().0 > started);
+    assert!(drawn_time(&server) > started);
 
     let mut client = joiner(
         &server,
@@ -1932,7 +1939,7 @@ fn test_a_joiner_sees_a_monster_wind_up_and_strike_and_one_vanish_without_dying(
     let dir = temp_dir("monsters");
     let (mut server, mut client) = server_and_client(&dir, None);
     server.insert_resource(SpawnRate(None));
-    server.world_mut().resource_mut::<TimeOfDay>().0 = 0.0;
+    server.world_mut().resource_mut::<TimeOfDay>().0 = 0;
     update_until(&mut server, &mut client, |_, client| joined(client));
     let guest = guests_player(&mut server);
     let spawn = server.world().get::<Transform>(guest).unwrap().translation;
@@ -2008,7 +2015,7 @@ fn test_a_joiner_sees_a_monster_wind_up_and_strike_and_one_vanish_without_dying(
     });
     let (shown_gloamer, _) = creatures_shown(&mut client)[0];
     let seen_gloamer = seen_of(&mut client, shown_gloamer).unwrap();
-    server.world_mut().resource_mut::<TimeOfDay>().0 = 0.5;
+    server.world_mut().resource_mut::<TimeOfDay>().0 = DAY_TICKS / 2;
     update_until(&mut server, &mut client, |server, client| {
         server.world().get_entity(gloamer).is_err()
             && client.world().get::<Dying>(seen_gloamer).is_some()

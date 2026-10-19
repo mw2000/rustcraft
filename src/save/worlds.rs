@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use bevy::ecs::resource::Resource;
 
 use super::{write_atomically, WorldFile, WORLD_FILE};
-use crate::clock::START_TIME;
+use crate::clock::TimeOfDay;
 use crate::game_mode::GameMode;
 
 /// Where the worlds are saved, a directory each, as the menus list them.
@@ -112,7 +112,7 @@ pub fn unused_name(worlds: &Path, wanted: &str) -> String {
 pub fn create(worlds: &Path, name: &str, seed: Option<u32>, mode: GameMode) -> io::Result<PathBuf> {
     let name = tidy_name(name).ok_or_else(|| invalid("a world needs a name"))?;
     let dir = worlds.join(unused_name(worlds, &name));
-    let mut file = WorldFile::new(seed.unwrap_or_else(rand::random), START_TIME);
+    let mut file = WorldFile::new(seed.unwrap_or_else(rand::random), TimeOfDay::default());
     file.new_player_mode = mode;
     fs::create_dir_all(&dir)?;
     write_atomically(&dir.join(WORLD_FILE), file.to_toml().as_bytes())?;

@@ -378,7 +378,7 @@ fn light_hand(
     looks: Res<DropLooks>,
     mut materials: ResMut<Assets<ModelMaterial>>,
 ) {
-    let day = smoothstep((sun_direction(time.0).y - DUSK.0) / (DUSK.1 - DUSK.0));
+    let day = smoothstep((sun_direction(time.days()).y - DUSK.0) / (DUSK.1 - DUSK.0));
     let light = NIGHT_LIGHT.lerp(DAYLIGHT, day);
     let light = LinearRgba::rgb(light.x, light.y, light.z);
     let skins = hands.iter().filter_map(|hand| hand.material.as_ref());

@@ -74,7 +74,7 @@ fn clinging(app: &mut App, kind: CreatureKind, x: f32, top: f32, z: f32) -> Enti
 fn test_monsters_appear_at_night_out_of_reach_up_to_their_caps_and_gloamers_go_by_day() {
     let mut app = app(BlockType::Grass);
     app.insert_resource(SpawnRate(Some(0.1)))
-        .insert_resource(TimeOfDay(NIGHT));
+        .insert_resource(TimeOfDay::from_days(NIGHT));
     let feet = Vec3::new(0.5, FEET, 0.5);
     player(&mut app, feet, None);
     // never nearer than 24 blocks as they appear
@@ -102,7 +102,7 @@ fn test_monsters_appear_at_night_out_of_reach_up_to_their_caps_and_gloamers_go_b
     assert!(kinds(&mut app).into_iter().all(is_monster));
 
     // at sunrise the gloamers vanish, saying so first, and the slingers stay
-    app.insert_resource(TimeOfDay(NOON))
+    app.insert_resource(TimeOfDay::from_days(NOON))
         .insert_resource(SpawnRate(None));
     app.update();
     let mut vanishing = app
@@ -122,7 +122,7 @@ fn test_monsters_appear_at_night_out_of_reach_up_to_their_caps_and_gloamers_go_b
 fn test_no_monster_appears_where_torches_light_the_ground() {
     let mut app = app(BlockType::Grass);
     app.insert_resource(SpawnRate(Some(0.1)))
-        .insert_resource(TimeOfDay(NIGHT));
+        .insert_resource(TimeOfDay::from_days(NIGHT));
     // a torch every 12 blocks, so nowhere's further than 12 from one, and lit
     for x in -5..=5 {
         for z in -5..=5 {
@@ -226,7 +226,7 @@ fn test_a_spawner_brings_out_its_kind_in_the_dark_up_to_a_few_and_not_lit_or_bro
 #[test]
 fn test_a_gloamer_hunts_a_player_in_survival_it_sees_and_strikes_after_its_cooldown() {
     let mut app = app(BlockType::Grass);
-    app.insert_resource(TimeOfDay(NIGHT));
+    app.insert_resource(TimeOfDay::from_days(NIGHT));
     let player = player(&mut app, Vec3::new(0.5, FEET, 0.5), None);
     let gloamer = spawned(&mut app, CreatureKind::Gloamer, Vec3::new(12.5, FEET, 0.5));
     run(&mut app, 0.6);
@@ -367,7 +367,7 @@ fn test_a_lurker_hangs_till_someone_comes_under_it_then_drops_unhurt_and_strikes
 #[test]
 fn test_a_lurker_runs_from_torchlight_and_from_a_torch_held_near() {
     let mut app = app(BlockType::Grass);
-    app.insert_resource(TimeOfDay(NIGHT));
+    app.insert_resource(TimeOfDay::from_days(NIGHT));
     let torch = I64Vec3::new(0, FLOOR + 1, 0);
     edit(&mut app, torch, BlockType::Torch);
     player(&mut app, Vec3::new(-40.5, FEET, 0.5), None);
@@ -392,7 +392,7 @@ fn test_a_lurker_runs_from_torchlight_and_from_a_torch_held_near() {
 #[test]
 fn test_gloamers_join_one_of_their_pack_on_a_hunt_and_give_up_on_someone_far_off() {
     let mut app = app(BlockType::Grass);
-    app.insert_resource(TimeOfDay(NIGHT));
+    app.insert_resource(TimeOfDay::from_days(NIGHT));
     let player = player(&mut app, Vec3::new(0.5, FEET, 0.5), None);
     // a wall between the player and one of them only
     let wall = (
@@ -473,7 +473,7 @@ fn test_a_hit_coming_down_from_a_jump_is_critical() {
 #[test]
 fn test_monsters_despawn_far_from_everyone_unsaved_while_animals_sleep() {
     let mut app = app(BlockType::Grass);
-    app.insert_resource(TimeOfDay(NIGHT));
+    app.insert_resource(TimeOfDay::from_days(NIGHT));
     let player = player(&mut app, Vec3::new(0.5, FEET, 0.5), None);
     app.world_mut()
         .entity_mut(player)
@@ -494,7 +494,7 @@ fn test_monsters_despawn_far_from_everyone_unsaved_while_animals_sleep() {
 
     // a gloamer under a roof by day stays, and one under the sky vanishes
     let mut app = self::app(BlockType::Grass);
-    app.insert_resource(TimeOfDay(NOON));
+    app.insert_resource(TimeOfDay::from_days(NOON));
     let player = self::player(&mut app, Vec3::new(0.5, FEET, 0.5), None);
     app.world_mut()
         .entity_mut(player)

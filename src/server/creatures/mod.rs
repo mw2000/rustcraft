@@ -615,7 +615,7 @@ pub(super) fn think(
                         .map(|&from| Doing::Flee { from }),
                 },
                 Behaviour::Routine => townsfolk
-                    .map(|townsfolk| Doing::Keep(place_now(townsfolk.0.villager.seed, clock.0))),
+                    .map(|townsfolk| Doing::Keep(place_now(townsfolk.0.villager.seed, &clock))),
                 Behaviour::Wander => Some(match mind.doing {
                     Doing::Wander if route.is_going() => Doing::Wander,
                     Doing::Idle if now < mind.until => Doing::Idle,

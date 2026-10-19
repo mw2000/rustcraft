@@ -25,7 +25,7 @@ use bevy::transform::TransformSystems;
 use bevy_replicon::prelude::{ClientState, Remote, ServerSystems};
 
 use crate::chunks::group::rebuild_groups;
-use crate::clock::TimeOfDay;
+use crate::clock::{SubTick, TimeOfDay};
 use crate::player::Player;
 use crate::protocol::Welcome;
 use crate::server::is_authority;
@@ -39,6 +39,7 @@ impl Plugin for ClientPlugin {
         order_leaving(app);
         app.add_message::<join::LeftServer>()
             .init_resource::<TimeOfDay>()
+            .init_resource::<SubTick>()
             .init_resource::<join::GenerationChecksum>()
             .init_resource::<edits::Predictions>()
             .init_resource::<edits::WaitingEdits>()
@@ -150,6 +151,7 @@ fn clear_world(
     commands.remove_resource::<edits::EditOrder>();
     commands.remove_resource::<join::Checking>();
     commands.insert_resource(TimeOfDay::default());
+    commands.insert_resource(SubTick::default());
     commands.insert_resource(edits::Predictions::default());
     commands.insert_resource(edits::WaitingEdits::default());
     commands.insert_resource(join::Teleports::default());

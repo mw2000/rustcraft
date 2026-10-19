@@ -8,7 +8,7 @@ use bevy_replicon::prelude::*;
 
 use super::{cell_of, view_cell, Body, Doing, Mind, Whereabouts};
 use crate::chunks::chunk::ChunkCoordinate;
-use crate::clock::{is_night, TimeOfDay};
+use crate::clock::TimeOfDay;
 use crate::collision::Aabb;
 use crate::creatures::{Attack, Creature, CreatureKind, Missile, Stance, Vanishing};
 use crate::game_mode::GameMode;
@@ -341,7 +341,7 @@ pub(in crate::server) fn despawn(
     creatures: Query<(Entity, &Creature, &Transform), Without<Vanishing>>,
     mut commands: Commands,
 ) {
-    let day = !is_night(clock.0);
+    let day = !clock.is_night();
     for (entity, creature, body) in &creatures {
         let properties = creature.0.properties();
         if !properties.despawns {

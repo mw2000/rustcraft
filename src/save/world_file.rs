@@ -5,6 +5,7 @@ use bevy::math::{I64Vec3, Vec3};
 use bevy::transform::components::Transform;
 use serde::{Deserialize, Serialize};
 
+use crate::clock::TimeOfDay;
 use crate::game_mode::GameMode;
 use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
@@ -15,8 +16,11 @@ use crate::survival::{SpawnBed, Vitals};
 /// The version of the save format, raised whenever a change to it would mislead an older game.
 /// Format 2 moved the hotbar's blocks into the player's inventory (M1.1), format 3 added
 /// containers to the region files (M1.6), format 4 crops (M1.9b) and format 5 blocks' states
-/// (M2.4a) and format 6 crops' planting times as `f64`s (M-R1), each reading the region files before it as they were.
-pub const FORMAT_VERSION: u32 = 6;
+/// (M2.4a), format 6 crops' planting times as `f64`s (M-R1) and format 7 the time and crops'
+/// planting times in whole ticks (U-84), each reading the files before it as they were.
+pub const FORMAT_VERSION: u32 = 7;
+// The first format to count the time in ticks rather than days.
+const TICKS_FORMAT: i64 = 7;
 
 /// A world's `world.toml`: everything about it but its edits.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -26,8 +30,9 @@ pub struct WorldFile {
     /// The version of rustcraft that wrote it.
     pub game_version: String,
     pub seed: u32,
-    /// In days, as `TimeOfDay` has it.
-    pub time_of_day: f64,
+    /// The time, in ticks, as `TimeOfDay` has it. Formats before 7 kept it in days, as
+    /// `time_of_day`, which is read as the nearest tick.
+    pub time: u64,
     /// The names of the players besides the host who may run every command (`Operators`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ops: Vec<String>,
@@ -181,12 +186,12 @@ impl PlayerState {
 }
 
 impl WorldFile {
-    pub fn new(seed: u32, time_of_day: f64) -> Self {
+    pub fn new(seed: u32, time: TimeOfDay) -> Self {
         Self {
             format: FORMAT_VERSION,
             game_version: env!("CARGO_PKG_VERSION").into(),
             seed,
-            time_of_day,
+            time: time.0,
             ops: Vec::new(),
             new_player_mode: GameMode::default(),
             settled: Vec::new(),
@@ -198,10 +203,11 @@ impl WorldFile {
         toml::to_string(self).expect("world files always encode")
     }
 
-    /// Reads a `world.toml`, refusing one in a format newer than this game knows.
+    /// Reads a `world.toml`, refusing one in a format newer than this game knows. One from
+    /// before the clock counted ticks has its time in days turned to the nearest tick.
     pub fn from_toml(text: &str) -> io::Result<Self> {
         let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
-        let table: toml::Table = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
+        let mut table: toml::Table = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
         // checked before anything else, which a newer format might have changed
         let format = table.get("format").and_then(toml::Value::as_integer);
         match format {
@@ -210,6 +216,16 @@ impl WorldFile {
                     "it's in save format {format}, from a newer version of rustcraft, which \
                      only reads format {FORMAT_VERSION}; update rustcraft to play it"
                 )))
+            }
+            Some(format) if format < TICKS_FORMAT => {
+                let days = match table.remove("time_of_day") {
+                    Some(toml::Value::Float(days)) => days,
+                    Some(toml::Value::Integer(days)) => days as f64,
+                    _ => return Err(invalid("it has no time of day".into())),
+                };
+                let ticks = TimeOfDay::from_days(days).0;
+                let ticks = i64::try_from(ticks).map_err(|e| invalid(e.to_string()))?;
+                table.insert("time".into(), toml::Value::Integer(ticks));
             }
             Some(_) => {}
             None => return Err(invalid("it has no save format version".into())),
@@ -225,6 +241,7 @@ mod tests {
 
     use super::{PlayerState, WorldFile, FORMAT_VERSION};
     use crate::block::BlockType;
+    use crate::clock::{TimeOfDay, DAY_TICKS};
     use crate::game_mode::GameMode;
     use crate::inventory::Hotbar;
     use crate::inventory::Inventory;
@@ -234,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_world_files_round_trip() {
-        let mut file = WorldFile::new(1234, 2.75);
+        let mut file = WorldFile::new(1234, TimeOfDay::from_days(2.75));
         assert_eq!(file, WorldFile::from_toml(&file.to_toml()).unwrap());
         let mut player =
             PlayerState::arriving_at(Vec3::new(10.5, 470.0, -3000.25), GameMode::default());
@@ -253,7 +270,7 @@ mod tests {
         use crate::skin::{ArmStyle, Skin};
         let png = std::fs::read("assets/textures/skins/ranger.png").unwrap();
         let skin = Skin::new(png, ArmStyle::Slim).unwrap();
-        let mut file = WorldFile::new(1, 0.5);
+        let mut file = WorldFile::new(1, TimeOfDay::from_days(0.5));
         let player = PlayerState::arriving_at(Vec3::ONE, GameMode::default());
         file.player = Some(player.clone().wearing(Some(&skin)));
         let text = file.to_toml();
@@ -276,23 +293,55 @@ mod tests {
             assert!(!named.is_named_by_hash(), "{name}");
         }
         // with none, nothing's written, and an old save reads as wearing none
-        assert!(!WorldFile::new(1, 0.5).to_toml().contains("skin"));
+        assert!(!WorldFile::new(1, TimeOfDay::from_days(0.5))
+            .to_toml()
+            .contains("skin"));
         assert_eq!(None, player.wearing(None).skin);
     }
 
     #[test]
-    fn test_the_time_keeps_every_day_of_a_long_lived_world() {
-        let file = WorldFile::new(1, 1_000_000.123_456);
+    fn test_the_time_keeps_every_tick_of_a_long_lived_world() {
+        let time = TimeOfDay(1_000_000 * DAY_TICKS + 1_481);
+        let file = WorldFile::new(1, time);
+        assert!(file.to_toml().contains("time = 12000001481"));
         let back = WorldFile::from_toml(&file.to_toml()).unwrap();
-        assert_eq!(1_000_000.123_456, back.time_of_day);
-        // and a time written when it was an `f32` reads as the same number of days
-        let text = file.to_toml().replace("1000000.123456", "12.75");
-        assert_eq!(12.75, WorldFile::from_toml(&text).unwrap().time_of_day);
+        assert_eq!(time.0, back.time);
+    }
+
+    #[test]
+    fn test_a_time_saved_in_days_reads_as_the_nearest_tick() {
+        let ticks = WorldFile::new(1, TimeOfDay(0)).to_toml();
+        let in_days = |format: u32, days: &str| {
+            let text = ticks
+                .replace("format = 7", &format!("format = {format}"))
+                .replace("time = 0", &format!("time_of_day = {days}"));
+            WorldFile::from_toml(&text).map(|file| file.time)
+        };
+        // as format 6 wrote it, an `f64` a million days in, and format 5 an `f32`
+        assert_eq!(12_000_001_481, in_days(6, "1000000.123456").unwrap());
+        assert_eq!(153_000, in_days(5, "12.75").unwrap());
+        assert_eq!(4_800, in_days(1, "0.4").unwrap());
+        assert_eq!(36_000, in_days(4, "3").unwrap());
+        // and once saved again, it's in ticks
+        let file = WorldFile::from_toml(
+            &ticks
+                .replace("format = 7", "format = 6")
+                .replace("time = 0", "time_of_day = 12.75"),
+        )
+        .unwrap();
+        let again = WorldFile {
+            format: FORMAT_VERSION,
+            ..file
+        }
+        .to_toml();
+        assert!(again.contains("time = 153000") && !again.contains("time_of_day"));
+        // but a format 7 file in days is damaged
+        assert!(in_days(7, "12.75").is_err());
     }
 
     #[test]
     fn test_operators_round_trip_and_none_write_nothing() {
-        let mut file = WorldFile::new(1, 0.5);
+        let mut file = WorldFile::new(1, TimeOfDay::from_days(0.5));
         assert!(!file.to_toml().contains("ops"));
         file.ops = vec!["alex".into(), "Sam".into()];
         file.player = Some(PlayerState::arriving_at(Vec3::ONE, GameMode::default()));
@@ -303,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_inventories_and_the_selected_slot_round_trip_by_item_name() {
-        let mut file = WorldFile::new(1, 0.5);
+        let mut file = WorldFile::new(1, TimeOfDay::from_days(0.5));
         let mut inventory = Inventory::default();
         let tables = ItemStack::new(Item::Block(BlockType::CraftingTable), 3);
         inventory.slots[4] = Some(tables);
@@ -334,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_older_saves_get_a_new_players_mode_and_hotbar() {
-        let mut file = WorldFile::new(1, 0.5);
+        let mut file = WorldFile::new(1, TimeOfDay::from_days(0.5));
         file.player = Some(PlayerState::arriving_at(Vec3::ONE, GameMode::default()));
         let text = file.to_toml();
         let older = &text[..text.find("game_mode").unwrap()];
@@ -396,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_health_hunger_breath_and_the_bed_round_trip_and_older_saves_are_whole() {
-        let mut file = WorldFile::new(1, 0.5);
+        let mut file = WorldFile::new(1, TimeOfDay::from_days(0.5));
         let vitals = Vitals {
             health: 7,
             food: 3,
@@ -423,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_a_newer_format_is_refused() {
-        let mut file = WorldFile::new(1234, 0.4);
+        let mut file = WorldFile::new(1234, TimeOfDay::from_days(0.4));
         file.format = FORMAT_VERSION + 1;
         // as a newer format might, with fields this version doesn't know or has lost
         let text = file.to_toml().replace("seed", "seeds");

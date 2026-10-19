@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
 use super::Operators;
-use crate::clock::{TimeOfDay, DAY_SECONDS};
+use crate::clock::{SubTick, TimeOfDay, DAY_TICKS, TICKS_PER_SECOND};
 use crate::player::name::PlayerName;
 use crate::player::PlayerOwner;
 use crate::protocol::{CommandOutput, TimeSync, WindClock};
@@ -12,14 +12,14 @@ use crate::protocol::{CommandOutput, TimeSync, WindClock};
 // How often clients are told the time, between which they run their clocks themselves. Their
 // frames add up to a little more or less than the server's, so this keeps them from drifting.
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
-// How fast `[` and `]` wind the clock, in days a second.
-const WIND_SPEED: f64 = 0.1;
-// How fast the clock runs unwound, in days a second.
-const DAY_RATE: f64 = 1.0 / DAY_SECONDS as f64;
+// How fast `[` and `]` wind the clock, in ticks a second: a tenth of a day.
+const WIND_SPEED: f32 = DAY_TICKS as f32 / 10.0;
+// How fast the clock runs unwound, in ticks a second.
+const DAY_RATE: f32 = TICKS_PER_SECOND as f32;
 
-/// How fast the clock runs, in days a second.
+/// How fast the clock runs, in ticks a second, backwards while it's wound back.
 #[derive(Resource, PartialEq)]
-pub struct ClockRate(f64);
+pub struct ClockRate(f32);
 
 impl Default for ClockRate {
     fn default() -> Self {
@@ -27,10 +27,16 @@ impl Default for ClockRate {
     }
 }
 
-/// Moves the clock on with the game's time. The clock is an `f64`, which can count a frame's
-/// worth however long the world has lived: crops grow by the days it counts.
-pub fn run_clock(time: Res<Time>, rate: Res<ClockRate>, mut clock: ResMut<TimeOfDay>) {
-    clock.0 += time.delta_secs_f64() * rate.0;
+/// Moves the clock on with the game's time, by the whole ticks the frames add up to: the part
+/// of a tick left over is carried in `SubTick` to the next frame, and draws the sky between.
+/// Crops grow by the ticks it counts.
+pub fn run_clock(
+    time: Res<Time>,
+    rate: Res<ClockRate>,
+    mut clock: ResMut<TimeOfDay>,
+    mut sub: ResMut<SubTick>,
+) {
+    clock.run(&mut sub, time.delta_secs_f64() * f64::from(rate.0));
 }
 
 /// Winds the clock back or forward as operators ask, for looking at the sky at any hour, or
@@ -64,7 +70,7 @@ pub(super) fn wind_clock(
             }
             continue;
         }
-        let wound = wind.clamp(-1, 1) as f64;
+        let wound = f32::from(wind.clamp(-1, 1));
         rate.set_if_neq(ClockRate(DAY_RATE + wound * WIND_SPEED));
     }
 }
@@ -74,6 +80,7 @@ pub(super) fn wind_clock(
 pub(super) fn sync_clock(
     time: Res<Time>,
     clock: Res<TimeOfDay>,
+    sub: Res<SubTick>,
     rate: Res<ClockRate>,
     joined: Query<(), Added<AuthorizedClient>>,
     mut next: Local<Duration>,
@@ -87,6 +94,7 @@ pub(super) fn sync_clock(
         targets: SendTargets::All,
         message: TimeSync {
             time: clock.0,
+            sub_tick: sub.0,
             rate: rate.0,
         },
     });
@@ -103,7 +111,7 @@ mod tests {
     use bevy_replicon::prelude::*;
 
     use super::{DAY_RATE, WIND_SPEED};
-    use crate::clock::TimeOfDay;
+    use crate::clock::{SubTick, TimeOfDay, DAY_TICKS};
     use crate::protocol::{ProtocolPlugin, TimeSync, WindClock};
     use crate::server::ServerPlugin;
     use crate::world::World;
@@ -128,8 +136,13 @@ mod tests {
         app
     }
 
-    fn time(app: &App) -> f64 {
+    fn time(app: &App) -> u64 {
         app.world().resource::<TimeOfDay>().0
+    }
+
+    // The clock as it's drawn, in ticks, with the part of the next.
+    fn drawn(app: &App) -> f64 {
+        time(app) as f64 + f64::from(app.world().resource::<SubTick>().0)
     }
 
     // The syncs sent since last asked, which with no transport come straight back.
@@ -158,41 +171,48 @@ mod tests {
     }
 
     #[test]
-    fn test_the_clock_runs_on_however_many_days_have_passed() {
-        // a 30th of a second, a dedicated server's frame, is less than half of what an `f32`
-        // of 2,000 days can count
+    fn test_the_clock_counts_whole_ticks_however_many_days_have_passed() {
+        // a 30th of a second, a dedicated server's frame, is two thirds of a tick
         let frame = Duration::from_secs_f64(1.0 / 30.0);
-        for days in [1_000.0, 2_000.0, 10_000.0, 1_000_000.0] {
+        for days in [0, 1_000, 1_000_000, 100_000_000_000] {
             let mut app = server();
             app.insert_resource(TimeUpdateStrategy::ManualDuration(frame));
-            app.world_mut().resource_mut::<TimeOfDay>().0 = days;
+            app.world_mut().resource_mut::<TimeOfDay>().0 = days * DAY_TICKS;
+            // the first frame at the new pace
             app.update();
-            let mut last = time(&app);
+            let start = time(&app);
+            // as it's drawn, since then, which an `f64` holds finely at any day
+            let since = |app: &App| {
+                let sub = app.world().resource::<SubTick>().0;
+                (time(app) - start) as f64 + f64::from(sub)
+            };
+            let mut last = since(&app);
             for _ in 0..300 {
                 app.update();
-                // every frame moves it on by as much as the rate says
-                let step = time(&app) - last;
-                assert!(
-                    (step - frame.as_secs_f64() * DAY_RATE).abs() < 1e-9,
-                    "{days}: {step}"
-                );
-                last = time(&app);
+                // every frame moves it on, as it's drawn, by as much as the rate says
+                let step = since(&app) - last;
+                let expected = frame.as_secs_f64() * f64::from(DAY_RATE);
+                assert!((step - expected).abs() < 1e-4, "{days}: {step}");
+                last = since(&app);
             }
-            let ran = 301.0 * frame.as_secs_f64() * DAY_RATE;
-            assert!((last - days - ran).abs() < 1e-6, "{days}: {last}");
+            // 300 frames of 2/3 of a tick are 200 whole ticks, give or take the part carried
+            let ran = time(&app) - start;
+            assert!((199..=201).contains(&ran), "{days}: {ran}");
         }
     }
 
     #[test]
     fn test_sleeping_through_the_night_and_syncing_at_large_days_keep_the_whole_clock() {
         let mut app = server();
-        app.world_mut().resource_mut::<TimeOfDay>().0 = 1_000_000.9;
+        let night = TimeOfDay::from_days(1_000_000.9);
+        app.world_mut().insert_resource(night);
         app.update();
-        assert!(crate::clock::is_night(time(&app)));
+        assert!(app.world().resource::<TimeOfDay>().is_night());
         app.world_mut().write_message(WindClock(1));
         app.update();
         let sync = syncs(&mut app).pop().unwrap();
-        assert!((sync.time - 1_000_000.9).abs() < 0.01, "{}", sync.time);
+        // a frame or two of ticks on, and no more
+        assert!(sync.time - night.0 < 100, "{}", sync.time);
     }
 
     #[test]
@@ -219,8 +239,9 @@ mod tests {
         assert_eq!(1, wound.len());
         assert_eq!(DAY_RATE + WIND_SPEED, wound[0].rate);
         app.update();
-        let step = wound[0].rate * FRAME.as_secs_f64();
-        assert!((time(&app) - wound[0].time - step).abs() < 1e-5);
+        let step = f64::from(wound[0].rate) * FRAME.as_secs_f64();
+        let since = wound[0].time as f64 + f64::from(wound[0].sub_tick);
+        assert!((drawn(&app) - since - step).abs() < 1e-3);
         // a request out of range winds no faster, so changes nothing
         app.world_mut().write_message(WindClock(5));
         app.update();

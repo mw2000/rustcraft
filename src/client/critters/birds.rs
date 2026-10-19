@@ -394,7 +394,7 @@ fn fly_geese(
         return;
     }
     // the day's way, passing over somewhere near the camera, to one side or the other
-    let day = clock.0.floor() as i64;
+    let day = clock.day() as i64;
     let course = Quat::from_rotation_y(dice.range(-SKEIN_STRAY..SKEIN_STRAY))
         * migration_course(world.seed(), day);
     let side = Vec3::new(-course.z, 0.0, course.x);

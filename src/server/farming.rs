@@ -64,24 +64,24 @@ mod tests {
 
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
-    use crate::clock::TimeOfDay;
+    use crate::clock::{TimeOfDay, DAY_TICKS};
     use crate::edits::Edits;
     use crate::farming::{grown, stage, Crops};
     use crate::protocol::{BlockChanged, ProtocolPlugin};
     use crate::server::ServerPlugin;
     use crate::world::World;
 
-    // A row of crops along x on farmland, across two chunks, all planted at day 1, with water
-    // at the end of the row, within reach of the last four.
+    // A row of crops along x on farmland, across two chunks, all planted at the start of day 1,
+    // in ticks, with water at the end of the row, within reach of the last four.
     const ROW: i64 = 24;
-    const PLANTED: f64 = 1.0;
+    const PLANTED: u64 = DAY_TICKS;
 
     fn crop(i: i64) -> I64Vec3 {
         I64Vec3::new(i, 1, 3)
     }
 
     // A server with no players and seed 7, its chunks loaded if `loaded`. Its clock moves only as it's set.
-    fn server(loaded: bool, planted: f64) -> App {
+    fn server(loaded: bool, planted: u64) -> App {
         let mut world = World::from_save(7, Edits::default(), 16);
         if loaded {
             load(&mut world);
@@ -116,9 +116,9 @@ mod tests {
         }
     }
 
-    // Sets the clock to `day` and lets the server run a frame.
-    fn at(app: &mut App, day: f64) {
-        app.world_mut().resource_mut::<TimeOfDay>().0 = day;
+    // Sets the clock to tick `now` and lets the server run a frame.
+    fn at(app: &mut App, now: u64) {
+        app.world_mut().resource_mut::<TimeOfDay>().0 = now;
         app.update();
     }
 
@@ -142,16 +142,16 @@ mod tests {
 
     #[test]
     fn test_wheat_grows_the_same_planted_after_a_million_days() {
-        wheat_grows(1_000_000.0);
+        wheat_grows(1_000_000 * DAY_TICKS);
     }
 
-    fn wheat_grows(planted: f64) {
+    fn wheat_grows(planted: u64) {
         let mut app = server(true, planted);
         let seed = app.world().resource::<World>().seed();
         let mut was = stages(&app);
         assert_eq!(vec![0; ROW as usize], was);
         for tenth in 1..=36 {
-            let day = planted + tenth as f64 / 10.0;
+            let day = planted + tenth * DAY_TICKS / 10;
             at(&mut app, day);
             let now = stages(&app);
             // never going back, and as each crop's own time says
@@ -178,14 +178,14 @@ mod tests {
 
     #[test]
     fn test_a_field_catches_up_the_same_after_a_million_days() {
-        catches_up(1_000_000.0);
+        catches_up(1_000_000 * DAY_TICKS);
     }
 
-    fn catches_up(planted: f64) {
-        let day = planted + 1.3;
+    fn catches_up(planted: u64) {
+        let day = planted + DAY_TICKS * 13 / 10;
         let mut live = server(true, planted);
         for hundredth in 1..=130 {
-            at(&mut live, planted + hundredth as f64 / 100.0);
+            at(&mut live, planted + hundredth * DAY_TICKS / 100);
         }
         // the clock jumped, as when the world's slept through
         let mut jumped = server(true, planted);

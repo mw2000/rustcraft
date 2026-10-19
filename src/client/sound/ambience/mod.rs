@@ -24,7 +24,7 @@ use crate::block::BlockType;
 use crate::chunks::generate::noise::TerrainSample;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::client::player::LocalPlayer;
-use crate::clock::{day_fraction, TimeOfDay};
+use crate::clock::TimeOfDay;
 use crate::world::World;
 use wind::{wind_strength, Gust, Wind, WindDials, WIND_PLAYBACK};
 
@@ -265,7 +265,7 @@ fn mix(s: &Surroundings) -> Mix {
 
 impl Surroundings {
     /// What's round eyes at `eyes` in `world` at `time`, moving at `speed`.
-    fn at(world: &World, eyes: Vec3, time: f64, speed: f32) -> Self {
+    fn at(world: &World, eyes: Vec3, time: &TimeOfDay, speed: f32) -> Self {
         let noise = world.region_store.noise();
         let (x, z) = (eyes.x as f64, eyes.z as f64);
         let here = noise.sample(x, z);
@@ -304,7 +304,7 @@ impl Surroundings {
             canopy,
             temperature: climate.temperature,
             humidity: climate.humidity,
-            time: day_fraction(time),
+            time: time.days(),
         }
     }
 }
@@ -366,7 +366,7 @@ fn look_around(
             speed
         }
     });
-    *wanted = mix(&Surroundings::at(&world, eyes, clock.0, speed));
+    *wanted = mix(&Surroundings::at(&world, eyes, &clock, speed));
 }
 
 // Eases each loop towards what's wanted, as it comes and goes, pausing those faded out, so they

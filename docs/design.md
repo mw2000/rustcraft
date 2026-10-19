@@ -343,6 +343,11 @@ The world's state beyond the seed (INV-1).
     Formats 4 and 5 (`0, 4` and `0, 5`), which have them as `f32`s, are read with each widened
     exactly and rewritten as format 6 the next time their region changes. `world.toml`'s format
     is 6, and its `time_of_day` is an `f64`; one written as an `f32` reads as the same days.
+  - **Since format 7 (U-84)** the time is counted in whole ticks, 20 a second (§4.4): crops'
+    planting times are `u64`s of ticks, and `world.toml` has `time`, in ticks, in place of
+    `time_of_day`, in days. Formats 4 to 6 (`0, 4` to `0, 6`) are read with each planting time
+    turned to the nearest tick and rewritten as format 7 the next time their region changes;
+    a `world.toml` before format 7 has its `time_of_day` read the same way.
   - `Edits` remembers which chunks changed since the last save. Every 30 s, and only if
     something changed, the main thread copies `world.toml`'s contents and the edits of the
     regions with new ones, which is quick, and the IO pool writes them, one
@@ -496,7 +501,7 @@ The world's state beyond the seed (INV-1).
   `CommandPlugin` now needs `ProtocolPlugin`.
 - **Built (M0.5e):** the server's clock (`src/server/clock.rs`) runs only on the authority:
   `run_clock` moves `TimeOfDay` on at a `ClockRate`, and `sync_clock` sends every client
-  `TimeSync { time, rate }` every 5 seconds and as soon as the rate changes (to the App itself
+  `TimeSync` every 5 seconds and as soon as the rate changes (to the App itself
   in singleplayer, where nothing reads it). A client that isn't the authority sets its clock
   by each sync and runs it at the rate given in between (`client::clock::follow_clock`), and
   stands still until the first. `[` and `]` stay as they were, rather than becoming a `/time`
@@ -507,11 +512,17 @@ The world's state beyond the seed (INV-1).
   keeps the server's time as before. Over a network a client's clock jumps at each sync by
   however far its frames have drifted from the server's, a fraction of a second's worth, or a
   moment's while it's wound; neither is worth smoothing yet. A client that leaves while
-  winding should unwind the clock (M0.6). `TimeOfDay` has been an `f64` of days since the
-  M-R1 follow-up (`PROTOCOL_VERSION` 18, `TimeSync` and `ClockRate` in `f64`s), so `run_clock`
-  and `follow_clock` simply add each frame's time, however many days have passed. What needs an
-  `f32` takes it from the `f64` first: `day_fraction` for the sky and ambience, and the clouds'
-  drift wraps its seconds by the wind's period before narrowing.
+  winding should unwind the clock (M0.6). `TimeOfDay` is a `u64` of ticks, 20 a second and
+  12,000 a day, since U-84 (it was an `f64` of days from the M-R1 follow-up), so it's exact and
+  the same on every machine however many days have passed: `run_clock` and `follow_clock` add
+  each frame's whole ticks (`TimeOfDay::run`) and carry the rest in `SubTick`, which is only
+  for drawing. `TimeSync { time, sub_tick, rate }` carries both, with the rate in ticks a
+  second, so a client lands where the server is between ticks too (`PROTOCOL_VERSION` 23).
+  The sun, moon and clouds draw at `TimeOfDay::drawn_days`, the tick plus `SubTick`, so they
+  move on every frame rather than twenty times a second; everything else (beds, monsters,
+  villagers, critters, ambience, the hand's light) reads whole ticks, through `days()` (how
+  far through the day), `day()` (which day) and `is_night()`. The clouds' drift wraps its
+  ticks by the wind's period before narrowing.
 - **Built (M0.5f):** `World` keeps who holds each chunk, a bit for each `Holder` (`Client`,
   `Server`): `hold` as a chunk's asked for, before it's generated, and `release`, which unloads
   it once nothing holds it, in place of `clear_chunk`. The client holds a chunk as
@@ -813,8 +824,8 @@ The world's state beyond the seed (INV-1).
     the world goes on, as a Minecraft server's does, and costs nothing with no chunks loaded.
     `run_clock` counted in an `f64` beside `TimeOfDay`, as an `f32` of 1,024 days can't add a
     30th of a second (5.6e-5 days), so a server left on for a week would have stopped its
-    clock, and crops with it, which grow by the days it counts; `TimeOfDay` is an `f64` now,
-    and the shadow is gone (§4.4).
+    clock, and crops with it, which grow by the days it counts; `TimeOfDay` was an `f64` from
+    then, and the shadow went, and since U-84 it's a `u64` of ticks (§4.4).
   - **Console:** a thread reads lines from stdin (`Console`), and `ConsolePlugin` writes each
     as the App's own `RunCommand` or `Chat`, which replicon hands the server from
     `ClientId::Server` as it does the host's, and logs the `CommandOutput` that comes back. So
@@ -844,7 +855,7 @@ The world's state beyond the seed (INV-1).
     stops the server without saving; from a terminal, systemd or Docker it saves. A client
     quitting doesn't say so, so the server sees it leave only once it times out, about 15
     seconds on. (A client's clock once added in an `f32` between syncs, so its sky moved only at
-    each sync after 512 days; it's an `f64` now.)
+    each sync after 512 days; it counts whole ticks now, U-84.)
   - `tests/multiplayer.rs` runs `DedicatedServerPlugins` with a console fed by a channel:
     nobody's there until a client joins; `list`, `op` and `say` reach it, with or without the
     `/`; the clock runs with nobody on; building in the air records no reroofs; leaving saves
@@ -891,7 +902,8 @@ The world's state beyond the seed (INV-1).
   32 KB and its arms, checked as it's made and again whenever it's deserialised, so a client
   can't send the server, or the server a client, anything that isn't one; renet splits the
   message, so it isn't chunked by hand. `Welcome` now carries the name the server gave the
-  client, so its own model wears the default others see. `PROTOCOL_VERSION` is 22.
+  client, so its own model wears the default others see. `PROTOCOL_VERSION` is 22 (23 since
+  U-84's integer clock).
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin`,
   `DedicatedServerPlugins` and `is_authority`, `edits.rs`, `chunks.rs`, `commands.rs`,
   `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`,
@@ -1603,7 +1615,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     seed; ripe wheat drops a `wheat` and 1–3 seeds. Their tiles, untinted, from green shoots to
     bearded gold ears, and farmland's are drawn by `draw.py`.
   - **Growing (INV-4):** a stage is a block, so growing is an edit, saved and sent as any is.
-    The server keeps each crop's planting time, in game days (`TimeOfDay`, so sleeping through
+    The server keeps each crop's planting time, in ticks (`TimeOfDay`, so sleeping through
     the night grows crops too), in `Crops` beside the edit layer, as containers are kept, and a
     crop's stage is a function of it: each of the seven steps takes 0.6–1.4 times a seventh of
     2.5 days, by a hash of the seed, the crop's place and its planting time, divided by 1.5 if
@@ -2893,10 +2905,21 @@ both sides built the same thing they're merged into one system keeping the best 
     drawn by nothing and chunks drawn whole twice: on seeds 7 and 4 at 80 blocks a second,
     flight shows 0–6 dither gaps a report both before and after, and the same whole-twice
     counts (hundreds, with stale full detail, before as after), so nothing new.
-- ☐ **U-84 Integer clock** (Rory Nickolls, `08015ef`): `TimeOfDay` as a `u64` of ticks, 20 a
+- ☑ **U-84 Integer clock** (Rory Nickolls, `08015ef`): `TimeOfDay` as a `u64` of ticks, 20 a
   second, exact and the same on every machine, replacing our `f64` of days; extended through
   the server-run clock, `TimeSync`, `world.toml` and crops' planting times (with a save
   migration from days), and everything that reads the time.
+  - Built: upstream's `TICKS_PER_SECOND`, `DAY_TICKS`, `TimeOfDay::from_days` and `days()`
+    (how far through the day) are kept, in `src/clock.rs`, with `day()`, `is_night()` and
+    `morning_after()` for beds, villagers' stock and monsters. The server's clock counts whole
+    ticks and carries the part of one left in `SubTick`, which only the sun, moon and clouds
+    read, so the sky still moves on every frame; `TimeSync` sends ticks, that part and the
+    rate in ticks a second (`PROTOCOL_VERSION` 23, §4.4). Saves are format 7: `world.toml`'s
+    `time` and crops' planting times in ticks, with older days read as the nearest tick
+    (§4.3). Crops grow to the tick: `reaches` gives the tick a stage is reached, and a crop's
+    growth hash takes its planting tick where it took its planting time's `f64` bits, so crops
+    planted before it grow to a different, equally varied, schedule, as at the M-R1 follow-up.
+    `RC_TIME` is still in days.
 - ☐ **U-80 Weather** (Aymen Qader, with Rory Nickolls' tuning `fbd522d`, `9307035` and the rain
   half of `7c970d4`): storms, rain, a rainbow, lightning and thunder on the integer clock,
   replacing M3.5's paused WIP (branch `wip/m3.5-weather` on the fork: snow by climate, `/weather`, beds through storms, synthesised rain and thunder; it was never compiled), with our extras on top: snow by climate, rain stopping under
@@ -3012,7 +3035,8 @@ they're found.
   - ☑ Follow-up: `TimeOfDay` is an `f64` of days, with `TimeSync`, `world.toml` and crops'
     planting times (region format 6, read from 4 and 5), so every clock runs smoothly however
     many days have passed (§4.4). A crop's growth hash now takes its planting time's `f64`
-    bits, so crops planted before it grow to a different, equally varied, schedule.
+    bits, so crops planted before it grow to a different, equally varied, schedule. (Since
+    U-84 the clock's a `u64` of ticks, format 7.)
 - ☐ **M-A1 Art pass, 32px.** Block and item tiles redrawn at 32×32 in a richer, natural style —
   inspired by the look of packs like Patrix (soft, detailed, naturally lit surfaces), never copied
   (INV-8) — by our own drawing scripts, with the atlas, shaders, LOD colours and map relief following.
@@ -3291,7 +3315,8 @@ For agents and contributors:
   life and firefly light, §5.8 and §5.5, and #82's perf (Rory Nickolls): leaves' inner faces
   drawn near only, §5.7, and full detail out to 24 chunks, M-U1, and #83/#84's fixes (Aymen
   Qader, Rory Nickolls): the wind not retaining samples, far leaf shadows blurred, level 2's
-  trees as leaf cells and the staggered LOD cross-fade, U-83/84.
+  trees as leaf cells and the staggered LOD cross-fade, U-83/84, and #84's integer clock (Rory
+  Nickolls): the time in whole ticks, U-84.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.
 - **Screenshots:** anything visual is checked in the real game with the `screenshot` skill, which

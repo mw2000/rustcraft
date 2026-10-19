@@ -14,6 +14,7 @@ use bevy::prelude::Resource;
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use crate::chunks::generate::trees::hash;
+use crate::clock::DAY_TICKS;
 use crate::world::World;
 
 /// Wheat's stages, from the shoots seeds come up as to ripe ears.
@@ -28,8 +29,8 @@ pub const WHEAT: [BlockType; 8] = [
     BlockType::RipeWheat,
 ];
 
-/// How long a stage takes on average on dry farmland, in game days (`TimeOfDay`): wheat's ripe
-/// two and a half days after it's planted, 25 minutes.
+/// How long a stage takes on average on dry farmland, in game days: wheat's ripe two and a half
+/// days after it's planted, 25 minutes.
 pub const STAGE_DAYS: f64 = 2.5 / (WHEAT.len() - 1) as f64;
 /// How many times quicker crops grow with water within `WATER_REACH` of their farmland.
 pub const WET_SPEED: f64 = 1.5;
@@ -46,12 +47,12 @@ pub fn stage(block: BlockType) -> Option<usize> {
     WHEAT.iter().position(|&stage| stage == block)
 }
 
-/// When, in game days, a crop at `at` planted at `planted` reaches `stage`, growing `wet` or
-/// dry. Each stage takes from 0.6 to 1.4 times `STAGE_DAYS`, as the world's `seed`, the crop's
-/// place and when it was planted decide, so a field comes up unevenly and a crop sown again
-/// grows differently, but always the same given those.
-pub fn reaches(seed: u32, at: I64Vec3, planted: f64, stage: usize, wet: bool) -> f64 {
-    let crop = hash(u64::from(seed) << 32 ^ planted.to_bits(), at.x, at.z);
+/// When, in ticks (`TimeOfDay`), a crop at `at` planted at tick `planted` reaches `stage`,
+/// growing `wet` or dry. Each stage takes from 0.6 to 1.4 times `STAGE_DAYS`, as the world's
+/// `seed`, the crop's place and when it was planted decide, so a field comes up unevenly and a
+/// crop sown again grows differently, but always the same given those, on every machine.
+pub fn reaches(seed: u32, at: I64Vec3, planted: u64, stage: usize, wet: bool) -> u64 {
+    let crop = hash(u64::from(seed) << 32 ^ planted, at.x, at.z);
     let crop = hash(crop, at.y, 0);
     let days: f64 = (1..=stage)
         .map(|stage| {
@@ -59,11 +60,12 @@ pub fn reaches(seed: u32, at: I64Vec3, planted: f64, stage: usize, wet: bool) ->
             STAGE_DAYS * (0.6 + 0.8 * share)
         })
         .sum();
-    planted + days / if wet { WET_SPEED } else { 1.0 }
+    let ticks = days * DAY_TICKS as f64 / if wet { WET_SPEED } else { 1.0 };
+    planted.saturating_add(ticks.round() as u64)
 }
 
 /// The stage a crop's grown to by `now`, see `reaches`.
-pub fn grown(seed: u32, at: I64Vec3, planted: f64, now: f64, wet: bool) -> usize {
+pub fn grown(seed: u32, at: I64Vec3, planted: u64, now: u64, wet: bool) -> usize {
     (1..WHEAT.len())
         .take_while(|&stage| reaches(seed, at, planted, stage, wet) <= now)
         .count()
@@ -83,7 +85,7 @@ pub fn is_watered(world: &World, at: I64Vec3) -> bool {
 }
 
 /// Every crop growing in the world, by chunk and where in it, as the edit layer keeps its
-/// edits: when it was planted, in game days. A ripe crop has nothing left to grow, so it's let
+/// edits: when it was planted, in ticks. A ripe crop has nothing left to grow, so it's let
 /// go of. Only the server has them (INV-4).
 #[derive(Resource, Default)]
 pub struct Crops {
@@ -97,19 +99,19 @@ pub struct Crops {
 #[derive(Default)]
 struct Field {
     crops: HashMap<U16Vec3, Crop>,
-    due: f64,
+    due: u64,
 }
 
 #[derive(Clone, Copy)]
 struct Crop {
-    planted: f64,
+    planted: u64,
     // when it's next to be looked at, as it's due to reach its next stage then
-    due: f64,
+    due: u64,
 }
 
 impl Crops {
     /// Plants a crop at `at` at `now`, in place of any that was there.
-    pub fn plant(&mut self, at: I64Vec3, now: f64) {
+    pub fn plant(&mut self, at: I64Vec3, now: u64) {
         let coord = ChunkCoordinate::containing(at);
         self.put(coord, ChunkCoordinate::local_block(at), now);
         self.changed.insert(coord);
@@ -117,9 +119,9 @@ impl Crops {
 
     /// Puts back a crop loaded from a save, which as it's already saved isn't a change. It's
     /// looked at as soon as its chunk's loaded, to catch up on the time it's been away.
-    pub fn put(&mut self, coord: ChunkCoordinate, local: U16Vec3, planted: f64) {
+    pub fn put(&mut self, coord: ChunkCoordinate, local: U16Vec3, planted: u64) {
         let field = self.chunks.entry(coord).or_default();
-        let due = f64::NEG_INFINITY;
+        let due = 0;
         field.crops.insert(local, Crop { planted, due });
         field.due = due;
     }
@@ -143,7 +145,7 @@ impl Crops {
     }
 
     /// When the crop at `at` was planted, if there's one.
-    pub fn planted(&self, at: I64Vec3) -> Option<f64> {
+    pub fn planted(&self, at: I64Vec3) -> Option<u64> {
         let field = self.chunks.get(&ChunkCoordinate::containing(at))?;
         let crop = field.crops.get(&ChunkCoordinate::local_block(at))?;
         Some(crop.planted)
@@ -154,17 +156,17 @@ impl Crops {
     /// fields due are looked through, so a frame with none costs a comparison a field.
     pub fn due(
         &mut self,
-        now: f64,
+        now: u64,
         loaded: impl Fn(ChunkCoordinate) -> bool,
         most: usize,
-    ) -> Vec<(I64Vec3, f64)> {
+    ) -> Vec<(I64Vec3, u64)> {
         let mut due = Vec::new();
         for (&coord, field) in &mut self.chunks {
             if field.due > now || !loaded(coord) {
                 continue;
             }
             let origin = coord.0 * CHUNK_SIZE as i64;
-            let mut later = f64::INFINITY;
+            let mut later = u64::MAX;
             for (&local, crop) in &field.crops {
                 if crop.due > now {
                     later = later.min(crop.due);
@@ -182,7 +184,7 @@ impl Crops {
 
     /// Says when the crop at `at`, given by `due`, is next due to grow, or that it's done
     /// growing, ripe or gone, and is to be forgotten.
-    pub fn grew(&mut self, at: I64Vec3, next: Option<f64>) {
+    pub fn grew(&mut self, at: I64Vec3, next: Option<u64>) {
         let Some(next) = next else {
             self.remove(at);
             return;
@@ -202,7 +204,7 @@ impl Crops {
     }
 
     /// The crops in the chunk at `coord` and when each was planted, in no particular order.
-    pub fn in_chunk(&self, coord: ChunkCoordinate) -> impl Iterator<Item = (U16Vec3, f64)> + '_ {
+    pub fn in_chunk(&self, coord: ChunkCoordinate) -> impl Iterator<Item = (U16Vec3, u64)> + '_ {
         let crops = self.chunks.get(&coord).into_iter();
         crops.flat_map(|field| {
             field
@@ -225,9 +227,20 @@ mod tests {
     use super::{grown, is_watered, reaches, stage, tilled, Crops, STAGE_DAYS, WET_SPEED, WHEAT};
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
+    use crate::clock::{TimeOfDay, DAY_TICKS};
     use crate::world::World;
 
     const AT: I64Vec3 = I64Vec3::new(17, 460, -5);
+
+    // The tick `days` days in.
+    fn day(days: f64) -> u64 {
+        TimeOfDay::from_days(days).0
+    }
+
+    // Ticks as days.
+    fn days(ticks: u64) -> f64 {
+        ticks as f64 / DAY_TICKS as f64
+    }
 
     #[test]
     fn test_only_dirt_and_grass_are_tilled_into_farmland() {
@@ -246,15 +259,18 @@ mod tests {
         let mut ripe_dry = Vec::new();
         for x in 0..200 {
             let at = AT + I64Vec3::X * x;
-            let dry = reaches(7, at, 3.0, last, false) - 3.0;
-            let wet = reaches(7, at, 3.0, last, true) - 3.0;
+            let dry = days(reaches(7, at, day(3.0), last, false)) - 3.0;
+            let wet = days(reaches(7, at, day(3.0), last, true)) - 3.0;
             assert!((dry / wet - WET_SPEED).abs() < 1e-3, "{dry} {wet}");
-            // each stage takes from 0.6 to 1.4 times its share
+            // each stage takes from 0.6 to 1.4 times its share, to the tick
+            let tick = days(1);
             for stage in 1..=last {
-                let took =
-                    reaches(7, at, 3.0, stage, false) - reaches(7, at, 3.0, stage - 1, false);
+                let took = days(
+                    reaches(7, at, day(3.0), stage, false)
+                        - reaches(7, at, day(3.0), stage - 1, false),
+                );
                 assert!(
-                    (0.6 * STAGE_DAYS..=1.4 * STAGE_DAYS).contains(&took),
+                    (0.6 * STAGE_DAYS - tick..=1.4 * STAGE_DAYS + tick).contains(&took),
                     "{took}"
                 );
             }
@@ -270,20 +286,26 @@ mod tests {
 
     #[test]
     fn test_growth_is_decided_by_the_seed_the_place_and_the_planting_alone() {
-        let ripe = |seed, at, planted| reaches(seed, at, planted, WHEAT.len() - 1, false);
+        let ripe = |seed, at, planted| reaches(seed, at, day(planted), WHEAT.len() - 1, false);
         assert_eq!(ripe(7, AT, 3.0), ripe(7, AT, 3.0));
         assert_ne!(ripe(7, AT, 3.0), ripe(8, AT, 3.0));
-        assert_ne!(ripe(7, AT, 3.0) - 3.0, ripe(7, AT, 3.5) - 3.5);
+        assert_ne!(ripe(7, AT, 3.0) - day(3.0), ripe(7, AT, 3.5) - day(3.5));
         assert_ne!(ripe(7, AT, 3.0), ripe(7, AT + I64Vec3::Y, 3.0));
+        // a tick later is another planting
+        assert_ne!(
+            ripe(7, AT, 3.0) - day(3.0),
+            reaches(7, AT, day(3.0) + 1, WHEAT.len() - 1, false) - day(3.0) - 1
+        );
         // stage by stage, never going back, from seeds at planting to ripe
-        assert_eq!(0, grown(7, AT, 3.0, 3.0, false));
-        assert_eq!(0, grown(7, AT, 3.0, 2.0, false));
+        let planted = day(3.0);
+        assert_eq!(0, grown(7, AT, planted, planted, false));
+        assert_eq!(0, grown(7, AT, planted, day(2.0), false));
         let stages: Vec<_> = (0..40)
-            .map(|tenth| grown(7, AT, 3.0, 3.0 + tenth as f64 / 10.0, false))
+            .map(|tenth| grown(7, AT, planted, day(3.0 + tenth as f64 / 10.0), false))
             .collect();
         assert!(stages.windows(2).all(|pair| pair[0] <= pair[1]));
         assert_eq!(WHEAT.len() - 1, stages[39]);
-        assert_eq!(WHEAT.len() - 1, grown(7, AT, 3.0, 100.0, false));
+        assert_eq!(WHEAT.len() - 1, grown(7, AT, planted, day(100.0), false));
     }
 
     #[test]
@@ -310,22 +332,22 @@ mod tests {
     fn test_crops_are_due_at_once_then_when_they_said_and_forgotten_once_done() {
         let mut crops = Crops::default();
         let other = AT + I64Vec3::X * 40;
-        crops.plant(AT, 1.0);
-        crops.plant(other, 1.5);
+        crops.plant(AT, 100);
+        crops.plant(other, 150);
         let loaded = |coord: ChunkCoordinate| coord == ChunkCoordinate::containing(AT);
         // only those in loaded chunks, and only so many a call
-        assert_eq!(vec![(AT, 1.0)], crops.due(1.0, loaded, 10));
-        assert!(crops.due(1.0, |_| true, 0).is_empty());
-        assert_eq!(vec![(other, 1.5)], crops.due(1.5, |_| true, 10));
-        crops.grew(AT, Some(2.0));
-        crops.grew(other, Some(3.0));
-        assert!(crops.due(1.9, |_| true, 10).is_empty());
-        assert_eq!(vec![(AT, 1.0)], crops.due(2.0, |_| true, 10));
+        assert_eq!(vec![(AT, 100)], crops.due(100, loaded, 10));
+        assert!(crops.due(100, |_| true, 0).is_empty());
+        assert_eq!(vec![(other, 150)], crops.due(150, |_| true, 10));
+        crops.grew(AT, Some(200));
+        crops.grew(other, Some(300));
+        assert!(crops.due(199, |_| true, 10).is_empty());
+        assert_eq!(vec![(AT, 100)], crops.due(200, |_| true, 10));
         assert_eq!(2, crops.take_changed().len());
         // ripe, it's let go of, which is a change to save
         crops.grew(AT, None);
         assert_eq!(None, crops.planted(AT));
-        assert_eq!(Some(1.5), crops.planted(other));
+        assert_eq!(Some(150), crops.planted(other));
         assert_eq!(1, crops.chunks().count());
         assert_eq!(1, crops.take_changed().len());
     }

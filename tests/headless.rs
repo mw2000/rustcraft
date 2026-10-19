@@ -12,7 +12,7 @@ use bevy::time::TimeUpdateStrategy;
 use bevy_replicon::prelude::*;
 use rustcraft::block::BlockType;
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
-use rustcraft::clock::TimeOfDay;
+use rustcraft::clock::{SubTick, TimeOfDay};
 use rustcraft::game_mode::{GameMode, GameModePlugin};
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
@@ -102,6 +102,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
         app.world().get::<Transform>(player).unwrap().translation
     );
     let started = app.world().resource::<TimeOfDay>().0;
+    let started_drawn = started as f64 + f64::from(app.world().resource::<SubTick>().0);
 
     // a block under the player's feet, in a chunk the server loads itself, with no client
     let below = spawn.floor().as_i64vec3() - I64Vec3::Y;
@@ -116,7 +117,9 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
     for _ in 0..5 {
         app.update();
     }
-    assert!(app.world().resource::<TimeOfDay>().0 > started);
+    let drawn = app.world().resource::<TimeOfDay>().0 as f64
+        + f64::from(app.world().resource::<SubTick>().0);
+    assert!(drawn > started_drawn);
     app.world_mut()
         .entity_mut(player)
         .insert(GameMode::Survival);
@@ -152,7 +155,7 @@ fn test_gameplay_runs_and_saves_with_no_rendering() {
     let local = ChunkCoordinate::local_block(below);
     let saved_edits: Vec<_> = saved_edits.in_chunk(coord).collect();
     assert_eq!(vec![(local, BlockType::Bricks.into())], saved_edits);
-    assert!(saved.time_of_day > started);
+    assert!(saved.time >= started);
 
     // and the next server spawns the player as they were saved
     let mut app = server(&dir);

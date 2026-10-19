@@ -7,7 +7,7 @@ use bevy_replicon::prelude::*;
 use super::clock::ClockRate;
 use super::edits::in_reach;
 use crate::block::BlockType;
-use crate::clock::{is_night, morning_after, TimeOfDay};
+use crate::clock::TimeOfDay;
 use crate::player::{Player, PlayerOwner};
 use crate::protocol::{CommandOutput, UseBlock};
 use crate::survival::{Asleep, SpawnBed, Vitals};
@@ -46,7 +46,7 @@ pub(super) fn use_beds(
             continue;
         }
         bed.0 = Some(block);
-        if is_night(clock.0) {
+        if clock.is_night() {
             commands.entity(player).insert(Asleep { at: feet });
         } else {
             output.write(ToClients {
@@ -92,7 +92,7 @@ pub(super) fn skip_night(
         return;
     }
     *slept = 0.0;
-    clock.0 = morning_after(clock.0);
+    *clock = clock.morning_after();
     // which tells clients the time, as it's the rate that's usually changed
     rate.set_changed();
     for (player, _) in &players {
@@ -114,7 +114,7 @@ mod tests {
     use super::SLEEP_SECONDS;
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
-    use crate::clock::{is_night, TimeOfDay};
+    use crate::clock::TimeOfDay;
     use crate::game_mode::GameMode;
     use crate::player::{Player, PlayerOwner};
     use crate::protocol::{ProtocolPlugin, UseBlock};
@@ -142,7 +142,7 @@ mod tests {
             ServerPlugin,
         ))
         .insert_resource(world)
-        .insert_resource(TimeOfDay(10.0))
+        .insert_resource(TimeOfDay::from_days(10.0))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
             FRAME,
         )));
@@ -173,8 +173,8 @@ mod tests {
         }
     }
 
-    fn time(app: &App) -> f64 {
-        app.world().resource::<TimeOfDay>().0
+    fn time(app: &App) -> TimeOfDay {
+        *app.world().resource::<TimeOfDay>()
     }
 
     fn asleep(app: &App, player: Entity) -> bool {
@@ -191,12 +191,16 @@ mod tests {
             *app.world().get::<SpawnBed>(host).unwrap()
         );
         run(&mut app, SLEEP_SECONDS * 2.0);
-        assert!(is_night(time(&app)) && asleep(&app, host));
+        assert!(time(&app).is_night() && asleep(&app, host));
 
         sleep(&mut app, guest, OTHER_BED);
         run(&mut app, SLEEP_SECONDS + FRAME);
-        assert!(!is_night(time(&app)), "{}", time(&app));
-        assert!((10.26..10.3).contains(&time(&app)), "{}", time(&app));
+        assert!(!time(&app).is_night(), "{:?}", time(&app));
+        let woke = time(&app);
+        assert!(
+            (TimeOfDay::from_days(10.26)..TimeOfDay::from_days(10.3)).contains(&woke),
+            "{woke:?}"
+        );
         assert!(!asleep(&app, host) && !asleep(&app, other));
     }
 
@@ -212,14 +216,14 @@ mod tests {
             .translation
             .x += 1.0;
         run(&mut app, SLEEP_SECONDS * 2.0);
-        assert!(is_night(time(&app)));
+        assert!(time(&app).is_night());
         assert!(asleep(&app, host) && !asleep(&app, other));
     }
 
     #[test]
     fn test_a_bed_by_day_sets_the_respawn_point_without_sleeping() {
         let (mut app, host, _) = server();
-        app.world_mut().resource_mut::<TimeOfDay>().0 = 10.5;
+        app.world_mut().insert_resource(TimeOfDay::from_days(10.5));
         // nor does what isn't a bed, or a bed out of reach
         let far = BED + I64Vec3::X * 9;
         app.world_mut()

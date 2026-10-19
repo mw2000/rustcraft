@@ -53,7 +53,7 @@ fn village(time: f64) -> (App, Arc<Village>) {
             FRAME,
         )))
         .insert_resource(Chance(StdRng::seed_from_u64(5)))
-        .insert_resource(TimeOfDay(time))
+        .insert_resource(TimeOfDay::from_days(time))
         .insert_resource(SpawnRate(None))
         .init_resource::<Dormant>()
         .init_resource::<Spawners>()
@@ -196,7 +196,7 @@ fn test_villagers_go_to_work_by_day_through_their_doors_and_home_at_night() {
     let edited = edits.chunks().flat_map(|c| edits.in_chunk(c)).count();
     assert!(edited > 0, "no doors used");
     // and home by their beds at night
-    app.insert_resource(TimeOfDay(0.9));
+    app.insert_resource(TimeOfDay::from_days(0.9));
     run(&mut app, 80.0);
     let (home, all) = at_place(&mut app, Place::Home, 2.0);
     assert!(home * 3 >= all * 2, "{home} of {all} home");
@@ -308,7 +308,7 @@ fn test_trading_takes_the_price_gives_the_goods_and_refuses_without_payment() {
         trade(&mut app);
     }
     assert!(inventory(&app).count(price) >= u32::from(count));
-    app.insert_resource(TimeOfDay(1.5));
+    app.insert_resource(TimeOfDay::from_days(1.5));
     app.update();
     let restocked = Stock::of(calling, stock_seed(&app, villager), 1);
     assert_eq!(

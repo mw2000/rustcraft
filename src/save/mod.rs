@@ -23,7 +23,7 @@ use bevy::transform::components::Transform;
 use bevy_replicon::prelude::ClientId;
 
 use crate::chunks::chunk::ChunkCoordinate;
-use crate::clock::{TimeOfDay, START_TIME};
+use crate::clock::TimeOfDay;
 use crate::containers::Containers;
 use crate::creatures::{Creature, SavedCreature};
 use crate::edits::Edits;
@@ -165,7 +165,10 @@ impl WorldSave {
                 file
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let file = WorldFile::new(requested_seed.unwrap_or_else(rand::random), START_TIME);
+                let file = WorldFile::new(
+                    requested_seed.unwrap_or_else(rand::random),
+                    TimeOfDay::default(),
+                );
                 fs::create_dir_all(&dir)?;
                 // straight away, so the world keeps its seed whatever happens next
                 write_atomically(&path, file.to_toml().as_bytes())?;
@@ -584,7 +587,7 @@ struct Savable<'w, 's> {
 
 impl Savable<'_, '_> {
     fn snapshot(&mut self, save: &mut WorldSave) -> Snapshot {
-        let mut file = WorldFile::new(self.world.seed(), self.clock.0);
+        let mut file = WorldFile::new(self.world.seed(), *self.clock);
         file.ops = self.operators.names().to_vec();
         file.new_player_mode = save.new_player_mode;
         file.settled = self
@@ -774,7 +777,7 @@ mod tests {
     #[test]
     fn test_a_world_from_a_newer_version_is_refused() {
         let dir = TempDir::new("newer");
-        let mut file = WorldFile::new(1, 0.4);
+        let mut file = WorldFile::new(1, TimeOfDay::from_days(0.4));
         file.format += 1;
         fs::create_dir_all(dir.world()).unwrap();
         fs::write(dir.world().join(WORLD_FILE), file.to_toml()).unwrap();
@@ -872,12 +875,12 @@ mod tests {
             WorldSave::open(dir.world(), Some(1)).unwrap();
         let at = I64Vec3::new(70, 460, -3);
         edits.set(at, BlockType::Wheat0);
-        crops.plant(at, 2.25);
+        crops.plant(at, 27_000);
         save.snapshot(&mut edits, &mut containers, &mut crops, file.clone())
             .write()
             .unwrap();
         let (.., loaded) = WorldSave::open(dir.world(), None).unwrap();
-        assert_eq!(Some(2.25), loaded.planted(at));
+        assert_eq!(Some(27_000), loaded.planted(at));
 
         // a crop ripening and let go of changes no edit, and is saved all the same
         crops.grew(at, None);
@@ -898,10 +901,12 @@ mod tests {
             chunks: Vec<Format2Chunk>,
         }
         let dir = TempDir::new("format-2");
-        let mut old = WorldFile::new(5, 0.4);
+        let mut old = WorldFile::new(5, TimeOfDay::from_days(0.4));
         old.format = 2;
         fs::create_dir_all(dir.world().join(EDITS_DIR)).unwrap();
-        fs::write(dir.world().join(WORLD_FILE), old.to_toml()).unwrap();
+        // with its time in days, as it was then
+        let old = old.to_toml().replace("time = 4800", "time_of_day = 0.4");
+        fs::write(dir.world().join(WORLD_FILE), old).unwrap();
         let region = postcard::to_stdvec(&Format2Region {
             palette: vec!["furnace"],
             chunks: vec![([0, 28, 0], vec![(7, 0)])],
@@ -923,7 +928,7 @@ mod tests {
             &mut edits,
             &mut containers,
             &mut crops,
-            WorldFile::new(5, 0.4),
+            WorldFile::new(5, TimeOfDay::from_days(0.4)),
         );
         assert_eq!(FORMAT_VERSION, snapshot.world_file.as_ref().unwrap().format);
         snapshot.write().unwrap();
@@ -990,7 +995,7 @@ mod tests {
             let world = app.world_mut();
             let mut game_world = world.resource_mut::<crate::world::World>();
             assert!(game_world.edit(built, BlockType::Furnace));
-            world.resource_mut::<TimeOfDay>().0 = 3.5;
+            world.resource_mut::<TimeOfDay>().0 = 42_000;
             let mut players = world.query::<(
                 &mut Transform,
                 &mut PlayerLook,
@@ -1018,7 +1023,7 @@ mod tests {
             (at, looking, Movement::Walk),
             (transform.translation, look, movement)
         );
-        assert_eq!(3.5, app.world().resource::<TimeOfDay>().0);
+        assert_eq!(42_000, app.world().resource::<TimeOfDay>().0);
         let (mode, hotbar, inventory) = app
             .world_mut()
             .query::<(&GameMode, &Hotbar, &Inventory)>()
@@ -1135,11 +1140,11 @@ mod tests {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
         let mut players = app.world_mut().query::<&Player>();
         assert_eq!(0, players.iter(app.world()).count());
-        app.world_mut().resource_mut::<TimeOfDay>().0 = 2.0;
+        app.world_mut().resource_mut::<TimeOfDay>().0 = 24_000;
         app.world_mut().write_message(AppExit::Success);
         app.update();
         drop(app);
         let (_, file, ..) = WorldSave::open(dir.world(), None).unwrap();
-        assert_eq!((2.0, hosts), (file.time_of_day, file.player));
+        assert_eq!((24_000, hosts), (file.time, file.player));
     }
 }

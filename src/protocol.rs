@@ -65,7 +65,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -227,11 +227,13 @@ pub struct ChatLine {
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindClock(pub i8);
 
-/// The server's time of day, in days, and how fast it's running, in days a second.
+/// The server's time of day, in ticks (`TimeOfDay`), how far it's got toward the next, for
+/// drawing (`SubTick`), and how fast it's running, in ticks a second.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct TimeSync {
-    pub time: f64,
-    pub rate: f64,
+    pub time: u64,
+    pub sub_tick: f32,
+    pub rate: f32,
 }
 
 /// A click in the inventory screen on slot `slot` of the container at `container`, which the
@@ -655,7 +657,9 @@ mod tests {
     use bevy::prelude::Entity;
     use bevy_replicon::prelude::ClientId;
 
-    use super::{name_from_user_data, name_to_user_data, BlockChanged, ChunkEdits, EditSummary};
+    use super::{
+        name_from_user_data, name_to_user_data, BlockChanged, ChunkEdits, EditSummary, TimeSync,
+    };
     use crate::block::{Block, BlockType};
     use crate::chunks::chunk::ChunkCoordinate;
     use crate::player::name::PlayerName;
@@ -671,6 +675,19 @@ mod tests {
             };
             let bytes = postcard::to_stdvec(&change).unwrap();
             assert_eq!(change, postcard::from_bytes(&bytes).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_the_time_round_trips_to_the_tick_however_many_days_have_passed() {
+        for time in [0, 4_800, 12_000_001_481, u64::MAX] {
+            let sync = TimeSync {
+                time,
+                sub_tick: 0.375,
+                rate: -1_180.0,
+            };
+            let bytes = postcard::to_stdvec(&sync).unwrap();
+            assert_eq!(sync, postcard::from_bytes(&bytes).unwrap());
         }
     }
 

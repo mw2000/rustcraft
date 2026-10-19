@@ -43,7 +43,7 @@ use bevy_replicon_renet2::netcode::NetcodeServerTransport;
 use bevy_replicon_renet2::renet2::RenetServer;
 use bevy_replicon_renet2::RepliconRenetPlugins;
 
-use crate::clock::TimeOfDay;
+use crate::clock::{SubTick, TimeOfDay};
 use crate::containers::Containers;
 use crate::creatures::{Creature, Missile};
 use crate::farming::Crops;
@@ -64,6 +64,7 @@ impl Plugin for ServerPlugin {
             .add_message::<Blow>()
             .init_resource::<edits::EditAllowances>()
             .init_resource::<TimeOfDay>()
+            .init_resource::<SubTick>()
             .init_resource::<clock::ClockRate>()
             .init_resource::<ServerChunks>()
             .init_resource::<Containers>()
@@ -273,7 +274,8 @@ pub struct WorldToOpen {
     pub dir: PathBuf,
     /// The seed it takes if it's new, or else a random one.
     pub seed: Option<u32>,
-    /// The time of day to start at instead of the saved one.
+    /// The time of day to start at instead of the saved one, in days, as `TimeOfDay::from_days`
+    /// takes it.
     pub time_of_day: Option<f64>,
     /// How far, in chunks, terrain is built from full-detail regions, see `World::new`.
     pub region_distance: u32,
@@ -326,7 +328,9 @@ pub fn open_world(
             name.clone(),
         );
     }
-    commands.insert_resource(TimeOfDay(open.time_of_day.unwrap_or(saved.time_of_day)));
+    let clock = open.time_of_day.map(TimeOfDay::from_days);
+    commands.insert_resource(clock.unwrap_or(TimeOfDay(saved.time)));
+    commands.insert_resource(SubTick::default());
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
     commands.insert_resource(containers);
@@ -370,6 +374,7 @@ fn close_world(
     commands.remove_resource::<players::WorldChecksum>();
     commands.insert_resource(edits::EditAllowances::default());
     commands.insert_resource(TimeOfDay::default());
+    commands.insert_resource(SubTick::default());
     commands.insert_resource(clock::ClockRate::default());
     commands.insert_resource(ServerChunks::default());
     commands.insert_resource(Containers::default());

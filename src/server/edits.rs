@@ -951,7 +951,7 @@ mod tests {
         }
         put(&mut app, ripe, BlockType::RipeWheat);
         put(&mut app, unripe, BlockType::Wheat4);
-        app.world_mut().resource_mut::<Crops>().plant(unripe, 0.0);
+        app.world_mut().resource_mut::<Crops>().plant(unripe, 0);
         request(&mut app, &[(ripe, BlockType::Air)]);
         let count = |app: &mut App, item| {
             let stacks = dropped(app).into_iter().map(|(stack, _)| stack);

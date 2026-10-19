@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::RngExt;
 
-use crate::clock::{day_fraction, TimeOfDay};
+use crate::clock::TimeOfDay;
 use crate::menu::GameState;
 use crate::preferences::Preferences;
 use crate::sky::sun_direction;
@@ -134,7 +134,7 @@ fn in_world(state: Option<Res<State<GameState>>>, world: Option<Res<World>>) -> 
 
 /// How much it's day, from 0 at night to 1 once the sun's well up, for what's about by day.
 pub fn daylight(clock: &TimeOfDay) -> f32 {
-    ((sun_direction(clock.0).y + 0.05) / 0.25).clamp(0.0, 1.0)
+    ((sun_direction(clock.days()).y + 0.05) / 0.25).clamp(0.0, 1.0)
 }
 
 // From the late afternoon until the sun's just down, as a fraction of the day: the sun sets at
@@ -143,7 +143,7 @@ const DUSK: (f32, f32) = (0.64, 0.77);
 
 /// How far into dusk it is, 0 outside it and 1 through the heart of it, easing at either end.
 pub fn dusk(clock: &TimeOfDay) -> f32 {
-    let at = day_fraction(clock.0);
+    let at = clock.days();
     let ease_in = smoothstep(DUSK.0, DUSK.0 + 0.02, at);
     let ease_out = 1.0 - smoothstep(DUSK.1 - 0.02, DUSK.1, at);
     ease_in.min(ease_out)

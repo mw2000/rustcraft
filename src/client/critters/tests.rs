@@ -103,7 +103,7 @@ fn field(centre: I64Vec3, ground: Ground, time: f64) -> App {
     .init_asset::<Image>()
     .insert_state(GameState::Playing)
     .insert_resource(world)
-    .insert_resource(TimeOfDay(time))
+    .insert_resource(TimeOfDay::from_days(time))
     .insert_resource(CritterDice(StdRng::seed_from_u64(3)))
     .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
         FRAME,
@@ -181,7 +181,7 @@ fn test_butterflies_fly_off_as_night_falls() {
     let mut app = field(chunk_in("base"), flowers(), NOON);
     run(&mut app, 3.0);
     assert!(count::<Butterfly>(&mut app) > 0);
-    app.insert_resource(TimeOfDay(MIDNIGHT));
+    app.insert_resource(TimeOfDay::from_days(MIDNIGHT));
     run(&mut app, 2.0);
     assert_eq!(count::<Butterfly>(&mut app), 0);
 }
@@ -244,7 +244,7 @@ fn test_no_more_fireflies_light_the_ground_than_the_cap_and_none_by_day() {
         }
     }
 
-    app.insert_resource(TimeOfDay(NOON));
+    app.insert_resource(TimeOfDay::from_days(NOON));
     run(&mut app, 2.0);
     assert_eq!(count::<Firefly>(&mut app), 0);
     assert_eq!(count::<FireflyLight>(&mut app), 0);
@@ -256,7 +256,7 @@ fn test_starlings_gather_at_dusk_over_open_land_and_not_by_day_or_in_the_woods()
     run(&mut open, 1.0);
     assert_eq!(count::<Starling>(&mut open), STARLINGS);
     // and leave once dusk's over, fading as they go
-    open.insert_resource(TimeOfDay(MIDNIGHT));
+    open.insert_resource(TimeOfDay::from_days(MIDNIGHT));
     run(&mut open, 4.0);
     assert_eq!(count::<Starling>(&mut open), 0);
 
@@ -309,7 +309,7 @@ fn test_turning_ambient_life_off_takes_them_all_away_and_brings_no_more() {
     run(&mut app, FRAME);
     assert!(!app.world().resource::<AmbientLife>().on);
     for time in [MIDNIGHT, NOON, DUSK_TIME] {
-        app.insert_resource(TimeOfDay(time));
+        app.insert_resource(TimeOfDay::from_days(time));
         run(&mut app, 13.0);
         assert_eq!(count::<AmbientCritter>(&mut app), 0, "{time}");
     }
@@ -515,11 +515,14 @@ fn test_a_skein_is_a_v_behind_its_leader() {
 
 #[test]
 fn test_dusk_is_the_late_afternoon_into_sunset() {
-    let at = |time| dusk(&TimeOfDay(time));
+    let at = |time| dusk(&TimeOfDay::from_days(time));
     assert_eq!(at(NOON), 0.0);
     assert_eq!(at(MIDNIGHT), 0.0);
     assert_eq!(at(0.3), 0.0);
     assert_eq!(at(DUSK_TIME), 1.0);
     assert!(at(DUSK_TIME + 3.0) == 1.0, "on any day");
-    assert!(daylight(&TimeOfDay(NOON)) == 1.0 && daylight(&TimeOfDay(MIDNIGHT)) == 0.0);
+    assert!(
+        daylight(&TimeOfDay::from_days(NOON)) == 1.0
+            && daylight(&TimeOfDay::from_days(MIDNIGHT)) == 0.0
+    );
 }

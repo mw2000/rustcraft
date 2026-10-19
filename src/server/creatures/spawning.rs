@@ -18,7 +18,7 @@ use super::{chunk_of, creature, walker};
 use crate::block::BlockType;
 use crate::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use crate::chunks::generate::structures::SPAWNER;
-use crate::clock::{is_night, TimeOfDay};
+use crate::clock::TimeOfDay;
 use crate::creatures::path::Walker;
 use crate::creatures::{Creature, CreatureKind, Daytime, SavedCreature, Spawns, Stance};
 use crate::player::{Player, PlayerLook};
@@ -92,7 +92,7 @@ pub(in crate::server) fn spawn(
         return;
     }
     *since = 0.0;
-    let night = is_night(clock.0);
+    let night = clock.is_night();
     let rng = &mut chance.0;
     let count = |kind: CreatureKind, at: Vec3, within: f32| {
         creatures

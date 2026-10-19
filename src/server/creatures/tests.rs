@@ -70,7 +70,7 @@ fn field(surface: BlockType, centre: I64Vec3) -> App {
             FRAME,
         )))
         .insert_resource(Chance(StdRng::seed_from_u64(5)))
-        .insert_resource(TimeOfDay(0.5))
+        .insert_resource(TimeOfDay::from_days(0.5))
         .insert_resource(SpawnRate(None))
         .init_resource::<Dormant>()
         .init_resource::<Spawners>()
@@ -507,7 +507,7 @@ fn test_animals_dont_appear_at_night_away_from_grass_or_in_deserts() {
     for (surface, time) in [(BlockType::Grass, 0.0), (BlockType::Sand, 0.5)] {
         let mut app = app(surface);
         app.insert_resource(SpawnRate(Some(0.1)))
-            .insert_resource(TimeOfDay(time));
+            .insert_resource(TimeOfDay::from_days(time));
         player(&mut app, Vec3::new(0.5, FEET, 0.5), None);
         run(&mut app, 3.0);
         let animals = kinds(&mut app).into_iter().filter(|k| !is_monster(*k));
