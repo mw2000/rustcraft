@@ -42,9 +42,10 @@ impl GameMode {
         self == GameMode::Creative
     }
 
-    /// Whether the player may place `block` at all: any but air and water, in either mode.
+    /// Whether the player may place `block` at all, in either mode: anything tangible, and
+    /// fluids, poured from buckets (M4.3), but not air.
     pub fn can_place(self, block: BlockType) -> bool {
-        block.is_tangible()
+        block.is_tangible() || block.fluid().is_some()
     }
 
     /// Whether the player breaks blocks at a click, rather than holding the mouse on them for as

@@ -7,6 +7,7 @@ pub use state::{Block, BlockState, Direction, Property};
 
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::farming::WHEAT;
+use crate::fluids::Fluid;
 use crate::items::ToolKind::{self, Axe, Pickaxe, Shears, Shovel};
 use crate::items::{Item, ItemStack};
 
@@ -49,8 +50,10 @@ pub enum RenderStyle {
     None,
     /// As a cube's faces, those not hidden by an opaque neighbour, merged where they match.
     Cube,
-    /// As water's surface, in a mesh of its own.
+    /// As water's surface, in a mesh of its own, as high as its level (M4.3).
     Liquid,
+    /// As lava's surface, as high as its level, glowing; far off, a cube of its colour.
+    Lava,
     /// As two quads crossing diagonally through the cell, seen from either side, at full detail
     /// only. Plants are drawn this way.
     Cross,
@@ -122,7 +125,11 @@ impl RenderStyle {
         self.is_cube()
             || matches!(
                 self,
-                RenderStyle::Liquid | RenderStyle::Stairs | RenderStyle::Slab | RenderStyle::Wall
+                RenderStyle::Liquid
+                    | RenderStyle::Lava
+                    | RenderStyle::Stairs
+                    | RenderStyle::Slab
+                    | RenderStyle::Wall
             )
     }
 
@@ -138,6 +145,7 @@ impl RenderStyle {
             RenderStyle::Door => &[Facing, Half, Open, Hinge],
             RenderStyle::Trapdoor => &[Facing, Half, Open],
             RenderStyle::Lantern => &[Hanging],
+            RenderStyle::Liquid | RenderStyle::Lava => &[Level, Falling],
             _ => &[],
         }
     }
@@ -827,6 +835,18 @@ blocks! {
     ThatchSlab { ..slab("thatch_slab", THATCH) },
     AdobeStairs { ..stairs("adobe_stairs", ADOBE) },
     AdobeSlab { ..slab("adobe_slab", ADOBE) },
+    // Molten rock that flows as water does, slower and not as far (M4.3, `fluids`): it lights
+    // what's round it, burns what's in it and slows it, and hardens where it meets water. Far
+    // off it's a cube of its colour, as magma is.
+    Lava {
+        name: "lava", solid: false, light_opacity: 2, occlusion_weight: 0.4, emits: 14,
+        style: RenderStyle::Lava, replaceable: true, drops: Drops::Nothing,
+        hardness: 0.0, tool: None, tier: 0,
+        top: Tile::Lava, side: Tile::Lava, bottom: Tile::Lava, lod: Tile::Lava,
+    },
+    // What a lava source hardens into where water meets it: the hardest rock there is, which
+    // only an iron pickaxe or better takes (§5.3).
+    Obsidian { ..cube("obsidian", Tile::Obsidian, material(Tile::Obsidian, 60.0, Pickaxe, 4)) },
 }
 
 impl BlockType {
@@ -913,7 +933,16 @@ impl BlockType {
         }
     }
 
-    /// Whether it's something there, rather than air or water: what's looked at, broken and
+    /// The fluid it is, if it's water or lava (M4.3).
+    pub fn fluid(self) -> Option<Fluid> {
+        match self {
+            BlockType::Water => Some(Fluid::Water),
+            BlockType::Lava => Some(Fluid::Lava),
+            _ => None,
+        }
+    }
+
+    /// Whether it's something there, rather than air or a fluid: what's looked at, broken and
     /// placed.
     pub fn is_tangible(&self) -> bool {
         self.is_solid() || self.needs_ground() || self.is_for_authoring() || self.is_climbable()
@@ -1149,9 +1178,11 @@ pub enum Tile {
     Plaster,
     Adobe,
     Thatch,
+    Lava,
+    Obsidian,
 }
 
-pub const TILE_COUNT: usize = 89;
+pub const TILE_COUNT: usize = 91;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -1206,7 +1237,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::Thatch as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::Obsidian as usize + 1);
     }
 
     #[test]
@@ -1315,11 +1346,15 @@ mod tests {
     }
 
     #[test]
-    fn test_only_air_water_plants_other_than_crops_structure_void_and_vines_are_replaceable() {
+    fn test_only_air_fluids_plants_other_than_crops_structure_void_and_vines_are_replaceable() {
         for block in BlockType::ALL {
             let expected = matches!(
                 block,
-                BlockType::Air | BlockType::Water | BlockType::StructureVoid | BlockType::Vines
+                BlockType::Air
+                    | BlockType::Water
+                    | BlockType::Lava
+                    | BlockType::StructureVoid
+                    | BlockType::Vines
             ) || (block.is_plant() && !block.is_crop());
             assert_eq!(expected, block.is_replaceable(), "{block:?}");
             assert_eq!(

@@ -11,7 +11,7 @@ mod volcano;
 
 use bevy::math::{DVec2, I64Vec2, I64Vec3, Vec3Swizzles};
 
-use super::biome::landmark::{CRATER, SUMMIT, VOLCANO};
+use super::biome::landmark::{CRATER, LAVA_STREAM, SUMMIT, VOLCANO};
 use super::biome::BiomeId;
 use super::fractal::Fractal;
 use super::noise::{NoiseGenerator, WORLD_HALF_SIZE};
@@ -113,6 +113,7 @@ pub struct Landmarks {
     summit: BiomeId,
     volcano: BiomeId,
     crater: BiomeId,
+    lava_stream: BiomeId,
 }
 
 impl Landmarks {
@@ -129,6 +130,7 @@ impl Landmarks {
             summit: BiomeId::BASE,
             volcano: BiomeId::BASE,
             crater: BiomeId::BASE,
+            lava_stream: BiomeId::BASE,
         }
     }
 
@@ -139,6 +141,7 @@ impl Landmarks {
             summit: biomes.id(SUMMIT).unwrap(),
             volcano: biomes.id(VOLCANO).unwrap(),
             crater: biomes.id(CRATER).unwrap(),
+            lava_stream: biomes.id(LAVA_STREAM).unwrap(),
             ..Self::none(noise.seed())
         };
         for i in 0..landmarks.cells.len() as i64 {
@@ -191,7 +194,7 @@ impl Landmarks {
                 z,
                 cell,
                 column,
-                (self.volcano, self.crater),
+                (self.volcano, self.crater, self.lava_stream),
             ),
             Landmark::GiantTree(_) => column,
         }

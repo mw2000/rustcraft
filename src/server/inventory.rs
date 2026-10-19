@@ -128,7 +128,9 @@ pub(super) fn receive_inventory_requests(
             continue;
         };
         let slot = usize::from(slot);
-        let placeable = item.places().is_some_and(|block| mode.can_place(block));
+        // a fluid's picked as its bucket, never as a block, which isn't an item
+        let placeable = item.places().is_some_and(|block| mode.can_place(block))
+            && item.block().is_none_or(|block| block.is_tangible());
         if mode.has_every_block() && placeable && slot < HOTBAR_SLOTS {
             inventory.slots[slot] = Some(ItemStack::full(item));
         }

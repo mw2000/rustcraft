@@ -14,6 +14,7 @@ pub mod creatures;
 pub mod drops;
 mod edits;
 mod farming;
+pub mod fluids;
 mod host;
 mod inventory;
 mod players;
@@ -69,6 +70,7 @@ impl Plugin for ServerPlugin {
             .init_resource::<ServerChunks>()
             .init_resource::<Containers>()
             .init_resource::<Crops>()
+            .init_resource::<fluids::Fluids>()
             .init_resource::<drops::Chance>()
             .init_resource::<chat::ChatAllowances>()
             .init_resource::<Operators>()
@@ -181,6 +183,19 @@ impl Plugin for ServerPlugin {
                 farming::grow_crops
                     .after(keep_chunks_near_players)
                     .after(edits::receive_edits)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
+                // with this frame's edits made, which wake the fluids beside them, and the
+                // chunks near players loaded, which they flow in, before what they change is
+                // sent with the areas moved
+                fluids::flow
+                    .after(keep_chunks_near_players)
+                    .after(edits::use_doors)
+                    .after(farming::grow_crops)
+                    .after(sync::follow_players)
                     .before(ServerSystems::Send)
                     .run_if(is_authority),
             )
@@ -379,6 +394,7 @@ fn close_world(
     commands.insert_resource(ServerChunks::default());
     commands.insert_resource(Containers::default());
     commands.insert_resource(Crops::default());
+    commands.insert_resource(fluids::Fluids::default());
     commands.insert_resource(chat::ChatAllowances::default());
     commands.insert_resource(Operators::default());
     commands.insert_resource(creatures::Dormant::default());

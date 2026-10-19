@@ -66,7 +66,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -380,19 +380,40 @@ impl EditSummary {
 /// block as where it is in the chunk and an index into a palette of the blocks edited to, with
 /// their states, so each is named once. With how many `BlockChanged`s the client had been sent
 /// before, as either can overtake the other on its own channel, so the client can tell which
-/// is newer.
+/// is newer. Since M4.3 it can instead be `partial`: only the blocks fluids changed in the
+/// chunk in a tick, sent together so a flood is a message a chunk rather than one a block.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChunkEdits {
     coord: I64Vec3,
     changes_before: u64,
+    partial: bool,
     palette: Vec<Block>,
     edits: Vec<(u16, u16)>,
 }
 
 impl ChunkEdits {
+    /// Every edit in the chunk at `coord`.
     pub fn new(
         coord: ChunkCoordinate,
         changes_before: u64,
+        edits: impl IntoIterator<Item = (U16Vec3, Block)>,
+    ) -> Self {
+        Self::of(coord, changes_before, false, edits)
+    }
+
+    /// Some of the blocks changed in the chunk at `coord`, and what they are now.
+    pub fn changed(
+        coord: ChunkCoordinate,
+        changes_before: u64,
+        edits: impl IntoIterator<Item = (U16Vec3, Block)>,
+    ) -> Self {
+        Self::of(coord, changes_before, true, edits)
+    }
+
+    fn of(
+        coord: ChunkCoordinate,
+        changes_before: u64,
+        partial: bool,
         edits: impl IntoIterator<Item = (U16Vec3, Block)>,
     ) -> Self {
         let mut palette = Vec::new();
@@ -409,9 +430,16 @@ impl ChunkEdits {
         Self {
             coord: coord.0,
             changes_before,
+            partial,
             palette,
             edits,
         }
+    }
+
+    /// Whether it's only some of the chunk's edits, the blocks changed together, rather than
+    /// all of them.
+    pub fn is_partial(&self) -> bool {
+        self.partial
     }
 
     pub fn coord(&self) -> ChunkCoordinate {

@@ -295,7 +295,7 @@ fn has_room(world: &World, walker: Walker, feet: I64Vec3, up: i64) -> bool {
                 let block = world.get_block_at(cell);
                 world.is_chunk_generated(ChunkCoordinate::containing(cell))
                     && block.is_replaceable()
-                    && block != BlockType::Water
+                    && block.fluid().is_none()
             })
         })
     })

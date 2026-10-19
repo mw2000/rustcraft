@@ -376,6 +376,11 @@ recipes! {
         name: "shears", station: CraftingTable,
         ingredients: [(Item::IronIngot, 2)], output: (Item::Shears, 1),
     },
+    // a bucket bent from three ingots, to carry water and lava in (M4.3)
+    Bucket {
+        name: "bucket", station: CraftingTable,
+        ingredients: [(Item::IronIngot, 3)], output: (Item::Bucket, 1),
+    },
     Bread {
         name: "bread", station: CraftingTable,
         ingredients: [(Item::Wheat, 3)], output: (Item::Bread, 1),
@@ -769,11 +774,17 @@ mod tests {
             assert_eq!(makes, recipe.output().count, "{}", recipe.name());
         }
         // and every new building block is made somehow, but for what's only for authoring,
-        // spawners, found only in dungeons, and paths, trodden in villages
+        // spawners, found only in dungeons, paths, trodden in villages, and lava and the
+        // obsidian it hardens into
         for block in BlockType::ALL
             .iter()
             .skip(BlockType::LootMarker as usize + 1)
-            .filter(|&&block| !matches!(block, BlockType::Spawner | BlockType::Path))
+            .filter(|&&block| {
+                !matches!(
+                    block,
+                    BlockType::Spawner | BlockType::Path | BlockType::Lava | BlockType::Obsidian
+                )
+            })
         {
             made(*block);
         }

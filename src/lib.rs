@@ -21,6 +21,7 @@ pub mod curvature;
 pub mod debug;
 pub mod edits;
 pub mod farming;
+pub mod fluids;
 pub mod game_mode;
 #[cfg(feature = "client")]
 pub mod horizon;

@@ -849,6 +849,26 @@ def thatch(rng):
     return out
 
 
+def lava(rng):
+    """Molten rock running along the tile in streaks, yellow-white where it's hottest and deep orange where it's
+    starting to dull, without magma's crust, so it reads as liquid and brighter than magma's glow."""
+    glow = np.array([(190, 52, 12), (230, 92, 20), (252, 140, 36), (255, 190, 70), (255, 236, 150)], float)
+    y, x = np.mgrid[:16, :16]
+    swirl = noise(rng, (1, 3)) + 0.35 * np.sin((y + 3 * noise(rng, (2, 2))) * np.pi / 4)  # streaks along x, wavering
+    return glow[levels(swirl, 5)]
+
+
+def obsidian(rng):
+    """Black volcanic glass, purple in its depths, with a few glassy glints where it's fractured."""
+    rock = np.array([(14, 10, 22), (24, 16, 38), (38, 26, 58), (60, 42, 88)], float)
+    nearest, gap = cells(rng, 3, (0.2, 0.8))
+    out = rock[:3][levels(noise(rng) + rng.random(9)[nearest] * 0.8, 3)]
+    out[gap < 0.6] = rock[0]  # the fractures between the shards
+    glints = (noise(rng, (0, 0)) > 0.93) & (gap > 1.2)
+    out[glints] = rock[3]
+    return out
+
+
 DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Bricks=bricks, CoalOre=coal_ore, CopperOre=copper_ore,
             IronOre=iron_ore, CraftingTableTop=crafting_table_top, CraftingTableSide=crafting_table_side, FurnaceFront=furnace_front,
             TallGrass=plant("TallGrass"), Poppy=plant("Poppy"), Dandelion=plant("Dandelion"), Cornflower=plant("Cornflower"), Torch=torch, BedTop=bed_top,
@@ -865,7 +885,7 @@ DRAW = dict(Planks=planks, Cobblestone=cobblestone, StoneBricks=stone_bricks, Br
             LightPlanks=light_planks, Bookshelf=bookshelf, BarrelTop=barrel_top, BarrelSide=barrel_side, BarrelBottom=barrel_end,
             Wool=wool, BasaltSide=basalt_side, BasaltTop=basalt_top, Magma=magma,
             ShortGrass=plant("ShortGrass"), WildGrass=plant("WildGrass"), Spawner=spawner,
-            PathTop=path_top, Plaster=plaster, Adobe=adobe, Thatch=thatch)
+            PathTop=path_top, Plaster=plaster, Adobe=adobe, Thatch=thatch, Lava=lava, Obsidian=obsidian)
 assert set(DRAW) == {t["name"] for t in TILES if t.get("drawn")}, "DRAW and the drawn rows of TILES differ"
 
 if __name__ == "__main__":

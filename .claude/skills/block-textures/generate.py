@@ -104,6 +104,8 @@ TILES = [
     dict(name="Plaster", drawn=True),
     dict(name="Adobe", drawn=True),
     dict(name="Thatch", drawn=True),
+    dict(name="Lava", drawn=True),
+    dict(name="Obsidian", drawn=True),
 ]
 
 

@@ -9,6 +9,7 @@ use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
+use crate::block::Block;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::edits::Edits;
 use crate::player::PlayerOwner;
@@ -203,6 +204,7 @@ pub(super) fn send_edit_summaries(
 pub struct BlockChanges<'w, 's> {
     areas: Query<'w, 's, (Entity, &'static mut SyncedArea)>,
     changes: MessageWriter<'w, ToClients<BlockChanged>>,
+    chunks: MessageWriter<'w, ToClients<ChunkEdits>>,
 }
 
 impl BlockChanges<'_, '_> {
@@ -219,6 +221,37 @@ impl BlockChanges<'_, '_> {
                 self.changes.write(ToClients {
                     targets: SendTargets::Single(ClientId::Client(client)),
                     message: change,
+                });
+            }
+        }
+    }
+
+    /// Tells of many changes in the chunk at `coord` at once, as fluids make them (M4.3): the
+    /// host change by change, as its client shares the server's world and sends nothing, and
+    /// each client whose area takes in the chunk all together as a partial `ChunkEdits`, 3
+    /// bytes a block rather than a message each.
+    pub fn write_chunk(&mut self, coord: ChunkCoordinate, changes: &[(I64Vec3, Block)]) {
+        for &(block, to) in changes {
+            self.changes.write(ToClients {
+                targets: SendTargets::Single(ClientId::Server),
+                message: BlockChanged {
+                    block,
+                    to,
+                    by: None,
+                },
+            });
+        }
+        for (client, mut area) in &mut self.areas {
+            for &(block, _) in changes {
+                area.resummarise(block);
+            }
+            if area.takes_in(coord) {
+                let local = changes
+                    .iter()
+                    .map(|&(block, to)| (ChunkCoordinate::local_block(block), to));
+                self.chunks.write(ToClients {
+                    targets: SendTargets::Single(ClientId::Client(client)),
+                    message: ChunkEdits::changed(coord, area.changes_sent, local),
                 });
             }
         }

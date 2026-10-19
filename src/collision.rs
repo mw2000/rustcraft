@@ -96,6 +96,19 @@ pub fn looked_at(world: &World, feet: Vec3, look: PlayerLook) -> Option<Hit> {
     })
 }
 
+/// The fluid source in reach that a player with their feet at `feet` looks at, nearer than any
+/// block they look at, for an empty bucket to take up (M4.3). Flowing fluid is looked through.
+pub fn looked_at_source(world: &World, feet: Vec3, look: PlayerLook) -> Option<I64Vec3> {
+    let eye = feet + Vec3::Y * EYE_HEIGHT;
+    let solid = looked_at(world, feet, look).map(|hit| hit.block);
+    let stops = |block: I64Vec3| {
+        Some(block) == solid
+            || crate::fluids::fluid_of(world.get(block)).is_some_and(|(_, level)| level.is_source())
+    };
+    let hit = raycast(eye, look.forward(), REACH, stops)?;
+    (Some(hit.block) != solid).then_some(hit.block)
+}
+
 // How far along the ray from `origin` along `direction` it first meets the box from `min` to
 // `max`, and the face it meets, as the direction out of it, zero if it starts inside.
 fn ray_box(origin: Vec3, direction: Vec3, min: Vec3, max: Vec3) -> Option<(f32, I64Vec3)> {

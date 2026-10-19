@@ -17,13 +17,13 @@ pub enum Surface {
 }
 
 impl Surface {
-    /// The surface `block` is, or none for what has no sound of its own, air and water. Blocks
+    /// The surface `block` is, or none for what has no sound of its own, air and fluids. Blocks
     /// not named go by the tool that breaks them, so a new block sounds right from the start: a
     /// pickaxe's stone, an axe's wood, a shovel's dirt, shears' wool like snow, and plants rustle like leaves.
     pub fn of(block: BlockType) -> Option<Self> {
         use BlockType::*;
         Some(match block {
-            Air | Water | StructureVoid | LootMarker => return None,
+            Air | Water | Lava | StructureVoid | LootMarker => return None,
             Grass => Self::Grass,
             Sand => Self::Sand,
             Gravel => Self::Gravel,

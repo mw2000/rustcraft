@@ -1,5 +1,6 @@
 //! Biomes no climate calls for, given their columns by landmarks (`landmarks`): a great
-//! peak's snowy summit, a volcano's basalt and its crater's magma.
+//! peak's snowy summit, a volcano's basalt, its crater's magma and the lava streams running
+//! down its flanks.
 
 use super::{Biome, Climate};
 use crate::block::BlockType;
@@ -8,6 +9,7 @@ use crate::block::BlockType;
 pub const SUMMIT: &str = "summit";
 pub const VOLCANO: &str = "volcano";
 pub const CRATER: &str = "crater";
+pub const LAVA_STREAM: &str = "lava_stream";
 
 /// The height over the sea a summit's snow starts at, however hot it is down below, and the
 /// steepest ground it settles on there, leaving the cliffs bare.
@@ -86,6 +88,27 @@ impl Biome for Crater {
         match base {
             BlockType::Air | BlockType::Water | BlockType::Ice => base,
             _ => BlockType::Magma,
+        }
+    }
+}
+
+// A stream running from a volcano's rim part way down its flanks: lava sources over magma, still
+// as the world makes them, which flow once something disturbs them (M4.3).
+pub struct LavaStream;
+
+impl Biome for LavaStream {
+    fn name(&self) -> &'static str {
+        LAVA_STREAM
+    }
+
+    fn niche(&self, _climate: Climate) -> f64 {
+        0.0
+    }
+
+    fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
+        match base {
+            BlockType::Air | BlockType::Water | BlockType::Ice => base,
+            _ => BlockType::Lava,
         }
     }
 }

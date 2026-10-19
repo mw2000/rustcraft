@@ -7,7 +7,7 @@
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, see `Tile` in block.rs
-const ATLAS_CELLS: f32 = 89.0;
+const ATLAS_CELLS: f32 = 91.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
@@ -61,7 +61,7 @@ fn block_sample(uv: vec2<f32>, vertex_alpha: f32, footprint: BlockFootprint) -> 
 // order. `gen_atlas` prints these and the block-textures skill's `pack.py`
 // rewrites them, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 89>(
+    var means = array<vec3<f32>, 91>(
         vec3<f32>(0.1182, 0.1186, 0.1186), // stone
         vec3<f32>(0.5003, 0.5003, 0.5003), // grass top
         vec3<f32>(0.4776, 0.3611, 0.1822), // sand
@@ -151,6 +151,8 @@ fn block_mean(vertex_alpha: f32) -> vec4<f32> {
         vec3<f32>(0.7282, 0.6887, 0.6021), // plaster
         vec3<f32>(0.3193, 0.1651, 0.0730), // adobe
         vec3<f32>(0.3812, 0.2476, 0.0699), // thatch
+        vec3<f32>(0.8546, 0.3502, 0.0786), // lava
+        vec3<f32>(0.0107, 0.0061, 0.0225), // obsidian
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

@@ -4,6 +4,7 @@ use super::{Movement, Player, PlayerLook, BODY};
 use crate::block::shape::{Boxes, Use};
 use crate::block::{Block, BlockType};
 use crate::collision::{boxes_at, move_and_collide, Aabb};
+use crate::fluids::{flow, fluid_of};
 
 // Flying, blocks a second, and how much faster sprinting.
 const FLY_SPEED: f32 = 20.0;
@@ -21,6 +22,11 @@ const SWIM_MULTIPLIER: f32 = 0.6;
 const WATER_GRAVITY: f32 = 8.0;
 const SINK_SPEED: f32 = 2.0;
 const SWIM_UP_SPEED: f32 = 4.0;
+// In lava, all of that but slower still, as it's thick (M4.3).
+const LAVA_MULTIPLIER: f32 = 0.35;
+const LAVA_GRAVITY: f32 = 4.0;
+const LAVA_SINK_SPEED: f32 = 1.0;
+const LAVA_UP_SPEED: f32 = 2.0;
 // The longest frame moved in one step, so a hitch doesn't fling the player.
 pub const MAX_STEP: f32 = 0.1;
 // How high a body walks up onto without jumping: a slab or a stair, not a block.
@@ -139,18 +145,33 @@ pub fn walk(
     let kind = |at: Vec3| block(at.floor().as_i64vec3()).map(|block| block.kind);
     let middle = position + Vec3::Y * body.max.y / 2.0;
     let swimming = kind(middle) == Some(BlockType::Water);
+    let in_lava = [position, middle]
+        .into_iter()
+        .any(|at| kind(at) == Some(BlockType::Lava));
     let climbing = [position, middle]
         .into_iter()
         .any(|at| kind(at).is_some_and(|kind| kind.is_climbable()));
-    let wanted = if swimming {
+    let wanted = if in_lava {
+        wanted * LAVA_MULTIPLIER
+    } else if swimming {
         wanted * SWIM_MULTIPLIER
     } else {
         wanted
     };
+    // and a fluid flowing carries what's in it gently along
+    let wanted = wanted + current(position, middle, &block);
     momentum.velocity.x = wanted.x;
     momentum.velocity.z = wanted.z;
 
-    if swimming {
+    if in_lava {
+        momentum.velocity.y = if jump && momentum.against_wall {
+            JUMP_SPEED
+        } else if jump {
+            LAVA_UP_SPEED
+        } else {
+            (momentum.velocity.y - LAVA_GRAVITY * dt).max(-LAVA_SINK_SPEED)
+        };
+    } else if swimming {
         momentum.velocity.y = if jump && momentum.against_wall {
             JUMP_SPEED
         } else if jump {
@@ -182,7 +203,7 @@ pub fn walk(
     let mut stepped = false;
     // on the ground and stopped across, it steps up onto what's low enough, as onto a slab, if
     // that gets it further
-    if momentum.grounded && (hit.x || hit.z) && !swimming {
+    if momentum.grounded && (hit.x || hit.z) && !swimming && !in_lava {
         let up = move_and_collide(position, Vec3::Y * STEP_HEIGHT, body, boxes).0;
         let (across, across_hit) = move_and_collide(up, delta.with_y(0.0), body, boxes);
         let (down, down_hit) =
@@ -199,6 +220,19 @@ pub fn walk(
     }
     momentum.against_wall = (hit.x || hit.z) && wanted.xz() != Vec2::ZERO;
     end
+}
+
+// How the fluid a body's middle or feet are in carries it, across, in blocks a second.
+fn current(feet: Vec3, middle: Vec3, block: &impl Fn(I64Vec3) -> Option<Block>) -> Vec3 {
+    let get = |at: I64Vec3| block(at).unwrap_or_default();
+    [middle, feet]
+        .into_iter()
+        .find_map(|at| {
+            let cell = at.floor().as_i64vec3();
+            let (fluid, _) = fluid_of(get(cell))?;
+            Some(flow(cell, get) * fluid.current())
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -403,6 +437,57 @@ mod tests {
             );
         }
         at
+    }
+
+    // Where a body standing still at x 0.5 on a floor at y 0 is after `seconds`, with the cells
+    // of the floor's top layer from x -8 to 8 holding what `fluid` says at each x.
+    fn drift(fluid: impl Fn(i64) -> Option<Block>, wanted: Vec3, seconds: f32) -> Vec3 {
+        let block = |at: I64Vec3| {
+            Some(match at.y {
+                ..0 => BlockType::Stone.into(),
+                0 | 1 if (-8..=8).contains(&at.x) => fluid(at.x).unwrap_or(Block::AIR),
+                _ => Block::AIR,
+            })
+        };
+        let mut momentum = Momentum::default();
+        let mut at = Vec3::new(0.5, 0.0, 0.5);
+        for _ in 0..(seconds / DT).round() as usize {
+            at = walk(at, &mut momentum, BODY, wanted, false, DT, block);
+        }
+        at
+    }
+
+    #[test]
+    fn test_lava_slows_a_body_more_than_water() {
+        use crate::fluids::Fluid;
+        let walked = |fluid: Option<Fluid>| {
+            drift(|_| fluid.map(Fluid::source), Vec3::X * WALK_SPEED, 1.0).x - 0.5
+        };
+        let (dry, water, lava) = (
+            walked(None),
+            walked(Some(Fluid::Water)),
+            walked(Some(Fluid::Lava)),
+        );
+        assert!(
+            dry > water && water > lava && lava > 0.0,
+            "{dry} {water} {lava}"
+        );
+    }
+
+    #[test]
+    fn test_flowing_water_carries_a_body_along_gently_and_still_water_doesnt() {
+        use crate::fluids::{Fluid, Level};
+        // weaker eastward, from sources to the west of x -4
+        let flowing = |x: i64| {
+            Some(match x {
+                ..=-4 => Fluid::Water.source(),
+                x => Fluid::Water.at(Level::Flowing(((x + 4) as u8).min(7))),
+            })
+        };
+        let carried = drift(flowing, Vec3::ZERO, 1.0).x - 0.5;
+        assert!(carried > 0.5 && carried < 2.0, "{carried}");
+        let still = drift(|_| Some(Fluid::Water.source()), Vec3::ZERO, 1.0).x - 0.5;
+        assert!(still.abs() < 1e-4, "{still}");
     }
 
     #[test]

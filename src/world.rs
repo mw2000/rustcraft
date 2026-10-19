@@ -82,6 +82,8 @@ pub struct World {
     reroofed: Vec<Reroofed>,
     // blocks whose edits have changed block light, see `take_relit`
     relit: Vec<I64Vec3>,
+    // blocks changed in or beside a fluid, see `take_fluid_wakes`
+    fluid_wakes: Vec<I64Vec3>,
     // what lies below and above the world, which isn't generated, see `beyond_world`
     below: Arc<ChunkData>,
     above: Arc<ChunkData>,
@@ -118,6 +120,7 @@ impl World {
             edits,
             reroofed: Vec::new(),
             relit: Vec::new(),
+            fluid_wakes: Vec::new(),
             below: Arc::new(below),
             above: Arc::new(ChunkData::default()),
             region_store: Arc::new(
@@ -226,8 +229,28 @@ impl World {
         self.edits.set(block, to);
         if self.served_here {
             self.lod_edits.update(&self.edits, block);
+            if to.kind.fluid().is_some() || self.beside_fluid(block) {
+                self.fluid_wakes.push(block);
+            }
         }
         true
+    }
+
+    // Whether `block` or any block against its faces is a fluid, which a change to it can set
+    // flowing: whatever it was before, as it's gone now.
+    fn beside_fluid(&self, block: I64Vec3) -> bool {
+        crate::block::Direction::ALL.into_iter().any(|side| {
+            let beside = block + side.offset().as_i64vec3();
+            self.get_block_at(beside).fluid().is_some()
+        })
+    }
+
+    /// The blocks changed in this world, served here, since this was last called that were or
+    /// are fluid or lie beside one, for the fluids there to see whether they flow (M4.3). Only
+    /// edits wake fluids, never loading, so the world's generated seas stand still until
+    /// something disturbs them.
+    pub fn take_fluid_wakes(&mut self) -> Vec<I64Vec3> {
+        std::mem::take(&mut self.fluid_wakes)
     }
 
     // Whether changing `block` from `was` to `to` changes block light: it starts or stops

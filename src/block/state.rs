@@ -27,6 +27,10 @@ pub enum Property {
     Open,
     /// Which side a door turns on, as it's faced.
     Hinge,
+    /// How far a fluid has flowed from its source, 0 for the source itself (M4.3).
+    Level,
+    /// Whether a fluid is falling, fed from the fluid over it, which fills its cell.
+    Falling,
 }
 
 impl Property {
@@ -39,6 +43,8 @@ impl Property {
             Property::Half | Property::Hanging => (5, 2),
             Property::Open => (6, 2),
             Property::Hinge => (7, 2),
+            Property::Level => (0, 8),
+            Property::Falling => (3, 2),
         }
     }
 
@@ -56,6 +62,8 @@ impl Property {
             Property::Hanging => "hanging",
             Property::Open => "open",
             Property::Hinge => "hinge",
+            Property::Level => "level",
+            Property::Falling => "falling",
         }
     }
 
@@ -67,8 +75,9 @@ impl Property {
             Property::FacingAny => &DIRECTIONS,
             Property::Axis => &["y", "x", "z"],
             Property::Half => &["bottom", "top"],
-            Property::Hanging | Property::Open => &["false", "true"],
+            Property::Hanging | Property::Open | Property::Falling => &["false", "true"],
             Property::Hinge => &["left", "right"],
+            Property::Level => &["0", "1", "2", "3", "4", "5", "6", "7"],
         }
     }
 }

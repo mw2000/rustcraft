@@ -9,7 +9,7 @@ use crate::building::{placed, toggled};
 use crate::client::command_bar::command_bar_closed;
 use crate::client::creatures::{creature_hit, SeenCreature};
 use crate::client::player::LocalPlayer;
-use crate::collision::{boxes_at, looked_at, Hit};
+use crate::collision::{boxes_at, looked_at, looked_at_source, Hit};
 use crate::containers::Container;
 use crate::controls::{Action, Bindings, Controls};
 use crate::crafting::Station;
@@ -320,23 +320,36 @@ fn stop_breaking(mut breaking: ResMut<Breaking>) {
 
 // Right click places the selected block in the hotbar, or plants the seeds there, against the
 // face looked at, or in place of a block that's replaceable, such as tall grass, and with a hoe
-// tills the dirt or grass looked at. Middle click selects the hotbar slot holding the block
-// looked at, or in creative asks for it in the selected slot. The server decides whether a block
-// can go where it's placed: into a replaceable block, never into a player, and in survival only
-// if it's held, and whether what's tilled has room above it.
+// tills the dirt or grass looked at. A bucket of water or lava pours it as a block is placed, and
+// an empty one takes up the source looked at. Middle click selects the hotbar slot holding the
+// block looked at, or in creative asks for it in the selected slot. The server decides whether
+// a block can go where it's placed: into a replaceable block, never into a player, and in
+// survival only if it's held, and whether what's tilled has room above it.
 fn use_target(
     world: Res<World>,
     target: Res<Target>,
     controls: Controls,
-    mut player: Query<(&GameMode, &mut Hotbar, &Inventory, &PlayerLook), With<LocalPlayer>>,
+    mut player: Query<
+        (&GameMode, &mut Hotbar, &Inventory, &PlayerLook, &Transform),
+        With<LocalPlayer>,
+    >,
     mut requests: EditRequests,
     mut picks: MessageWriter<PickBlock>,
 ) {
+    let (mode, mut hotbar, inventory, look, feet) =
+        player.single_mut().expect("player does not exist");
+    let slot = hotbar.selected as u8;
+    // an empty bucket takes up the fluid source looked at, as the server's asked
+    let bucket = hotbar.held(inventory).map(|stack| stack.item) == Some(Item::Bucket);
+    if bucket && controls.just_pressed(Action::Place) {
+        if let Some(source) = looked_at_source(&world, feet.translation, *look) {
+            requests.edit(source, BlockType::Air, slot);
+            return;
+        }
+    }
     let Some(hit) = target.0 else {
         return;
     };
-    let (mode, mut hotbar, inventory, look) = player.single_mut().expect("player does not exist");
-    let slot = hotbar.selected as u8;
     let replaceable = world.get_block_at(hit.block).is_replaceable();
     // and right click on a crafting table, a furnace or a bed uses it instead, see
     // `use_station`

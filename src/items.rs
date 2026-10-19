@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
+use crate::fluids::Fluid;
 
 /// How many of an item make a full stack, unless its row says otherwise.
 pub const MAX_STACK: u8 = 64;
@@ -23,6 +24,8 @@ struct Properties {
     plants: Option<BlockType>,
     /// What it does as armour, if it's worn.
     armour: Option<Armour>,
+    /// The fluid it pours, if it's a bucket of one (M4.3).
+    pours: Option<Fluid>,
 }
 
 // What every block item has, and every row of the table unless it says otherwise: blocks
@@ -33,6 +36,7 @@ const PLAIN: Properties = Properties {
     fills: 0,
     plants: None,
     armour: None,
+    pours: None,
 };
 
 /// What a tool is for: each is quick at breaking the blocks whose row names it (M1.2).
@@ -182,6 +186,21 @@ const fn plants(crop: BlockType) -> Properties {
     }
 }
 
+// An empty bucket stacks as Minecraft's don't, as nothing's lost by it, and a full one doesn't.
+const BUCKET: Properties = Properties {
+    max_stack: 16,
+    ..PLAIN
+};
+
+// A row's properties as a bucket of `fluid`.
+const fn bucket_of(fluid: Fluid) -> Properties {
+    Properties {
+        max_stack: 1,
+        pours: Some(fluid),
+        ..PLAIN
+    }
+}
+
 // Declares `Item`, with a variant for each row beside the one for blocks, and each row's stable
 // name and properties. A row draws the tile in `items.png` at its place in the table.
 macro_rules! items {
@@ -301,6 +320,10 @@ items! {
     BrightSteelBoots { name: "bright_steel_boots", armour(Boots, BRIGHT_STEEL) },
     // Villages' money (M3.4), which only trading with villagers gives and takes (`trading`).
     Coin { name: "coin" },
+    // Buckets (M4.3), made of iron, carry a source of water or lava to pour elsewhere.
+    Bucket { name: "bucket", BUCKET },
+    WaterBucket { name: "water_bucket", bucket_of(Fluid::Water) },
+    LavaBucket { name: "lava_bucket", bucket_of(Fluid::Lava) },
 }
 
 impl Item {
@@ -367,10 +390,24 @@ impl Item {
         }
     }
 
-    /// The block it puts in the world, if any: a block item's block, and what seeds are planted
-    /// as.
+    /// The block it puts in the world, if any: a block item's block, what seeds are planted
+    /// as, and the fluid a bucket of one pours.
     pub fn places(self) -> Option<BlockType> {
-        self.block().or(self.properties().plants)
+        let poured = self.pours().map(Fluid::block);
+        self.block().or(self.properties().plants).or(poured)
+    }
+
+    /// The fluid it pours, if it's a bucket of one.
+    pub fn pours(self) -> Option<Fluid> {
+        self.properties().pours
+    }
+
+    /// The bucket full of `fluid`.
+    pub fn bucket_of(fluid: Fluid) -> Self {
+        match fluid {
+            Fluid::Water => Item::WaterBucket,
+            Fluid::Lava => Item::LavaBucket,
+        }
     }
 
     /// Which tile of `items.png` draws it, if it isn't a block, which its block's tiles draw.
@@ -737,10 +774,14 @@ mod tests {
             assert!(better.durability > worse.durability && better.speed > worse.speed);
         }
         for item in Item::all() {
-            match item.durability() {
-                Some(_) => assert_eq!(1, item.max_stack(), "{item:?}"),
-                None => assert_eq!(MAX_STACK, item.max_stack(), "{item:?}"),
-            }
+            // and buckets, which stack to 16 empty and alone full
+            let stack = match item.durability() {
+                Some(_) => 1,
+                None if item.pours().is_some() => 1,
+                None if item == Item::Bucket => 16,
+                None => MAX_STACK,
+            };
+            assert_eq!(stack, item.max_stack(), "{item:?}");
         }
         assert_eq!(ToolKind::Shovel, Item::IronShovel.tool().unwrap().kind);
         assert_eq!(None, Item::Stick.tool());
@@ -751,7 +792,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::Coin.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::LavaBucket.sprite());
     }
 
     #[test]

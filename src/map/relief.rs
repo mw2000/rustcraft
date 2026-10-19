@@ -5,7 +5,7 @@
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::{DVec2, DVec3, Vec3};
 
-use crate::chunks::generate::biome::landmark::{CRATER, VOLCANO};
+use crate::chunks::generate::biome::landmark::{CRATER, LAVA_STREAM, VOLCANO};
 use crate::chunks::generate::biome::{Biomes, Climate};
 use crate::chunks::generate::generator::{FREEZE_TEMPERATURE, SNOWY_GRASS_TEMPERATURE};
 use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
@@ -95,7 +95,7 @@ impl Relief {
             }
             match biomes.name(sample.biome) {
                 Some(VOLCANO) => colour = BASALT,
-                Some(CRATER) => colour = MAGMA,
+                Some(CRATER | LAVA_STREAM) => colour = MAGMA,
                 _ => {}
             }
             if above_sea <= 0.0 && above_sea > -60.0 {

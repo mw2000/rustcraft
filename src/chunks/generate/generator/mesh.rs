@@ -1,6 +1,6 @@
 use super::buffers::{
-    tiled_uvs, ChunkMeshes, GrassTint, MeshBuffers, MeshStyle, BOX_TEXTURE_MAX_CELL, CROSS, CUBE,
-    TEXTURED, TEXTURED_SOLID, TORCH,
+    tiled_uvs, ChunkMeshes, GrassTint, MeshBuffers, MeshStyle, Vertex, BOX_TEXTURE_MAX_CELL, CROSS,
+    CUBE, TEXTURED, TEXTURED_SOLID, TORCH,
 };
 use super::greedy::mesh_opaque_greedy;
 use super::shading::{
@@ -16,6 +16,7 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::Light;
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::chunks::generate::trees::hash;
+use crate::fluids::Level;
 use bevy::math::I64Vec3;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
@@ -67,10 +68,14 @@ pub(super) fn mesh_blocks(
         blocks[grid_index(size, coord)] = block;
     }
 
+    // full detail draws flowing water lower the weaker it is and sloping the way it flows, as
+    // LODs, which have no states, draw every water level
+    let full_detail = cell_size == 1;
     for &(block_coord, block) in &non_air {
         if block != BlockType::Water {
             continue;
         }
+        let corners = full_detail.then(|| fluid_corners(source, block_coord, block));
 
         for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
             let neighbour = source.block(block_coord + offset);
@@ -94,8 +99,12 @@ pub(super) fn mesh_blocks(
                     vertex_shore_distance(source, block_coord, i, v.position),
                 ]
             });
+            let face = match corners {
+                Some(corners) => surface_face(&CUBE[i], corners),
+                None => water_faces[i],
+            };
             water.push_face(
-                &water_faces[i],
+                &face,
                 block_coord.as_vec3(),
                 Tile::Water.atlas_cell(),
                 &colors,
@@ -126,8 +135,10 @@ pub(super) fn mesh_blocks(
         }
         opaque.plants = plants..opaque.vertices.len();
         for &(coord, block) in &non_air {
-            if block.style() == RenderStyle::Torch {
-                push_torch(&mut opaque, coord, block, light);
+            match block.style() {
+                RenderStyle::Torch => push_torch(&mut opaque, coord, block, light),
+                RenderStyle::Lava => push_lava(&mut opaque, source, coord, block, light),
+                _ => {}
             }
         }
         // shapes cut their holes out of their shadows too, as glass panes and ladders have them
@@ -258,6 +269,82 @@ fn push_cross(
             quad.map(|v| v.uv),
             // v is 0 at the tip
             quad.map(|v| if v.uv[1] == 0.0 { tip } else { root }),
+            [levels; 4],
+        );
+    }
+}
+
+// Where the surface of the fluid `fluid` at `coord` stands at each corner of its top, from the
+// bottom of its cell at -0.5, indexed by `corner`: the average of the heights of the fluid in the
+// cells round the corner (`Level::height`), or the top of the cell where any has the same fluid
+// over it, which it joins. Cells beside each other share their corners, so a flow's surface
+// slopes evenly down from its source and has no steps.
+fn fluid_corners(source: &impl BlockSource, coord: IVec3, fluid: BlockType) -> [f32; 4] {
+    std::array::from_fn(|corner| {
+        let (dx, dz) = ((corner & 1) as i32 * 2 - 1, (corner >> 1) as i32 * 2 - 1);
+        let (mut total, mut count) = (0.0, 0.0);
+        for offset in [(0, 0), (dx, 0), (0, dz), (dx, dz)] {
+            let cell = coord + IVec3::new(offset.0, 0, offset.1);
+            if source.block(cell) != fluid {
+                continue;
+            }
+            if source.block(cell + IVec3::Y) == fluid {
+                return 0.5;
+            }
+            total += Level::of(source.state(cell)).height();
+            count += 1.0;
+        }
+        total / count - 0.5
+    })
+}
+
+// The corner of a cell's top a vertex of one of its faces is at, for `fluid_corners`.
+fn corner(position: [f32; 3]) -> usize {
+    usize::from(position[0] > 0.0) | usize::from(position[2] > 0.0) << 1
+}
+
+// A face of `CUBE` with its top edge at a fluid's surface, given by `fluid_corners`, and its
+// side faces' tiles cut off where the surface is, so they don't squash.
+fn surface_face(face: &[Vertex; 4], corners: [f32; 4]) -> [Vertex; 4] {
+    face.map(|mut v| {
+        if v.position[1] == 0.5 {
+            v.position[1] = corners[corner(v.position)];
+            if v.normal[1] == 0.0 {
+                v.uv[1] = 0.5 - v.position[1];
+            }
+        }
+        v
+    })
+}
+
+// Lava at `coord`, as its surface and the sides of it that show, against what isn't lava and
+// can be seen through, its surface as high as its level as water's is, and lit by the cells its
+// faces face. Its tile glows whatever the light, see `world.wesl`.
+fn push_lava(
+    buffers: &mut MeshBuffers,
+    source: &impl BlockSource,
+    coord: IVec3,
+    block: BlockType,
+    light: &Light,
+) {
+    let corners = fluid_corners(source, coord, block);
+    let colour = Vec3::ONE
+        .extend(block.tile(Face::Top).atlas_cell())
+        .to_array();
+    for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
+        let neighbour = source.block(coord + offset);
+        if neighbour == block || neighbour.is_opaque() {
+            continue;
+        }
+        let face = surface_face(&CUBE[i], corners);
+        let levels = light
+            .levels(coord + offset)
+            .map(|l| l as f32 / MAX_LIGHT as f32);
+        buffers.push_tiled_quad(
+            face.map(|v| (Vec3::from(v.position) + coord.as_vec3()).to_array()),
+            face[0].normal,
+            face.map(|v| v.uv),
+            [colour; 4],
             [levels; 4],
         );
     }

@@ -18,7 +18,7 @@ pub use foothills::Foothills;
 pub use forest::Forest;
 pub use glacier::Glacier;
 pub use jungle::Jungle;
-pub use landmark::{Crater, Summit, Volcano};
+pub use landmark::{Crater, LavaStream, Summit, Volcano};
 pub use savanna::Savanna;
 pub use taiga::Taiga;
 
@@ -144,6 +144,7 @@ impl Biomes {
             Box::new(Summit),
             Box::new(Volcano),
             Box::new(Crater),
+            Box::new(LavaStream),
         ])
     }
 

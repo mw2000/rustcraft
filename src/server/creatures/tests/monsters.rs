@@ -562,6 +562,7 @@ fn test_a_dungeons_spawner_is_built_as_someone_comes_near_and_not_again_once_bro
     let chunk = ChunkCoordinate::containing(marker).0;
     let mut app = field(BlockType::Stone, chunk - I64Vec3::Y);
     app.add_message::<ToClients<BlockChanged>>()
+        .add_message::<ToClients<crate::protocol::ChunkEdits>>()
         .add_systems(Update, super::super::build_spawners);
     // its chunk as generation leaves it, empty round the marker
     app.world_mut().resource_mut::<World>().insert_chunk(

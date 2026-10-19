@@ -102,7 +102,8 @@ pub(super) fn face_span(
     let neighbour = coord + normal;
     let neighbour_block = source.block(neighbour);
     let covered = neighbour_block.is_opaque()
-        || (matches!(block, BlockType::Ice | BlockType::Glass) && neighbour_block == block)
+        || (matches!(block, BlockType::Ice | BlockType::Glass | BlockType::Lava)
+            && neighbour_block == block)
         || (neighbour_block.is_shape() && {
             let side = Direction::of_offset(-normal.as_i64vec3()).expect("a face's normal");
             let state = source.state(neighbour);

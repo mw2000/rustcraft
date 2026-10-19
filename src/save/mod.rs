@@ -1038,6 +1038,63 @@ mod tests {
     }
 
     #[test]
+    fn test_water_that_flowed_is_there_after_a_restart_and_stands_still() {
+        use crate::fluids::{fluid_of, Fluid, Level};
+        use crate::server::fluids::{Fluids, FLUID_TICK};
+        let dir = TempDir::new("flowed");
+        // high over land far from the player, in empty chunks of its own
+        let origin = I64Vec3::new(5000, 470, 5000);
+        let load = |app: &mut App| {
+            let mut world = app.world_mut().resource_mut::<crate::world::World>();
+            let middle = ChunkCoordinate::containing(origin).0;
+            for x in -1..=1 {
+                for y in -1..=1 {
+                    for z in -1..=1 {
+                        let coord = ChunkCoordinate(middle + I64Vec3::new(x, y, z));
+                        world.insert_chunk(coord, ChunkData::default());
+                    }
+                }
+            }
+        };
+        let cells: Vec<I64Vec3> = (-8..=8)
+            .flat_map(|x| (-8..=8).map(move |z| origin + I64Vec3::new(x, 0, z)))
+            .collect();
+        let mut app = play(&dir);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(FLUID_TICK));
+        load(&mut app);
+        {
+            let mut world = app.world_mut().resource_mut::<crate::world::World>();
+            for &cell in &cells {
+                world.edit(cell - I64Vec3::Y, BlockType::Stone);
+            }
+            world.edit(origin, Fluid::Water.source());
+        }
+        for _ in 0..60 {
+            app.update();
+        }
+        let world = app.world().resource::<crate::world::World>();
+        let flowed: Vec<_> = cells.iter().map(|&cell| world.get(cell)).collect();
+        assert_eq!(
+            Some((Fluid::Water, Level::Flowing(7))),
+            fluid_of(world.get(origin + I64Vec3::new(4, 0, 3)))
+        );
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        drop(app);
+
+        let mut app = play(&dir);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(FLUID_TICK));
+        load(&mut app);
+        for _ in 0..20 {
+            app.update();
+        }
+        assert_eq!(0, app.world().resource::<Fluids>().pending());
+        let world = app.world().resource::<crate::world::World>();
+        let reloaded: Vec<_> = cells.iter().map(|&cell| world.get(cell)).collect();
+        assert!(flowed == reloaded, "the flow isn't as it was saved");
+    }
+
+    #[test]
     fn test_creatures_are_there_after_a_restart_and_gone_once_theyve_gone() {
         let dir = TempDir::new("creatures");
         let mut app = play(&dir);

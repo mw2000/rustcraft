@@ -1,7 +1,7 @@
 //! A volcano: a broad cone of basalt with a crater at its top, magma glowing on the crater's
 //! floor and in streams down its flanks, so it shows at night from far away. Shaped into the
 //! height field, as a great peak is, with the cone's ground given to the volcano's biomes,
-//! which turn it to basalt and the crater's floor to magma.
+//! which turn it to basalt, the crater's floor to magma and the streams to lava (M4.3).
 
 use std::f64::consts::TAU;
 
@@ -128,7 +128,7 @@ impl Volcano {
         z: f64,
         cell: f64,
         (height, biome, trees): (f64, BiomeId, f64),
-        (volcano, crater): (BiomeId, BiomeId),
+        (volcano, crater, lava_stream): (BiomeId, BiomeId, BiomeId),
     ) -> (f64, BiomeId, f64) {
         let warp = shaping.warp(x, z);
         let offset = DVec2::new(x, z) - self.centre + warp * WARP * self.radius;
@@ -148,8 +148,10 @@ impl Volcano {
         let blend = smoothstep(1.0, BLEND, s);
         let lift = (cone - height).max(0.0) * blend;
         let ash = s + (warp.x + shaping.crags.get(x, z, cell) * 0.3) * ASH_WANDER;
-        let owner = if distance < self.crater * LAKE || stream {
+        let owner = if distance < self.crater * LAKE {
             crater
+        } else if stream {
+            lava_stream
         } else if ash < ASH_LINE {
             volcano
         } else {

@@ -449,6 +449,28 @@ COIN = np.array([(120, 74, 34), (176, 118, 52), (226, 178, 96)], float)
 SPRITES["coin"] = coin
 
 
+def bucket(contents=None):
+    """An iron pail seen a little from above, wider at its rim, with its handle arched over it: empty, dark inside,
+    or full to the rim of what it carries."""
+    def make():
+        y, x = np.mgrid[:16, :16]
+        rim = ((x - 7.5) / 5.6) ** 2 + ((y - 6.5) / 1.8) ** 2 < 1.0
+        half = 5.2 - (y - 6.5) * 0.28
+        body = (y >= 6.5) & (y < 14.5) & (np.abs(x - 7.5) < half)
+        handle = (np.abs(np.hypot((x - 7.5) / 5.4, (y - 6.5) / 5.4) - 1.0) < 0.1) & (y < 6)
+        out = np.zeros((16, 16, 4))
+        lit(body | rim | handle, MATERIALS["iron"], out)
+        inside = ((x - 7.5) / 4.4) ** 2 + ((y - 6.5) / 1.1) ** 2 < 1.0
+        out[inside, :3] = (52, 52, 58) if contents is None else contents[(x[inside] + y[inside]) % 2]
+        outline(out)
+        return out
+    return make
+
+
+SPRITES.update(bucket=bucket(), water_bucket=bucket(np.array([(48, 88, 200), (72, 120, 228)], float)),
+               lava_bucket=bucket(np.array([(240, 110, 28), (255, 176, 60)], float)))
+
+
 def table_order():
     """The names in the `items!` table, which the tiles must follow."""
     import re

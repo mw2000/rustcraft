@@ -69,12 +69,16 @@ impl Predictions {
 /// Which of the server's `ChunkEdits` and `BlockChanged`s about a block is newer, for a client
 /// joined to a server: each comes on a channel of its own, so either can overtake the other.
 /// `BlockChanged`s are counted as they come, as the server counts them as it sends them, and
-/// each `ChunkEdits` says how many were sent before it.
+/// each `ChunkEdits` says how many were sent before it. A partial one, of the blocks fluids
+/// changed, is newer than those changes for its own blocks alone.
 #[derive(Resource, Default)]
 pub struct EditOrder {
     changes: u64,
     // each chunk's latest edits, by the changes sent before them
     chunks: HashMap<ChunkCoordinate, u64>,
+    // each block in partial chunk edits whose changes sent before them might still be on
+    // their way, by how many there were
+    partial: HashMap<I64Vec3, u64>,
     // each block changed since the latest chunk's edits came, by its change's count, which
     // only a chunk's edits sent earlier still on their way can be older than
     blocks: HashMap<I64Vec3, u64>,
@@ -85,10 +89,19 @@ impl EditOrder {
     // edits.
     fn change(&mut self, block: I64Vec3) -> bool {
         self.changes += 1;
+        let changes = self.changes;
         let synced = self.chunks.get(&ChunkCoordinate::containing(block));
-        let newer = synced.is_none_or(|&before| self.changes > before);
+        let newer = synced.is_none_or(|&before| changes > before)
+            && self
+                .partial
+                .get(&block)
+                .is_none_or(|&before| changes > before);
         if newer {
-            self.blocks.insert(block, self.changes);
+            self.blocks.insert(block, changes);
+        }
+        // every change still to come is newer than partial edits sent before this one
+        if !self.partial.is_empty() {
+            self.partial.retain(|_, &mut before| before > changes);
         }
         newer
     }
@@ -96,7 +109,16 @@ impl EditOrder {
     // Takes in a chunk's edits, returning which of their blocks have changed since.
     fn chunk(&mut self, chunk: &ChunkEdits) -> impl Fn(I64Vec3) -> bool + '_ {
         let before = chunk.changes_before();
-        self.chunks.insert(chunk.coord(), before);
+        if chunk.is_partial() {
+            // changes sent before these might still come, and are older for these blocks
+            if before > self.changes {
+                for (block, _) in chunk.edits() {
+                    self.partial.insert(block, before);
+                }
+            }
+        } else {
+            self.chunks.insert(chunk.coord(), before);
+        }
         // chunks' edits come in the order they're sent, so any still on their way were sent
         // after these and nothing's older than them
         self.blocks.retain(|_, &mut change| change > before);

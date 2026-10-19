@@ -64,6 +64,7 @@ fn village(time: f64) -> (App, Arc<Village>) {
         .add_message::<FromClient<CloseInventory>>()
         .add_message::<ToClients<TradeOffers>>()
         .add_message::<ToClients<BlockChanged>>()
+        .add_message::<ToClients<crate::protocol::ChunkEdits>>()
         .add_systems(
             Update,
             (

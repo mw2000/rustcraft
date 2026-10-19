@@ -18,7 +18,7 @@ use bevy_replicon_renet2::netcode::{
 use bevy_replicon_renet2::renet2::RenetClient;
 use bevy_replicon_renet2::RepliconRenetPlugins;
 use rustcraft::authoring::Selection;
-use rustcraft::block::BlockType;
+use rustcraft::block::{Block, BlockType};
 use rustcraft::breaking::break_time;
 use rustcraft::chunks::chunk::ChunkCoordinate;
 use rustcraft::chunks::chunk_loader::ChunkLoader;
@@ -36,6 +36,7 @@ use rustcraft::creatures::{
     Condition, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature, Stance,
 };
 use rustcraft::farming::Crops;
+use rustcraft::fluids::{Fluid, Level};
 use rustcraft::game_mode::GameMode;
 use rustcraft::inventory::Inventory;
 use rustcraft::items::{Item, ItemStack};
@@ -982,6 +983,77 @@ fn test_a_chunks_edits_and_a_change_to_it_overtaking_each_other_leave_the_newer(
     });
     client.update();
     assert_eq!(BlockType::Stone, shown(&mut client));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_a_client_sees_water_the_host_pours_flow_in_a_message_a_chunk() {
+    let dir = temp_dir("flowing");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    // in the air over the spawn, on a floor of its own, so the ground under it doesn't matter
+    let source = server
+        .world()
+        .resource::<World>()
+        .spawn()
+        .floor()
+        .as_i64vec3()
+        + I64Vec3::new(0, 6, 0);
+    update_until(&mut server, &mut client, |server, client| {
+        let world = server.world().resource::<World>();
+        let loaded = (-1..=1).all(|x| {
+            (-1..=1).all(|z| {
+                let corner = source + I64Vec3::new(x * 8, -1, z * 8);
+                world.is_chunk_generated(ChunkCoordinate::containing(corner))
+            })
+        });
+        joined(client) && loaded
+    });
+    {
+        let mut world = server.world_mut().resource_mut::<World>();
+        for x in -8..=8 {
+            for z in -8..=8 {
+                world.edit(source + I64Vec3::new(x, -1, z), BlockType::Stone);
+            }
+        }
+        world.edit(source, Fluid::Water.source());
+    }
+    let edge = source + I64Vec3::new(3, 0, 4);
+    let flowed = Fluid::Water.at(Level::Flowing(7));
+    let has = |client: &mut App, block: I64Vec3, to: Block| {
+        let (coord, local) = (
+            ChunkCoordinate::containing(block),
+            ChunkCoordinate::local_block(block),
+        );
+        let world = client.world_mut().get_resource_mut::<World>();
+        world.is_some_and(|mut world| world.edits_mut().in_chunk(coord).any(|e| e == (local, to)))
+    };
+    let (mut chunks, mut changes) = (
+        MessageCursor::<ChunkEdits>::default(),
+        MessageCursor::<BlockChanged>::default(),
+    );
+    let (mut partial, mut single) = (0, 0);
+    update_until(&mut server, &mut client, |_, client| {
+        partial += received(client, &mut chunks)
+            .iter()
+            .filter(|edits| edits.is_partial())
+            .count();
+        single += received(client, &mut changes).len();
+        has(client, edge, flowed)
+    });
+    assert!(partial > 0);
+    assert_eq!(0, single, "a flow is sent a chunk at a time, not a block");
+    // as the host has it, the client has all of it
+    let server_world = server.world().resource::<World>();
+    for x in -8..=8 {
+        for z in -8..=8 {
+            let block = source + I64Vec3::new(x, 0, z);
+            let distance = x.abs() + z.abs();
+            // the source was the host's own edit, made in the world rather than asked for
+            if (1..=7).contains(&distance) {
+                assert!(has(&mut client, block, server_world.get(block)), "{x}, {z}");
+            }
+        }
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

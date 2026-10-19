@@ -3584,3 +3584,59 @@ fn test_a_villages_streets_are_trodden_into_the_ground_the_same_at_full_detail_a
     }
     assert!(columns > 100, "{columns}");
 }
+
+#[test]
+fn test_flowing_water_stands_lower_the_weaker_it_is_and_lava_is_drawn_glowing() {
+    use crate::fluids::{Fluid, Level};
+    let mut chunk = ChunkData::default();
+    for x in 0..16 {
+        for z in 0..16 {
+            chunk.set_block_at(U16Vec3::new(x, 3, z), BlockType::Stone);
+        }
+    }
+    let row = [
+        Level::Source,
+        Level::Flowing(2),
+        Level::Flowing(4),
+        Level::Flowing(6),
+    ];
+    for (x, level) in (2..).zip(row) {
+        chunk.set_block_at(U16Vec3::new(x, 4, 8), Fluid::Water.at(level));
+    }
+    chunk.set_block_at(U16Vec3::new(12, 4, 4), Fluid::Lava.source());
+    let meshes = mesh_chunk(chunk);
+    let water = meshes.water.expect("water drawn");
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        water.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("no positions");
+    };
+    // the highest the surface stands along each edge across the flow
+    let top = |x: f32| {
+        positions
+            .iter()
+            .filter(|p| (p[0] - x).abs() < 1e-4)
+            .map(|p| p[1])
+            .fold(f32::MIN, f32::max)
+    };
+    // a source's where still water's always is, and the weakest flow at its far end lowest
+    assert!((top(1.5) - 4.4).abs() < 1e-4, "{}", top(1.5));
+    assert!(
+        top(1.5) > top(3.5) && top(3.5) > top(5.5),
+        "{} {} {}",
+        top(1.5),
+        top(3.5),
+        top(5.5)
+    );
+    let Some(VertexAttributeValues::Float32x4(colors)) =
+        meshes.opaque.attribute(Mesh::ATTRIBUTE_COLOR)
+    else {
+        panic!("no colours");
+    };
+    let lava = colors
+        .iter()
+        .filter(|c| c[3] == Tile::Lava.atlas_cell())
+        .count();
+    // its top and four sides, standing on the floor
+    assert_eq!(5 * 4, lava);
+}

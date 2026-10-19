@@ -40,6 +40,13 @@ const BREATH_REFILL: f32 = 7.5;
 // Out of breath, how much drowning hurts and how often, in seconds.
 const DROWNING_DAMAGE: u8 = 2;
 const DROWNING_INTERVAL: f32 = 1.0;
+// In lava, how much it burns and how often, in seconds, and how long a player burns on after
+// climbing out, a point a second, unless they put it out in water (M4.3).
+const LAVA_DAMAGE: u8 = 4;
+const LAVA_INTERVAL: f32 = 0.5;
+const ALIGHT_SECONDS: f32 = 8.0;
+const FIRE_DAMAGE: u8 = 1;
+const FIRE_INTERVAL: f32 = 1.0;
 // Food used up, in points of the bar: just living, a point every 35 seconds; sprinting, twice
 // as much again; and a little a jump and half a point for each point healed.
 const FOOD_PER_SECOND: f32 = 1.0 / 35.0;
@@ -113,6 +120,8 @@ pub(super) struct Surroundings {
     pub on_ground: bool,
     /// Feet or middle in water, which breaks a fall.
     pub in_water: bool,
+    /// Feet or middle in lava, which burns, and breaks a fall too.
+    pub in_lava: bool,
     /// On a ladder or vines, which is no fall either.
     pub climbing: bool,
     /// Eyes under water, holding their breath.
@@ -149,7 +158,7 @@ impl Footing {
             *self = Self {
                 last: Some(at),
                 grounded: around.on_ground,
-                stood: around.on_ground || around.in_water || around.climbing,
+                stood: around.on_ground || around.in_water || around.in_lava || around.climbing,
                 ..Self::default()
             };
             return moved;
@@ -162,7 +171,7 @@ impl Footing {
                 moved.sprinted = time;
             }
         }
-        if around.in_water || around.climbing {
+        if around.in_water || around.in_lava || around.climbing {
             self.peak = None;
             self.stood = true;
         } else if around.on_ground {
@@ -217,11 +226,13 @@ pub(super) fn surroundings(world: &World, feet: Vec3) -> Surroundings {
     };
     let on_ground = corners.into_iter().any(|(x, z)| stands_on(x, z));
     let water = |at: Vec3| block(at) == Some(BlockType::Water);
+    let lava = |at: Vec3| block(at) == Some(BlockType::Lava);
     let climbable = |at: Vec3| block(at).is_some_and(|block| block.is_climbable());
     let middle = feet + Vec3::Y * BODY.max.y / 2.0;
     Surroundings {
         on_ground,
         in_water: water(feet) || water(middle),
+        in_lava: lava(feet) || lava(middle),
         climbing: climbable(feet) || climbable(middle),
         head_under: water(feet + Vec3::Y * EYE_HEIGHT),
     }
@@ -232,6 +243,7 @@ pub(super) fn surroundings(world: &World, feet: Vec3) -> Surroundings {
 pub(super) enum Death {
     Fell,
     Drowned,
+    Burned,
     Slain(CreatureKind),
 }
 
@@ -240,6 +252,7 @@ impl Death {
         match self {
             Death::Fell => format!("{name} fell from a high place"),
             Death::Drowned => format!("{name} drowned"),
+            Death::Burned => format!("{name} tried to swim in lava"),
             Death::Slain(kind) => match &kind.properties().attack {
                 Some(attack) => format!("{name} {}", attack.slays),
                 None => format!("{name} was slain by a {}", kind.name().replace('_', " ")),
@@ -255,6 +268,9 @@ pub(super) struct Metabolism {
     breath: f32,
     // seconds towards the next hurt from drowning, healing and starving
     drowning: f32,
+    // seconds left alight, and before the next hurt from burning
+    alight: f32,
+    burning: f32,
     healing: f32,
     starving: f32,
     // food used up towards the next point off the bar
@@ -266,10 +282,44 @@ impl Metabolism {
         Self {
             breath: f32::from(vitals.air) / f32::from(MAX_AIR) * BREATH_SECONDS,
             drowning: 0.0,
+            alight: 0.0,
+            burning: 0.0,
             healing: 0.0,
             starving: 0.0,
             used: 0.0,
         }
+    }
+
+    /// Burns `dt` seconds in lava if they're in it, and alight for a while after they climb
+    /// out, unless they're in water, which puts it out. Returns how they died, if they did.
+    pub(super) fn burn(
+        &mut self,
+        vitals: &mut Vitals,
+        around: Surroundings,
+        dt: f32,
+    ) -> Option<Death> {
+        if around.in_lava {
+            self.alight = ALIGHT_SECONDS;
+        } else if around.in_water {
+            self.alight = 0.0;
+        }
+        let (damage, interval) = if around.in_lava {
+            (LAVA_DAMAGE, LAVA_INTERVAL)
+        } else {
+            (FIRE_DAMAGE, FIRE_INTERVAL)
+        };
+        if self.alight <= 0.0 {
+            self.burning = 0.0;
+            return None;
+        }
+        self.alight = (self.alight - dt).max(0.0);
+        // counting down to the next burn, the first at once, on stepping in
+        self.burning -= dt;
+        if self.burning > 0.0 {
+            return None;
+        }
+        self.burning += interval;
+        hurt(vitals, damage, Death::Burned)
     }
 
     /// Lives `dt` seconds of having `moved` with their head under water or not, changing
@@ -481,7 +531,9 @@ pub(super) fn live(
                 count: bruise.count.wrapping_add(1),
             };
         }
-        let died = died.or_else(|| metabolism.live(&mut now, around.head_under, moved, dt));
+        let died = died
+            .or_else(|| metabolism.burn(&mut now, around, dt))
+            .or_else(|| metabolism.live(&mut now, around.head_under, moved, dt));
         if let Some(mut eating) = eating {
             eating.left -= dt;
             if !can_eat(*mode, now, &inventory, eating.slot) {
@@ -630,6 +682,7 @@ mod tests {
     const STILL: Surroundings = Surroundings {
         on_ground: true,
         in_water: false,
+        in_lava: false,
         climbing: false,
         head_under: false,
     };
@@ -676,6 +729,7 @@ mod tests {
             in_water: true,
             climbing: false,
             head_under: true,
+            ..Surroundings::default()
         };
         assert_eq!(None, drop(&mut footing, 40.0, 10.0, water));
         // nor is climbing out of it onto the bank
@@ -791,6 +845,42 @@ mod tests {
         };
         live_for(&mut vitals, false, Moved::default(), 2.0);
         assert_eq!(MAX_AIR, vitals.air);
+    }
+
+    #[test]
+    fn test_lava_burns_fast_and_on_after_climbing_out_unless_water_puts_it_out() {
+        let lava = Surroundings {
+            in_lava: true,
+            ..Surroundings::default()
+        };
+        let wet = Surroundings {
+            in_water: true,
+            ..Surroundings::default()
+        };
+        let mut vitals = Vitals::default();
+        let mut metabolism = Metabolism::of(vitals);
+        let mut burn = |vitals: &mut Vitals, around, seconds: f32| {
+            let was = vitals.health;
+            for _ in 0..(seconds / FRAME).round() as usize {
+                metabolism.burn(vitals, around, FRAME);
+            }
+            was - vitals.health
+        };
+        // at once and every half second in it
+        assert_eq!(2 * LAVA_DAMAGE, burn(&mut vitals, lava, 0.9));
+        // a point a second out of it
+        let burnt = burn(&mut vitals, Surroundings::default(), 3.0);
+        assert!((2..=3).contains(&burnt), "{burnt}");
+        // until water puts it out
+        assert_eq!(0, burn(&mut vitals, wet, 0.1));
+        assert_eq!(0, burn(&mut vitals, Surroundings::default(), 3.0));
+        // and long enough in it kills
+        let mut vitals = Vitals::default();
+        let mut metabolism = Metabolism::of(vitals);
+        let died =
+            (0..(5.0 / FRAME) as usize).find_map(|_| metabolism.burn(&mut vitals, lava, FRAME));
+        assert_eq!(Some(Death::Burned), died);
+        assert_eq!("Ann tried to swim in lava", Death::Burned.message("Ann"));
     }
 
     #[test]

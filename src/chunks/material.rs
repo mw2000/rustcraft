@@ -187,6 +187,7 @@ impl Material for ChunkMaterial {
         let glass_cell = ShaderDefVal::UInt("GLASS_CELL".into(), Tile::Glass.atlas_cell() as u32);
         // and so does magma, at every distance
         let magma_cell = ShaderDefVal::UInt("MAGMA_CELL".into(), Tile::Magma.atlas_cell() as u32);
+        let lava_cell = ShaderDefVal::UInt("LAVA_CELL".into(), Tile::Lava.atlas_cell() as u32);
         // leaves' holes fill in past where the faces between leaves are drawn, see `inner_leaves`
         let inner_leaves_reach =
             ShaderDefVal::UInt("INNER_LEAVES_REACH".into(), INNER_LEAVES_REACH as u32);
@@ -202,6 +203,7 @@ impl Material for ChunkMaterial {
             lantern_cell,
             glass_cell,
             magma_cell,
+            lava_cell,
             water_level(),
         ];
         // compiled in or out, so the switches leave no trace of the code they turn off

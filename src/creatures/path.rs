@@ -157,8 +157,10 @@ impl<F: FnMut(I64Vec3) -> Option<BlockType>> Cells<'_, F> {
         (0..self.walker.tall).all(|y| {
             (-half..=half).all(|x| {
                 (-half..=half).all(|z| {
-                    (self.block)(cell + I64Vec3::new(x, y, z))
-                        .is_some_and(|b| !b.is_solid() || (doors && b == BlockType::Door))
+                    // and never into lava, which burns
+                    (self.block)(cell + I64Vec3::new(x, y, z)).is_some_and(|b| {
+                        (!b.is_solid() && b != BlockType::Lava) || (doors && b == BlockType::Door)
+                    })
                 })
             })
         })

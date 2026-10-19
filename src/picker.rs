@@ -344,7 +344,9 @@ mod tests {
         for unwanted in [block(BlockType::Wheat3), Item::Wheat, Item::IronHoe] {
             assert!(!offered.contains(&unwanted), "{unwanted:?}");
         }
-        // all but air, water and the seven stages wheat grows through, and seeds
-        assert_eq!(BlockType::ALL.len() - 2 - 7 + 1, offered.len());
+        // all but air, water, lava and the seven stages wheat grows through, and seeds and
+        // buckets of water and lava, to pour
+        assert!(offered.contains(&Item::WaterBucket) && offered.contains(&Item::LavaBucket));
+        assert_eq!(BlockType::ALL.len() - 3 - 7 + 3, offered.len());
     }
 }

@@ -218,6 +218,9 @@ Every block is declared once, in the `blocks!` table in `src/block.rs` (INV-6, D
     floor (`bench 1 shapes`) meshes in about 1.0 s against 0.44 s, with 4.8 times the vertices.
   - Later: stairs' corners joining, double slabs, doors' hinges picked from their
     neighbours, chests facing a way, wall torches, and culling faces between shapes.
+- **Built (M4.3):** `RenderStyle::Liquid` (water) and `Lava` take the properties `level` (0–7,
+  three bits) and `falling` (one), a fluid's flow (§5.4a). A source is state 0, so the world's
+  water is as it was. `Lava` is drawn as a fluid at full detail and as a cube of its tile far off.
 
 New blocks are added as features need them, and that's expected (§5).
 
@@ -904,6 +907,8 @@ The world's state beyond the seed (INV-1).
   message, so it isn't chunked by hand. `Welcome` now carries the name the server gave the
   client, so its own model wears the default others see. `PROTOCOL_VERSION` is 22 (23 since
   U-84's integer clock).
+- **Built (M4.3):** `ChunkEdits` has a `partial` flag, for the blocks fluids changed in a chunk
+  in a tick sent together (§5.4a). `PROTOCOL_VERSION` is 25.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin`,
   `DedicatedServerPlugins` and `is_authority`, `edits.rs`, `chunks.rs`, `commands.rs`,
   `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`,
@@ -1386,9 +1391,11 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   a junction to halls twenty or thirty blocks across near the bottom of the world.
 - The noise is sampled every 4 blocks and blended, and cells that can't hold a cave are ruled out
   from their corners, so a chunk underground costs about 15 µs more to generate.
-- Caves stay 5 blocks under the ground and taper shut towards it. Nothing simulates water, so they
-  stay 12 blocks under any sea floor within 16 blocks, rising 2 for each block away from it, and
-  no water is ever over or beside a cave.
+- Caves stay 5 blocks under the ground and taper shut towards it. Nothing simulated water when
+  they were made, so they stay 12 blocks under any sea floor within 16 blocks, rising 2 for each
+  block away from it, and no water is ever over or beside a cave. Since M4.3 water flows (§5.4a),
+  so they needn't keep away from the sea any more; M4.4 rebuilds caves and lifts the rule then,
+  rather than M4.3 changing what generates.
 - Cave mouths break the surface on dry land where a 2D noise is high, a few dozen to a square
   kilometre, so caves can be found from above.
 - LODs leave caves out, mouths included: caves are hidden from far away, so distant LODs keep
@@ -1450,6 +1457,87 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - Underground structures (mineshafts, dungeons) are built into the rock where caves may cross
   them, and LODs leave them out as they do caves (§5.6, Built M2.4b).
 
+### 5.4a Fluids
+
+- **Built (M4.3): flowing water and lava** (`src/fluids.rs`, `src/server/fluids.rs`).
+  - **Blocks:** water and lava are each a source or flowing, in their state (§4.1): `level` 0
+    for a source and 1–7 flowing, weaker the further from it, and `falling`, fed from the
+    fluid over it, which fills its cell. Text and saves name them `water[level=3]` and
+    `lava[falling=true]`; a source is the plain block, so everything generated, every old save
+    and every template reads as sources. Lava (new) is a fluid that isn't solid, lets light
+    through as water does and gives light 14, the most block light has (`MAX_EMITTED`; 15 would
+    widen every light's reach for one block). Obsidian (new) is the hardest rock, 60 s by hand,
+    dropping only to an iron pickaxe or better (tier 4, §5.3). Magma stays the solid volcano
+    block it was.
+  - **Flowing, as Minecraft's:** a source stays put. Fluid flowing has the level of the
+    strongest fluid beside it plus its drop-off (water 1, lava 2, so water runs 7 blocks and
+    lava 3), or falls where its fluid is over it, or goes once nothing feeds it. A cell spreads
+    down first, as a fall; otherwise, or from a source or where three sources meet, across,
+    towards the nearest way down within its reach (water 4 blocks, lava 2), or every way if
+    there's none. A flowing water cell between two water sources over something solid or a
+    source becomes a source, so a pool two wide never runs dry; lava never does. Fluids wash
+    away what's replaceable (air, plants, vines) and are walled by everything else.
+  - **Meeting:** lava with water over or beside it hardens at once, a source to obsidian and
+    flowing lava to cobblestone, and lava falling onto water turns the water to stone.
+  - **On the server (INV-4):** the server steps fluids on a clock of its own, 20 ticks a second
+    by `Time` (not `TimeOfDay`), water every 5 ticks and lava every 30, catching up at most 3
+    ticks a frame. Nothing is scanned: `World::edit` notes each block changed in or beside a
+    fluid, on the server only, and `Fluids` wakes the fluids there, each stepped its delay later
+    from a queue per fluid, earliest first, at most `STEPS_PER_TICK` (256) a tick, the rest
+    carried over. Loading a chunk, or a saved world, wakes nothing, so the generated seas and
+    saved flows stand still until something disturbs them: breaking a block by the sea starts a
+    flow, and loading the world simulates nothing. A cell beside a chunk not loaded waits for it
+    to load rather than drying up for want of what feeds it or flowing into nothing; it only
+    flows in chunks loaded round players. A fluid's steps are edits through the edit layer, so
+    they're saved as any edit is (§4.3, no format change: states are text in the palette).
+  - **Sync:** what a tick changes is sent a chunk at a time (`BlockChanges::write_chunk`): to
+    each client whose area takes the chunk in as one `ChunkEdits` marked `partial`, its blocks
+    as region files have them, 3 bytes a block, and to the host change by change, as its client
+    shares the world. A partial `ChunkEdits` carries the `BlockChanged`s sent before it as a
+    whole one does; the client's `EditOrder` keeps, for its blocks alone, which changes on the
+    other channel are older, so a block placed into flowing water isn't undone by a flow
+    overtaken by it. `PROTOCOL_VERSION` is 25.
+  - **Drawing:** full detail draws water and lava with their surfaces at each corner the
+    average of the heights of the fluid in the four cells round it (a source's 0.9, less the
+    weaker the flow, the top of the cell where the same fluid is over any of them), so a flow
+    slopes down from its source with no steps, and still water is as it was. Water's sides
+    show against fluid of another height too, as its corners are shared. Lava is drawn in the
+    land's mesh from its own tile (drawn by script, molten streaks), glowing at every distance
+    as magma does but brighter (`LAVA_GLOW`); LODs draw it as a cube of its tile, and flowing
+    water as water.
+  - **Buckets:** an empty bucket (3 iron ingots at a crafting table, stacking to 16) takes up
+    the source looked at (`collision::looked_at_source`, through flowing fluid, nearer than any
+    block) as an edit to air, and a full one pours a source as a block is placed, into anything
+    replaceable and round whoever's there, leaving it empty; creative keeps its buckets and
+    picks full ones from the picker. Water poured on lava hardens it at once, a source to
+    obsidian. The server checks the bucket held, that what's taken up is a source and that
+    only sources are poured.
+  - **In it:** a player or creature in flowing water swims as in still, and is carried along
+    the way it flows (`fluids::flow`), at up to 1.4 blocks a second in water and 0.5 in lava.
+    Lava slows a body to 0.35 of walking and lets it sink and swim up slower than water. In
+    survival it burns 4 points at once and every half second, and leaves a player alight for 8
+    s after, a point a second, unless water puts it out; it breaks a fall as water does.
+    "Ann tried to swim in lava." Creatures never path into it, and none spawn in fluids.
+  - **Volcanoes (M2.7):** the streams down their flanks are lava sources over magma
+    (`lava_stream`, a landmark biome as `crater` is), still until disturbed, so a stream broken
+    into runs down the cone. The crater's floor stays magma. The golden checksum is unchanged,
+    as none of seed 3's sample chunks holds a stream; the streams' columns generate lava where
+    they had magma.
+  - **Cost** (INV-7): a world at rest costs nothing, as nothing's queued. A dam broken into a
+    big cavern (`flood_cost`, ignored, in `server::fluids`: a lake 48 by 48 and 6 deep walled off
+    from a cavern 72 by 96 whose floor lies 16 below it, holed every 8 blocks to a second floor)
+    took 387 ticks (19 s of game), changed 4,802 blocks in 567 chunk messages, at most 261 in a
+    tick, and cost the server 0.24 ms a tick on average and 5.2 ms at most. Most of a step is
+    seeking the nearest way down, up to a few tens of microseconds a cell, which is why the
+    budget is 256 cells (at 1,024 the worst tick was 10.5 ms). Meshing still water reads each
+    surface cell's corners from the dense neighbourhood grid, a few lookups each.
+  - **Known gaps:** fluids waiting to flow aren't saved, so a flow under way when the world's
+    saved and closed stands still where it was until something wakes it; one waiting for a chunk
+    that's never loaded again is forgotten too. Plants washed away drop nothing, and torches
+    and crops wall fluids in. A player's view inside lava isn't tinted as underwater is.
+    Fluids don't flow through partial blocks (slabs, stairs, fences): a shape walls them as
+    a cube does.
+
 ### 5.5 Survival
 
 - Health with fall damage, drowning, and later mob damage. Death drops your inventory where you
@@ -1503,7 +1591,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     inventory screen; a red flash and a slight tilt of the view when hurt. The icons are
     `assets/textures/hud.png`, drawn by the block-textures skill's `hud.py`.
   - `PROTOCOL_VERSION` is 7.
-  - **Later:** a two-block bed lain in, with a Leave Bed button; damage from lava; leaves dropping apples as they decay, once they do.
+  - **Later:** a two-block bed lain in, with a Leave Bed button; leaves dropping apples as they decay, once they do. Lava burns since M4.3 (§5.4a).
 - **Built (M3.3): combat** (`src/server/survival.rs`, `src/server/creatures/`, `src/hud.rs`).
   - **Hitting (INV-4):** the client sends `HitCreature` no sooner than what's held swings again;
     the server checks reach as before and the swing's cooldown (`Combat::ready_at`), and lands
@@ -2143,7 +2231,8 @@ The fallen tower is left for a later milestone, built from structure templates.
   tiles) out to a wandering ash line; the `crater` biome floors it with magma (new, light 14,
   breaking to basalt), and four streams of magma run part way down its flanks. Magma glows at
   every distance (`MAGMA_GLOW` in `world.wesl`), as LODs carry no block light, so a crater
-  shows at night. Caves stay shut under it.
+  shows at night. Caves stay shut under it. Since M4.3 the streams are lava sources over magma,
+  which flow down the cone once disturbed (§5.4a).
 - **Giant tree:** 150–230 blocks tall in forest or jungle, a trunk 12–16 thick on buttress
   roots, six to nine branches each ending in a mass of leaves, built block by block on its
   own, like trees. The trunk is hollow, with a door at its foot, windows up it, and a stair
@@ -2850,12 +2939,15 @@ monuments do that job here.
   dyes), and the recipe book beside the grid lists what can be made, dimming what can't, and
   lays a recipe's ingredients into the grid when it's clicked, so no pattern needs learning.
   Every recipe in §5.3 is redrawn as a pattern; smelting stays a furnace's input and fuel.
-- ☐ **M4.3 Flowing fluids.** Water and lava as source blocks and flowing levels, spreading on
+- ☑ **M4.3 Flowing fluids.** Water and lava as source blocks and flowing levels, spreading on
   server ticks and synced as edits (INV-4), lava slower and shorter; buckets to carry them. Lava
   meeting water makes obsidian (from a lava source), cobblestone (from flowing lava) or stone
   (lava flowing onto water). Volcanoes' magma becomes lava that runs down their flanks (M2.7),
   and caves no longer need to keep away from the sea (§5.4). Generation still places still
   water; fluids move only once something disturbs them, so the world isn't simulated at load.
+  Built: §5.4a (fluids, meeting, buckets, swimming and burning, volcanoes' streams, cost), §4.1
+  (`level` and `falling` states), §4.4 (protocol 25). Caves still keep away from the sea, as
+  M4.4 rebuilds them (§5.4).
 - ☐ **M4.4 Caves.** Underground rebuilt after Minecraft's Caves & Cliffs: cheese caverns, huge
   and pillared; long winding spaghetti tunnels and thin noodle ones; aquifers, flooded caves and
   underground lakes, each with its own water level; lava lakes near the bottom of the world;
@@ -3024,6 +3116,9 @@ they're found.
   a facing; a lit furnace look (§4.1, §5.2, M2.4a).
 - ☐ Copy and paste a box, and undo, for building in creative (§5.6, M2.2).
 - ☐ Farmland drying out and trampling; more crops (carrots, potatoes) and saplings (§5.5a).
+- ☐ Fluids: the queue of fluids waiting to flow saved with the world, so a flow under way goes on
+  after a restart; plants and torches washed away dropping themselves; fluids through partial
+  blocks; a view tinted inside lava (§5.4a, M4.3).
 
 **Far away and the LODs**
 - ☐ Builds drawn as boxes in coarse LODs, so thin towers and houses stay visible past ~1 km; edits
@@ -3056,8 +3151,8 @@ they're found.
 - ☐ Villagers breeding, once villages land (M3.4).
 
 **Survival**
-- ☐ A two-block bed you lie in, with a Leave Bed button; lava damage; leaves dropping apples as
-  they decay (§5.5).
+- ☐ A two-block bed you lie in, with a Leave Bed button; leaves dropping apples as they decay
+  (§5.5).
 - ☐ Dead players' edit and craft requests refused on the server, not only stopped by the client
   (§5.5, M1.8).
 - ☐ Dropped items saved with the world (§4.3, §5.2).

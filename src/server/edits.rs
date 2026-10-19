@@ -16,9 +16,10 @@ use crate::clock::TimeOfDay;
 use crate::collision::overlaps;
 use crate::containers::Containers;
 use crate::farming::{tilled, Crops};
+use crate::fluids::{fluid_of, Fluid};
 use crate::game_mode::GameMode;
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
-use crate::items::{ItemStack, ToolKind};
+use crate::items::{Item, ItemStack, ToolKind};
 use crate::player::{Player, PlayerOwner, BODY, EYE_HEIGHT, REACH};
 use crate::protocol::{BlockChanged, EditRejected, RequestEdit, StartBreaking, UseBlock};
 use crate::world::World;
@@ -132,6 +133,8 @@ pub(super) fn receive_edits(
     } in requests.read()
     {
         let was = world.get(block);
+        // water poured on lava hardens it at once
+        let made = poured(was, to);
         // a chest the world generated is filled before it can be broken, so it leaves its loot;
         // it comes up the same whether that's now or when it's opened
         fill_loot(&world, &mut containers, block);
@@ -146,7 +149,7 @@ pub(super) fn receive_edits(
                 slot.into(),
                 time.elapsed(),
             )
-            .or_else(|| (!world.edit(block, to)).then_some("it's already that block"))
+            .or_else(|| (!world.edit(block, made)).then_some("it's already that block"))
         } else {
             Some("too many edits")
         };
@@ -164,9 +167,10 @@ pub(super) fn receive_edits(
         }
         changed.write(BlockChanged {
             block,
-            to,
+            to: made,
             by: Some((client, seq)),
         });
+        let to = made;
         let (player, _, mode, _, mut inventory, _) = players
             .iter_mut()
             .find(|(_, _, _, owner, ..)| owner.0 == client)
@@ -174,6 +178,17 @@ pub(super) fn receive_edits(
         let slot = usize::from(slot);
         let placed_from = held(&inventory, slot).map(|stack| stack.item);
         let tool = placed_from.and_then(|item| item.tool());
+        // a fluid's taken up in a bucket, the bucket filled with it but in creative
+        if let Some(fluid) = was.kind.fluid() {
+            if to.kind == BlockType::Air {
+                if !mode.has_every_block() {
+                    fill_bucket(&mut inventory, slot, fluid, |stack| {
+                        commands.spawn((DroppedItem::from_block(stack, block), Replicated));
+                    });
+                }
+                continue;
+            }
+        }
         let broken = to.kind == BlockType::Air;
         if broken {
             // the time it was held for is spent, so a block put back there takes as long
@@ -206,7 +221,12 @@ pub(super) fn receive_edits(
                 inventory.wear(slot);
             }
         } else if let Some(item) = placed_from.filter(|_| !mode.has_every_block()) {
-            inventory.use_one(slot, item);
+            if item.pours().is_some() {
+                // a bucket poured is left empty
+                inventory.slots[slot] = Some(ItemStack::new(Item::Bucket, 1));
+            } else {
+                inventory.use_one(slot, item);
+            }
         }
         let mut set = |world: &mut World, at: I64Vec3, to: Block| {
             if world.edit(at, to) {
@@ -240,6 +260,36 @@ pub(super) fn receive_edits(
         if to.kind.is_solid() && world.get_block_at(below) == BlockType::Farmland {
             set(&mut world, below, BlockType::Dirt.into());
         }
+    }
+}
+
+// What pouring `to` where `was` is makes: water poured on lava hardens it, a source to
+// obsidian and flowing lava to cobblestone; anything else is what's poured or placed.
+fn poured(was: Block, to: Block) -> Block {
+    match (fluid_of(was), fluid_of(to)) {
+        (Some((Fluid::Lava, level)), Some((Fluid::Water, _))) if level.is_source() => {
+            BlockType::Obsidian.into()
+        }
+        (Some((Fluid::Lava, _)), Some((Fluid::Water, _))) => BlockType::Cobblestone.into(),
+        _ => to,
+    }
+}
+
+// Fills one empty bucket in hotbar slot `slot` with `fluid`: in its place if it's the only
+// one, and otherwise into the inventory, or dropped by `drop` if there's no room.
+fn fill_bucket(inventory: &mut Inventory, slot: usize, fluid: Fluid, drop: impl FnOnce(ItemStack)) {
+    let full = ItemStack::new(Item::bucket_of(fluid), 1);
+    match inventory.slots[slot] {
+        Some(stack) if stack.item == Item::Bucket && stack.count == 1 => {
+            inventory.slots[slot] = Some(full);
+        }
+        Some(stack) if stack.item == Item::Bucket => {
+            inventory.use_one(slot, Item::Bucket);
+            if let Some(left) = inventory.add(full) {
+                drop(left);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -317,6 +367,17 @@ fn refusal(
         return Some("it's out of reach");
     }
     let was = world.get_block_at(block);
+    // a fluid is taken up only in an empty bucket, and only from its source
+    if to.kind == BlockType::Air {
+        if let Some((_, level)) = fluid_of(world.get(block)) {
+            let bucket = held(inventory, slot).is_some_and(|stack| stack.item == Item::Bucket);
+            return match (bucket, level.is_source()) {
+                (false, _) => Some("they aren't holding a bucket"),
+                (true, false) => Some("it isn't a source"),
+                (true, true) => None,
+            };
+        }
+    }
     if to.kind == BlockType::Air && !mode.breaks_at_once() {
         let tool = held(inventory, slot).and_then(|stack| stack.item.tool());
         let takes = break_time(was, tool);
@@ -351,6 +412,10 @@ fn refusal(
         }
         if needs_support(to.kind) && !supported(block, to, |at| world.get(at)) {
             return Some("there's nothing to hold it up");
+        }
+        // a fluid's poured as a source, around whoever's there
+        if let Some((_, level)) = fluid_of(to) {
+            return (!level.is_source()).then_some("only a source is poured");
         }
         // a door is placed by its lower block, which puts its upper one over it
         let mut cells = vec![block];
@@ -391,6 +456,7 @@ mod tests {
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
     use crate::clock::TimeOfDay;
     use crate::farming::Crops;
+    use crate::fluids::{Fluid, Level};
     use crate::game_mode::GameMode;
     use crate::inventory::Inventory;
     use crate::items::{Item, ItemStack};
@@ -532,8 +598,8 @@ mod tests {
         assert_refused(&mut app, I64Vec3::new(0, 1, 0), BlockType::Stone);
         assert_refused(&mut app, I64Vec3::new(0, 2, 0), BlockType::Stone);
         assert_refused(&mut app, FLOOR, BlockType::Planks);
-        // nor is air or water placed, which aren't building blocks
-        assert_refused(&mut app, FLOOR + I64Vec3::Y, BlockType::Water);
+        // nor air, which isn't a building block
+        assert_refused(&mut app, FLOOR + I64Vec3::Y, BlockType::Air);
         // but a block can go just beside the player
         let (changed, _) = request(&mut app, &[(I64Vec3::new(1, 1, 0), BlockType::Stone)]);
         assert_eq!(1, changed.len());
@@ -737,6 +803,70 @@ mod tests {
         request(&mut app, &[(above + I64Vec3::Y, BlockType::Bricks)]);
         assert_eq!(None, inventory(&mut app).slots[0]);
         assert_refused(&mut app, above + I64Vec3::Y * 2, BlockType::Bricks);
+    }
+
+    #[test]
+    fn test_buckets_take_up_sources_and_pour_them_and_water_poured_on_lava_hardens_it() {
+        let mut app = server(GameMode::Survival);
+        let (pool, dry, flowing, lava) = (
+            I64Vec3::new(3, 1, 0),
+            I64Vec3::new(4, 1, -1),
+            I64Vec3::new(2, 1, -1),
+            I64Vec3::new(6, 1, 0),
+        );
+        {
+            let mut world = app.world_mut().resource_mut::<World>();
+            world.edit(pool, Fluid::Water.source());
+            world.edit(flowing, Fluid::Water.at(Level::Flowing(2)));
+            world.edit(lava, Fluid::Lava.source());
+        }
+        // nothing but an empty bucket takes up a fluid
+        assert_refused(&mut app, pool, BlockType::Air);
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::Bucket, 2));
+        let (changed, rejected) = request(&mut app, &[(flowing, BlockType::Air)]);
+        assert_eq!((0, 1), (changed.len(), rejected.len()), "not a source");
+
+        let (changed, _) = request(&mut app, &[(pool, BlockType::Air)]);
+        assert_eq!(BlockType::Air, changed[0].to.kind);
+        assert_eq!(BlockType::Air, block_at(&app, pool));
+        let carried = |app: &mut App, item| inventory(app).count(item);
+        assert_eq!(
+            (1, 1),
+            (
+                carried(&mut app, Item::Bucket),
+                carried(&mut app, Item::WaterBucket)
+            )
+        );
+
+        // poured as a source where there's room, leaving the bucket empty
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::WaterBucket, 1));
+        let (changed, _) = request(&mut app, &[(dry, BlockType::Water)]);
+        assert_eq!(Fluid::Water.source(), changed[0].to);
+        assert_eq!(
+            Some(ItemStack::new(Item::Bucket, 1)),
+            inventory(&mut app).slots[0]
+        );
+        // and on lava, which it hardens to obsidian
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::WaterBucket, 1));
+        let (changed, _) = request(&mut app, &[(lava, BlockType::Water)]);
+        assert_eq!(BlockType::Obsidian, changed[0].to.kind);
+        assert_eq!(BlockType::Obsidian, block_at(&app, lava));
+        assert_eq!(
+            Some(ItemStack::new(Item::Bucket, 1)),
+            inventory(&mut app).slots[0]
+        );
+
+        // only sources are poured
+        inventory(&mut app).slots[0] = Some(ItemStack::new(Item::WaterBucket, 1));
+        app.world_mut().write_message(RequestEdit {
+            block: pool,
+            to: Fluid::Water.at(Level::Flowing(1)),
+            slot: 0,
+            seq: 9,
+        });
+        app.update();
+        assert_eq!(1, drain::<EditRejected>(&mut app).len());
+        assert_eq!(BlockType::Air, block_at(&app, pool));
     }
 
     #[test]

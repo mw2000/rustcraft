@@ -23,6 +23,8 @@ const FLAME_GLOW: f32 = 1.6;
 // Magma glows at least this brightly, near or far, so a volcano's crater shows at night from
 // kilometres away, where LODs draw no block light.
 const MAGMA_GLOW: f32 = 1.4;
+// Lava glows brighter still, near or far (M4.3).
+const LAVA_GLOW: f32 = 1.7;
 
 // A lantern's glass, which glows as a flame does, where its tile has it, see
 // `generator::shapes`'s `LANTERN_BODY`.
@@ -41,6 +43,11 @@ fn is_flame(vertex_alpha: f32, uv: vec2<f32>) -> bool {
 // Whether a fragment is of magma, from its atlas cell.
 fn is_magma(vertex_alpha: f32) -> bool {
     return abs(vertex_alpha - f32(constants::MAGMA_CELL)) < 0.5;
+}
+
+// Whether a fragment is of lava, which glows brighter than magma, being molten through.
+fn is_lava(vertex_alpha: f32) -> bool {
+    return abs(vertex_alpha - f32(constants::LAVA_CELL)) < 0.5;
 }
 
 // Blocks per pixel at which grass sides start turning to the grass on top, and are wholly it:
@@ -168,6 +175,9 @@ fn fragment(
     }
     if is_magma(in.color.a) {
         light = max(light, vec3<f32>(MAGMA_GLOW));
+    }
+    if is_lava(in.color.a) {
+        light = max(light, vec3<f32>(LAVA_GLOW));
     }
     color = vec4<f32>(color.rgb * light, color.a);
 
