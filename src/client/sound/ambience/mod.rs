@@ -26,7 +26,7 @@ use crate::chunks::generate::WATER_LEVEL;
 use crate::client::player::LocalPlayer;
 use crate::clock::{day_fraction, TimeOfDay};
 use crate::world::World;
-use wind::{wind_strength, Gust, Wind, WindDials};
+use wind::{wind_strength, Gust, Wind, WindDials, WIND_PLAYBACK};
 
 // How often where the player is is looked at again, which costs some noise samples, and how
 // long the loops take to fade to what it calls for.
@@ -333,11 +333,7 @@ fn start_loops(
     let wind = winds.add(Wind {
         dials: dials.clone(),
     });
-    commands.spawn((
-        WindPlayer,
-        AudioPlayer(wind),
-        PlaybackSettings::LOOP.with_volume(Volume::SILENT).paused(),
-    ));
+    commands.spawn((WindPlayer, AudioPlayer(wind), WIND_PLAYBACK));
     commands.insert_resource(Owl(assets.load("sounds/owl.ogg")));
 }
 

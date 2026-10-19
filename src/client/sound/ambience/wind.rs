@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bevy::audio::{ChannelCount, Decodable, SampleRate, Source};
+use bevy::audio::{ChannelCount, Decodable, SampleRate, Source, Volume};
 use bevy::prelude::*;
 
 use super::smoothstep;
@@ -60,6 +60,13 @@ pub(super) fn wind_strength(altitude: f32, speed: f32) -> f32 {
 pub(super) struct Wind {
     pub(super) dials: WindDials,
 }
+
+/// How the wind is played: once, not looped, though it never ends. Its decoder makes noise for
+/// ever, and a looped source is buffered so it can be replayed from the start, so looping would
+/// keep every sample the wind ever played in memory. Silent and paused until the ambience turns
+/// it up. From upstream's fix (7c970d4), by Aymen Qader.
+pub(super) const WIND_PLAYBACK: PlaybackSettings =
+    PlaybackSettings::ONCE.with_volume(Volume::SILENT).paused();
 
 impl Decodable for Wind {
     type Decoder = WindDecoder;
@@ -360,6 +367,25 @@ mod tests {
             .take(SAMPLE_RATE as usize)
             .collect();
         assert!(samples.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn test_the_wind_plays_once_and_never_runs_out() {
+        // a looped source is buffered for its replay, which for endless noise keeps every sample
+        assert!(matches!(
+            WIND_PLAYBACK.mode,
+            bevy::audio::PlaybackMode::Once
+        ));
+        const { assert!(WIND_PLAYBACK.paused) };
+        // so it has to go on by itself: a minute in, it's still blowing
+        let dials = WindDials::default();
+        dials.strength.set(1.0);
+        let wind = Wind { dials };
+        let mut decoder = wind.decoder();
+        assert_eq!(None, decoder.total_duration());
+        let minute = 60 * SAMPLE_RATE as usize * CHANNELS as usize;
+        assert_eq!(minute, decoder.by_ref().take(minute).count());
+        assert!(decoder.take(SAMPLE_RATE as usize).any(|s| s != 0.0));
     }
 
     // Writes two minutes of wind at a few strengths as raw 44.1 kHz f32 stereo, for the sounds
