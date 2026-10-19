@@ -2598,6 +2598,8 @@ both sides built the same thing they're merged into one system keeping the best 
   about a quarter fewer frames (two runs each, 1,691 and 884 blocks against 1,397 and 1,972, on
   a busy 16-core machine), takes 15% more CPU and 170 MB more memory (1.37 GB at peak against
   1.2): generating 2.25 times the full-detail chunks, as upstream found.
+  - ☐ Follow-up: with full detail at 24, lod_sim shows a few full-detail holes coming and going
+    at the edge while flying fast, which 16 didn't; find and close them.
 - ☐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
   shadows blurred so foliage stops flickering (`f785896`); level-2 trees drawn as leaf voxels
   (`9a94413`); the ground cross-fading between LOD levels (`84b6290`) (Rory Nickolls).
