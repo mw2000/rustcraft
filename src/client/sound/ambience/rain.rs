@@ -19,8 +19,8 @@ fn next_random(state: &mut u64) -> f32 {
     (*state >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0
 }
 
-/// Rain's hiss, made as it plays: noise with the rumble and the sharpest highs cut, swelling
-/// gently, as loud as the rain its dial says, 0 to 1.
+/// Rain's patter, made as it plays: soft low thumps at random times and sizes with silence
+/// between, as busy and loud as the rain its dial says, 0 to 1.
 #[derive(Asset, TypePath)]
 pub(super) struct RainSound {
     pub(super) level: Dial,
@@ -40,28 +40,37 @@ impl Decodable for RainSound {
             heard: 0.0,
             rng: rand::random::<u64>() | 1,
             channel: 0,
-            low: [0.0; 2],
-            high: [0.0; 2],
-            body: [0.0; 2],
+            drop: [Drop::default(); 2],
             swell: 0.0,
             t: 0,
         }
     }
 }
 
-// The rain's loudness at its heaviest, see `RainDecoder::next`.
-const RAIN_GAIN: f32 = 0.11;
+// Thumps per second per ear at the heaviest rain, and their loudest.
+const DROPS_PER_SECOND: f32 = 30.0;
+const DROP_LEVEL: f32 = 0.12;
+// Pitch range in Hz, onset ramp and fade time in seconds.
+const DROP_PITCH: (f32, f32) = (140.0, 380.0);
+const DROP_ATTACK: f32 = 0.006;
+const DROP_FADE: f32 = 0.05;
+// A thump is spent once it has faded this many fade times.
+const DROP_LIFE: f32 = 6.0;
+
+#[derive(Clone, Copy, Default)]
+struct Drop {
+    age: f32,
+    pitch: f32,
+    size: f32,
+}
 
 pub(super) struct RainDecoder {
     level: Dial,
     heard: f32,
     rng: u64,
     channel: usize,
-    // per ear: a low-pass taking the harshest highs off, one finding the rumble to take away,
-    // and a soft low body of drumming
-    low: [f32; 2],
-    high: [f32; 2],
-    body: [f32; 2],
+    // per ear: the thump sounding now, one at a time so they never pile up
+    drop: [Drop; 2],
     swell: f32,
     t: u64,
 }
@@ -81,13 +90,26 @@ impl Iterator for RainDecoder {
         }
         let c = self.channel;
         self.channel = 1 - self.channel;
-        let white = next_random(&mut self.rng);
-        // low-passed near 5 kHz, then the part under ~500 Hz taken out
-        self.low[c] += (white - self.low[c]) * 0.5;
-        self.high[c] += (self.low[c] - self.high[c]) * 0.07;
-        let hiss = self.low[c] - self.high[c];
-        self.body[c] += (white - self.body[c]) * 0.02;
-        let sample = (hiss * 0.8 + self.body[c] * 1.2) * self.heard.sqrt() * self.swell * RAIN_GAIN;
+        let rate = SAMPLE_RATE as f32;
+        let d = self.drop[c];
+        if d.age > DROP_LIFE * DROP_FADE {
+            let chance = self.heard * DROPS_PER_SECOND / rate;
+            if next_random(&mut self.rng) * 0.5 + 0.5 < chance {
+                let r = next_random(&mut self.rng) * 0.5 + 0.5;
+                let size = next_random(&mut self.rng) * 0.5 + 0.5;
+                let pitch = DROP_PITCH.0 + (DROP_PITCH.1 - DROP_PITCH.0) * r;
+                self.drop[c] = Drop {
+                    age: 0.0,
+                    pitch,
+                    size: size * size,
+                };
+            }
+        }
+        let d = &mut self.drop[c];
+        let ramp = (d.age / DROP_ATTACK).min(1.0);
+        let env = ramp * ramp * ops::exp(-d.age / DROP_FADE);
+        let sample = ops::sin(TAU * d.pitch * d.age) * env * d.size * self.swell * DROP_LEVEL;
+        d.age += 1.0 / rate;
         Some(sample.clamp(-1.0, 1.0))
     }
 }
@@ -123,7 +145,7 @@ pub(super) struct Thunder {
 const THUNDER_SECONDS: f32 = 7.0;
 const THUNDER_GAIN: f32 = 0.46;
 // Strikes within the first distance are heard at full force, fading by the log out to the second.
-const THUNDER_HEARD: (f32, f32) = crate::weather::look::STRIKE_DISTANCE;
+const THUNDER_HEARD: (f32, f32) = (120.0, 520.0);
 // The roll's gain from the farthest strikes and the nearest.
 const ROLL_GAIN: (f32, f32) = (0.30, 1.16);
 // How far back, in frames, the two echoes come from, ~120 ms and ~270 ms; the first heard in
@@ -466,6 +488,9 @@ mod tests {
         level.set(1.0);
         let pouring: Vec<f32> = rain.by_ref().skip(second * 2).take(second).collect();
         assert!(pouring.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
-        assert!(rms(&pouring) > 0.01, "{}", rms(&pouring));
+        // thumps, with quiet between
+        let loudest = pouring.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+        assert!(loudest > 0.02, "{loudest}");
+        assert!(rms(&pouring) < loudest * 0.5, "{}", rms(&pouring));
     }
 }

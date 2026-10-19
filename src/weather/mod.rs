@@ -18,11 +18,12 @@ use serde::{Deserialize, Serialize};
 use crate::chunks::generate::trees::hash;
 use crate::clock::{TimeOfDay, TICKS_PER_SECOND};
 
-// The first storm comes soon after the world's made, while the sun's still up for a rainbow
-// after it; later ones come and go at random. How long spells last, in seconds of game time.
-const FIRST_STORM_IN: f64 = 25.0;
+// The first storm comes a game day after the world's made, in the same part of the day, so
+// the sun's still up for a rainbow after it; later ones come and go at random, well apart. How
+// long spells last, in seconds of game time.
+const FIRST_STORM_IN: f64 = 600.0;
 const FIRST_STORM_SECONDS: f64 = 95.0;
-const CLEAR_SECONDS: (f64, f64) = (240.0, 480.0);
+const CLEAR_SECONDS: (f64, f64) = (1800.0, 3600.0);
 const STORM_SECONDS: (f64, f64) = (90.0, 180.0);
 // How hard a storm rains, at the least and most, see `Weather::rain`.
 const STORM_RAIN: (f32, f32) = (0.75, 1.0);

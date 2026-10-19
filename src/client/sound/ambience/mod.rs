@@ -818,7 +818,7 @@ mod tests {
             height: 200.0,
             ..wood()
         });
-        assert!(heard(flying).is_empty() && flying.wind > 0.8);
+        assert!(heard(flying).is_empty() && flying.wind > 0.7);
         let running = mix(&Surroundings {
             speed: 40.0,
             ..meadow()

@@ -480,11 +480,10 @@ fn fall_rain(
 }
 
 // Lightning strikes this often in the heaviest rain, at the least and most, in seconds, from
-// this far off, in blocks, and its thunder rolls in at the speed of sound in blocks a second,
-// sped up so it isn't a long wait.
+// this far off, in blocks (a metre each), and its thunder rolls in at the speed of sound.
 const STRIKE_SECONDS: (f32, f32) = (7.0, 22.0);
 pub(crate) const STRIKE_DISTANCE: (f32, f32) = (30.0, 520.0);
-pub(crate) const THUNDER_SPEED: f32 = 240.0;
+pub(crate) const THUNDER_SPEED: f32 = 343.0;
 // Now and then a strike lands close, within this many blocks; the rest are farther off.
 const CLOSE_STRIKE_CHANCE: f64 = 0.25;
 const CLOSE_STRIKE_WITHIN: f32 = 110.0;
