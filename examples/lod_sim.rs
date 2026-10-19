@@ -1,7 +1,8 @@
 // Runs the chunk and LOD loading systems headless (no window or GPU), with the server's
 // chunks near the player, and the renderer settings from assets/settings.toml: lets the
 // start area load, flies the player along +x, then stops. Every 2 seconds it reports, by
-// distance in chunks, surface chunks with nothing visible drawing them, and full-detail
+// distance in chunks, surface chunks with nothing visible drawing them, those drawn with some
+// of the fades' dither drawn by nothing, those drawn whole twice over, and full-detail
 // chunks still drawn outside the full-detail area, and logs frames slower than 100ms. Run with:
 //   cargo run --release --example lod_sim -- [speed in blocks/s, default 80] [seconds moving, default 10] [up]
 // `up` flies straight up instead, checking every frame for holes under the camera.
@@ -102,13 +103,60 @@ fn setup(
 
 struct Report {
     holes: [usize; 4],
+    // drawn, but with some level of the fade's dither drawn by nothing covering it
+    gaps: [usize; 4],
+    // drawn whole by two levels at once, neither fading, so they fight
+    doubles: [usize; 4],
     stale: usize,
     lingering: usize,
     lods: usize,
 }
 
+// The dither window an entity's opaque mesh draws, see `fade.rs`: whole if it has none.
+fn window(materials: &Assets<ChunkMaterial>, m: Option<&MeshMaterial3d<ChunkMaterial>>) -> Vec4 {
+    m.and_then(|m| materials.get(&m.0))
+        .map_or(FULLY_VISIBLE, |m| m.fade)
+}
+
+// Whether the windows drawn between them leave some level of the 8x8 dither undrawn.
+fn dither_gap(windows: &[Vec4]) -> bool {
+    (0..64).any(|level| {
+        let t = (level as f32 + 0.5) / 64.0;
+        !windows.iter().any(|w| t >= w.x && t < w.y)
+    })
+}
+
 fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
     let world = app.world_mut();
+    // the visible nodes' and groups' materials, then their dither windows
+    let nodes: Vec<(LodKey, Option<MeshMaterial3d<ChunkMaterial>>)> = world
+        .query::<(
+            &LodNode,
+            &Visibility,
+            Option<&MeshMaterial3d<ChunkMaterial>>,
+        )>()
+        .iter(world)
+        .filter(|(_, v, _)| **v != Visibility::Hidden)
+        .map(|(n, _, m)| (n.key(), m.cloned()))
+        .collect();
+    let groups: Vec<(LodKey, Option<MeshMaterial3d<ChunkMaterial>>)> = world
+        .query::<(
+            &ChunkGroup,
+            &Visibility,
+            Option<&MeshMaterial3d<ChunkMaterial>>,
+        )>()
+        .iter(world)
+        .filter(|(_, v, _)| **v != Visibility::Hidden)
+        .map(|(g, _, m)| (g.key, m.cloned()))
+        .collect();
+    let materials = world.resource::<Assets<ChunkMaterial>>();
+    let windows_of = |drawn: Vec<(LodKey, Option<MeshMaterial3d<ChunkMaterial>>)>| {
+        drawn
+            .into_iter()
+            .map(|(key, m)| (key, window(materials, m.as_ref())))
+            .collect::<HashMap<LodKey, Vec4>>()
+    };
+    let (lod_windows, group_windows) = (windows_of(nodes), windows_of(groups));
     let lod_vis: HashMap<LodKey, bool> = world
         .query::<(&LodNode, &Visibility)>()
         .iter(world)
@@ -127,6 +175,8 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
     let full = layout.full_detail_distance;
     let far = layout.render_distance().min(120.0);
     let mut holes = [0; 4];
+    let mut gaps = [0; 4];
+    let mut doubles = [0; 4];
     let mut stale = 0;
     let reach = far as i64;
     for dx in -reach..=reach {
@@ -151,17 +201,39 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
                         // be in the node above or below the one this sample's height is in
                         || coarse_ground(&noise, cx, cz, l).is_some_and(|ground| shown(LodKey::containing(ground, l)))
                 });
+            let band = if d < full {
+                0
+            } else if d < full * 1.5 {
+                1
+            } else if d < full * 4.0 {
+                2
+            } else {
+                3
+            };
             if !drawn {
-                let band = if d < full {
-                    0
-                } else if d < full * 1.5 {
-                    1
-                } else if d < full * 4.0 {
-                    2
-                } else {
-                    3
-                };
                 holes[band] += 1;
+            }
+            // what each level draws over the column, the full-detail group first
+            let mut windows: Vec<Vec4> = group_windows
+                .get(&LodKey::containing(c, 1))
+                .copied()
+                .into_iter()
+                .collect();
+            for l in 1..=layout.max_level {
+                let key = LodKey::containing(c, l);
+                let ground = coarse_ground(&noise, cx, cz, l).map(|g| LodKey::containing(g, l));
+                if let Some(&w) = lod_windows
+                    .get(&key)
+                    .or_else(|| ground.and_then(|g| lod_windows.get(&g)))
+                {
+                    windows.push(w);
+                }
+            }
+            if drawn && dither_gap(&windows) {
+                gaps[band] += 1;
+            }
+            if windows.iter().filter(|&&w| w == FULLY_VISIBLE).count() > 1 {
+                doubles[band] += 1;
             }
             if chunk_vis(&c).unwrap_or(false) && !layout.full_detail(c, anchor) {
                 stale += 1;
@@ -216,6 +288,8 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
     }
     Report {
         holes,
+        gaps,
+        doubles,
         stale,
         lingering,
         lods: lod_vis.len(),
@@ -454,8 +528,8 @@ fn main() {
                 _ => "stopped",
             };
             println!(
-                "t={t:5.1} {phase:8} x={:7.0} holes [full detail, 1.5x, 4x, beyond]: {:?}  stale full-detail: {}  shown but unselected lod nodes: {}  lod nodes: {}",
-                pos.x, r.holes, r.stale, r.lingering, r.lods
+                "t={t:5.1} {phase:8} x={:7.0} holes [full detail, 1.5x, 4x, beyond]: {:?}  dither gaps: {:?}  whole twice: {:?}  stale full-detail: {}  shown but unselected lod nodes: {}  lod nodes: {}",
+                pos.x, r.holes, r.gaps, r.doubles, r.stale, r.lingering, r.lods
             );
         }
     }

@@ -2772,9 +2772,24 @@ both sides built the same thing they're merged into one system keeping the best 
   1.2): generating 2.25 times the full-detail chunks, as upstream found.
   - ☐ Follow-up: with full detail at 24, lod_sim shows a few full-detail holes coming and going
     at the edge while flying fast, which 16 didn't; find and close them.
-- ◐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
-  shadows blurred so foliage stops flickering (`f785896`); level-2 trees drawn as leaf voxels
-  (`9a94413`); the ground cross-fading between LOD levels (`84b6290`) (Rory Nickolls).
+- ☑ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`, the
+  wind half: the rain half comes with U-80); far leaf shadows blurred so foliage stops
+  flickering (`f785896`); level-2 trees drawn as leaf voxels (`9a94413`, §5.7); the ground
+  cross-fading between LOD levels (`84b6290`) (Rory Nickolls).
+  - Wind: played once rather than looped, as a looped source is buffered for its replay and
+    the wind never ends (`WIND_PLAYBACK`).
+  - Shadows: our holed faces (leaves, glass, `PLANT`, `CUTOUT`, `has_holes` in `foliage.wesl`)
+    are all cut at full detail in the main pass, as the prepass cuts them; only leaves blur in
+    the sun's shadows, from 12 blocks out, so plants and shapes keep their shapes.
+  - Cross-fade: a swap is staggered (`fade.rs`'s `FADE_IN_SHARE`): what's shown dithers in
+    over the first half while what it replaces is held whole and pushed back, which then
+    dithers out, on an 8x8 dither (64 steps). Children (water, the faces between leaves) fade
+    with their group or node. Edits' rebuilt groups (§4.2) and M2.8's rebuilt nodes swap
+    meshes in place with no fade as before; terrain loading into empty sky, at the start and
+    at the edge, now dithers in where it popped. `lod_sim` reports chunks with a dither level
+    drawn by nothing and chunks drawn whole twice: on seeds 7 and 4 at 80 blocks a second,
+    flight shows 0–6 dither gaps a report both before and after, and the same whole-twice
+    counts (hundreds, with stale full detail, before as after), so nothing new.
 - ☐ **U-84 Integer clock** (Rory Nickolls, `08015ef`): `TimeOfDay` as a `u64` of ticks, 20 a
   second, exact and the same on every machine, replacing our `f64` of days; extended through
   the server-run clock, `TimeSync`, `world.toml` and crops' planting times (with a save
@@ -2831,6 +2846,10 @@ they're found.
 - ☐ Resend `EditReach` as the drawn distance grows when flying high; a batch-edit path for big
   pastes (§4.4, M2.8).
 - ☐ A few full-detail holes come and go at the edge in fast flight with full detail at 24 (U-82).
+- ☐ `lod_sim` counts hundreds of chunks drawn whole twice in fast flight, alongside its stale
+  full-detail groups, before and after the staggered cross-fade alike: find whether it's real
+  double-drawing (a full-detail group and a LOD node both whole over the same ground) or the
+  metric counting too loosely (U-83/84).
 - ☐ The map: show edits; a minimap; a joiner's bed set after joining (§5.7, M2.9); a map preview
   in the worlds list (M-U1).
 
@@ -3150,7 +3169,9 @@ For agents and contributors:
   we have rather than beside it, its author kept on the commit: so far #77's ambience (Aymen
   Qader), §5.10, #78's flora (Aymen Qader), §5.5a, #79's critters (Aymen Qader): ambient
   life and firefly light, §5.8 and §5.5, and #82's perf (Rory Nickolls): leaves' inner faces
-  drawn near only, §5.7, and full detail out to 24 chunks, M-U1.
+  drawn near only, §5.7, and full detail out to 24 chunks, M-U1, and #83/#84's fixes (Aymen
+  Qader, Rory Nickolls): the wind not retaining samples, far leaf shadows blurred, level 2's
+  trees as leaf cells and the staggered LOD cross-fade, U-83/84.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.
 - **Screenshots:** anything visual is checked in the real game with the `screenshot` skill, which
