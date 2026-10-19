@@ -1527,7 +1527,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
             .iter()
             .filter(|b| b.block == BlockType::Leaves)
             .count();
-        if cell < super::canopy::BOX_CROWN_CELL {
+        if !super::canopy::box_crown(tree, cell) {
             assert!(
                 leaf_cells > 0,
                 "no leaf cells at level {level}, cells {cell} blocks wide"
@@ -1558,6 +1558,47 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
                 "crown {wanted:?} wider than a crown should be"
             );
         }
+    }
+}
+
+#[test]
+fn test_level_two_draws_acacias_as_boxes_and_other_trees_as_leaf_cells() {
+    use crate::chunks::generate::trees::{trees_near, TreeKind};
+    use bevy::math::I64Vec2;
+    // seed 7 spawns on a savanna, by the sea, with jungle up the coast
+    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(7))));
+    let mut heights = regions.sampler();
+    let trees = trees_near(
+        regions.noise(),
+        &mut heights,
+        I64Vec2::splat(-400),
+        I64Vec2::splat(200),
+    );
+    let acacia = trees
+        .iter()
+        .find(|t| t.kind == TreeKind::Acacia)
+        .expect("no acacia");
+    assert!(super::canopy::box_crown(acacia, 4) && !super::canopy::box_crown(acacia, 2));
+    if let Some(other) = trees.iter().find(|t| t.kind != TreeKind::Acacia) {
+        assert!(!super::canopy::box_crown(other, 4) && super::canopy::box_crown(other, 8));
+    }
+    // the acacia's node at level 2 draws its crown's boxes, of their real size
+    let key = LodKey::containing(
+        ChunkCoordinate(acacia.base.div_euclid(I64Vec3::splat(16))),
+        2,
+    );
+    let blocks = LodBlocks::sample(&regions, key, None);
+    let cell = key.cell_size();
+    for (min, max) in acacia.crown_boxes(super::canopy::crown_layers(cell)) {
+        let size = (max - min).as_vec3();
+        assert!(
+            blocks
+                .boxes
+                .iter()
+                .filter(|b| b.block == BlockType::Leaves)
+                .any(|b| ((b.max - b.min) * cell as f32 - size).abs().max_element() < 1e-3),
+            "no crown box of {size:?}"
+        );
     }
 }
 

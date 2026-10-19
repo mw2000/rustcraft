@@ -2021,6 +2021,17 @@ need the ground shaped low and wet, and plains were most of the gap savanna now 
   through the shell). LOD cells up to 4 wide mesh theirs apart the same way; untextured cells
   and `solid_leaves` draw leaves solid and mesh none. A rebuilt group or node swaps the child's
   mesh in place as it does water's.
+  - **Level 2's trees (U-83/84, from upstream `9a94413`):** cells 4 wide plant broadleaf,
+    pine and jungle trees as leaf cells, textured and hollow like levels 0 and 1, where they
+    were a few stacked boxes a crown; boxes start at cells 8 wide (`BOX_CROWN_CELL`), as giant
+    trees' already did. Acacias keep their box crowns from cells 4 wide
+    (`ACACIA_BOX_CROWN_CELL`, `canopy::box_crown`): their flat pads, a block or two thick,
+    would fill cells as lumps over twice their volume, and read far better as slabs. The cells
+    keep to full detail's leaves within a cell, holding 1.3–1.6 times their volume, as tests
+    check for every kind but the acacia, which a test checks is boxes. In `bench` level 2
+    meshes about 8% slower at seed 4's spawn (12.5 to 13.5 ms over 16 nodes) for 3% more
+    vertices, 1,585 of them between leaves; the savanna spawns of seeds 1, 5 and 7 are acacias,
+    so unchanged.
   - **Cost** (INV-7): at spawn in `bench` (1,944 chunks), what the camera draws far off drops
     from 1,010,888 vertices to 939,669 on seed 1 and from 1,215,294 to 1,023,527 on seed 4,
     with 77,541 and 205,865 between leaves drawn near and in shadows; split meshes merge a

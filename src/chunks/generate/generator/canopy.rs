@@ -1,8 +1,8 @@
 use super::lod::LodBlocks;
 use super::source::{BoxFaces, LodBox};
 use crate::block::BlockType;
-use crate::chunks::generate::trees::Tree;
 use crate::chunks::generate::trees::TREE_REACH;
+use crate::chunks::generate::trees::{Tree, TreeKind};
 use bevy::math::I64Vec3;
 use bevy::math::UVec2;
 use bevy::math::Vec3;
@@ -200,8 +200,25 @@ pub(super) const TREE_MAX_CELL: i64 = 32;
 pub(super) const TRUNK_MAX_CELL: i64 = 16;
 
 // From cells this wide a crown is a box too, of its real size: as cells it would round up to a
-// cube a cell wide, several times its size.
-pub(super) const BOX_CROWN_CELL: i64 = 4;
+// cube a cell wide, several times its size. In cells 4 wide, level 2's, crowns are leaf cells,
+// textured and hollow as full detail's are, if lumpier: boxes there were a few stacked slabs
+// that read as boxes from as near as level 2 is drawn (upstream's 9a94413).
+pub(super) const BOX_CROWN_CELL: i64 = 8;
+
+// An acacia's crown is a box from cells this wide, `BOX_CROWN_CELL`'s old width: its flat pads,
+// a block or two thick, would fill whole cells 4 wide as lumps over twice their volume, where
+// slabs keep their shape.
+pub(super) const ACACIA_BOX_CROWN_CELL: i64 = 4;
+
+/// Whether `tree`'s crown is drawn as boxes in cells `cell` blocks wide, rather than planted as
+/// leaf cells.
+pub(super) fn box_crown(tree: &Tree, cell: i64) -> bool {
+    let from = match tree.kind {
+        TreeKind::Acacia => ACACIA_BOX_CROWN_CELL,
+        _ => BOX_CROWN_CELL,
+    };
+    cell >= from
+}
 
 // Each tree a cell grows covers this much of its ground, see `Biome::tree_density`, and a cell
 // that's all covered is drawn this fraction as bright.

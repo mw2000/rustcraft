@@ -836,7 +836,7 @@ mod tests {
         for t in extremes() {
             // the thinnest pines are a spire a cell or two across at eight, and an acacia's pads
             // can fall between eight-wide cells' points, though LODs draw crowns as boxes from
-            // `BOX_CROWN_CELL` anyway
+            // there, `BOX_CROWN_CELL` (an acacia's from four), anyway
             let at_eight = (t.kind != TreeKind::Acacia) as usize;
             for (size, least) in [(4, 2), (8, at_eight)] {
                 let leaves = cells(&t, size)
@@ -865,6 +865,57 @@ mod tests {
         assert!(logs(1) > 0 && logs(2) > 0);
         assert_eq!(0, logs(THIN_TRUNK_CELL));
         assert_eq!(0, logs(8));
+    }
+
+    #[test]
+    fn test_crowns_in_cells_four_wide_keep_to_full_details_within_a_cell() {
+        // level 2 plants its trees as leaf cells 4 wide, so they should stand where full
+        // detail's leaves are, and be about as big, to within its cells. Not acacias, whose
+        // thin pads would fill cells this wide over twice over, so are boxes there
+        const SIZE: i64 = 4;
+        for t in extremes()
+            .into_iter()
+            .filter(|t| t.kind != TreeKind::Acacia)
+        {
+            let full: Vec<I64Vec3> = blocks(&t)
+                .into_iter()
+                .filter(|(_, b)| *b == BlockType::Leaves)
+                .map(|(p, _)| p)
+                .collect();
+            let coarse: Vec<I64Vec3> = cells(&t, SIZE)
+                .into_iter()
+                .filter(|(_, b)| *b == BlockType::Leaves)
+                .map(|(p, _)| p)
+                .collect();
+            let what = format!("{:?} {} trunk", t.kind, t.trunk);
+            assert!(!coarse.is_empty(), "{what}: no leaf cells");
+            // how far a block is outside the cell at `p`, in blocks, each way
+            let outside = |block: I64Vec3, p: I64Vec3| {
+                (p - block).max(block - (p + SIZE - 1)).max(I64Vec3::ZERO)
+            };
+            // every leaf cell holds full detail's leaves, or touches them
+            for &p in &coarse {
+                assert!(
+                    full.iter().any(|&b| outside(b, p).max_element() <= 1),
+                    "{what}: the leaf cell at {p} holds no leaves"
+                );
+            }
+            // and every leaf is in a leaf cell, or a cell from one, as a crown's thin edges
+            // don't fill a cell
+            for &b in &full {
+                assert!(
+                    coarse.iter().any(|&p| outside(b, p).max_element() <= SIZE),
+                    "{what}: the leaf at {b} is more than a cell from any leaf cell"
+                );
+            }
+            // the cells hold about as much crown as there is, a little more, as a cell is leaves
+            // where most of it is
+            let volume = (coarse.len() as i64 * SIZE.pow(3)) as f64 / full.len() as f64;
+            assert!(
+                (1.0..1.8).contains(&volume),
+                "{what}: leaf cells hold {volume:.2} times the leaves"
+            );
+        }
     }
 
     #[test]

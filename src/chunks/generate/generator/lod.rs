@@ -1,7 +1,7 @@
 use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle, TEXTURE_MAX_CELL_SIZE};
 use super::canopy::{
-    crown_layers, Canopy, BOX_CROWN_CELL, CANOPY_CELL, CANOPY_SHADE, CANOPY_SHADE_SPAN,
-    FOREST_COVER, FOREST_DARKEN, TREE_MAX_CELL, TRUNK_MAX_CELL,
+    box_crown, crown_layers, Canopy, CANOPY_CELL, CANOPY_SHADE, CANOPY_SHADE_SPAN, FOREST_COVER,
+    FOREST_DARKEN, TREE_MAX_CELL, TRUNK_MAX_CELL,
 };
 use super::chunk::{sky_above, structures_may_reach, trees_may_reach};
 use super::mesh::mesh_blocks;
@@ -275,7 +275,7 @@ impl LodBlocks {
                                 faces: BoxFaces::Sides,
                             });
                         }
-                        if cell >= BOX_CROWN_CELL {
+                        if box_crown(tree, cell) {
                             for (min, max) in tree.crown_boxes(crown_layers(cell)) {
                                 boxes.push(LodBox {
                                     min: mesh_at(min.as_vec3()),
@@ -287,7 +287,7 @@ impl LodBlocks {
                             }
                         }
                     }
-                    if cell < BOX_CROWN_CELL {
+                    if !box_crown(tree, cell) {
                         tree.plant(
                             base,
                             cell,
