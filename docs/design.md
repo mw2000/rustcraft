@@ -65,7 +65,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Trees | Broadleaf, pine, jungle giants and acacias, by biome, placed on a deterministic 10-block grid, the same trees at every LOD level | `src/chunks/generate/trees.rs`, `generator/canopy.rs` |
 | Plants | Short, tall and wild grass, ferns and flowers on the grass, by climate, biome and the shade of crowns, drawn as crossed quads at full detail that sway in the wind (§5.5a) | `src/chunks/generate/plants.rs`, `generator/mesh.rs` |
 | Structures | Templates as data, placed on a grid of cells per type where the ground suits them, fitted to the ground, and drawn at every distance (§5.6); seven so far, from watchtowers on hilltops to temples, ruins, lodges and mineshafts and dungeons underground | `src/chunks/generate/structures/`, `assets/structures/` |
-| Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
+| Rendering | Greedy meshing, an octree of LOD levels that cross-fade, out to 1024 chunks (2048 from high up); the faces between leaves drawn only near the camera (§5.7); the land is bent around a round world | `src/chunks/lod/`, `generator/greedy.rs`, `src/chunks/fade.rs`, `src/curvature.rs`, `src/horizon.rs` |
 | Light | Sky light (0–15) spread through each chunk, and block light from torches across chunk borders (§5.5) | `src/chunks/generate/light.rs` |
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
@@ -1917,6 +1917,24 @@ need the ground shaped low and wet, and plains were most of the gap savanna now 
   check over each new biome; level 0 matches full detail there. Coarse cells colour the ground
   by the same grass colour, and far forest tint follows tree density, so jungles read dark
   green, savannas gold and taiga dark green over snow from kilometres off.
+- **Leaves' inner faces (U-82, from upstream #82):** leaves have holes, so a crown drew every
+  face between two of its leaves, most of a forest's faces. The greedy mesher puts those faces
+  (within a chunk or LOD node, so leaves on an edge keep theirs) into a mesh of their own,
+  `ChunkMeshes::inner_leaves`, drawn by a child of the group or node (`chunks::inner_leaves`).
+  The camera sees it only while some of its group or node is within 64 blocks
+  (`INNER_LEAVES_REACH`); past that, leaves fill their holes with the shade of the leaves
+  behind, dithered in over 16 blocks, in the main pass and the view's depth prepass alike
+  (`foliage.wesl`'s `leaf_holes_filled`). The sun sees every one, at any distance: far ones
+  sit on `SHADOW_ONLY_LAYER`, a render layer only the sun has, so crowns shade the ground as
+  all their leaves always did rather than as a holed shell (upstream let far shadows fall
+  through the shell). LOD cells up to 4 wide mesh theirs apart the same way; untextured cells
+  and `solid_leaves` draw leaves solid and mesh none. A rebuilt group or node swaps the child's
+  mesh in place as it does water's.
+  - **Cost** (INV-7): at spawn in `bench` (1,944 chunks), what the camera draws far off drops
+    from 1,010,888 vertices to 939,669 on seed 1 and from 1,215,294 to 1,023,527 on seed 4,
+    with 77,541 and 205,865 between leaves drawn near and in shadows; split meshes merge a
+    little less, so all of it is 0.6–1.2% more than before. Meshing time is within noise.
+    Shadow passes draw what they did.
 - **Map:** `map::Relief` colours grass by `Biomes::grass_colour`, under leaves by tree density,
   and draws snow where the grass is under it, so the in-game map and `world_map` both show the
   new biomes.

@@ -7,6 +7,7 @@ use super::chunk_loader::{
 use super::fade::{apply_fades, FadeMaterials};
 use super::generate::WORLD_HEIGHT;
 use super::group::{build_groups, load_groups, rebuild_groups, ChunkGroup};
+use super::inner_leaves::show_inner_leaves;
 use super::lod::{
     load_lods, load_rebuilt_lods, rebuild_lods, refresh_lod_visibility, retire_lods, spawn_lods,
     update_lod_selection, LodLoader, LodNode,
@@ -53,6 +54,10 @@ impl Plugin for TerrainPlugin {
                     .after(gather_chunks)
                     .before(unload_chunks),
                 unload_chunks,
+                // once the groups and nodes loaded this frame have their faces between leaves
+                show_inner_leaves
+                    .after(load_groups)
+                    .after(load_rebuilt_lods),
             )
                 // a client joining a server has nothing to draw until it's welcomed, and
                 // nothing's drawn until the camera's over the world, hung from the player

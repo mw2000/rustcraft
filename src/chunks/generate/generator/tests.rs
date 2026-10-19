@@ -7,7 +7,7 @@ use bevy::platform::collections::HashMap;
 
 use crate::block::{BlockType, Tile};
 
-use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
+use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle, TEXTURED};
 use super::chunk::{chunks_meshed_with, generate_chunk, generate_chunk_mesh};
 use super::lod::LodBlocks;
 use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
@@ -21,12 +21,12 @@ use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
 
-// solid leaves, as every LOD draws them
+// leaves hiding the leaves behind them, as untextured LODs draw them
 fn style(ambient_occlusion: bool, textured: bool) -> MeshStyle {
     MeshStyle {
         ambient_occlusion,
         textured,
-        solid_leaves: true,
+        inner_leaves: InnerLeaves::Hidden,
         origin: I64Vec3::ZERO,
     }
 }
@@ -404,6 +404,10 @@ fn sloped_lod() -> LodBlocks {
 
 // `lod`'s opaque mesh, lit as `generate_lod_mesh` lights it
 fn mesh_lod(lod: &LodBlocks) -> Mesh {
+    mesh_lod_styled(lod, style(false, false)).opaque
+}
+
+fn mesh_lod_styled(lod: &LodBlocks, style: MeshStyle) -> ChunkMeshes {
     let top = lod.base_y + (lod.size as i64 + 1) * lod.cell;
     let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
     let light = Box::new(Light::sky(SkyLight::new(
@@ -413,7 +417,7 @@ fn mesh_lod(lod: &LodBlocks) -> Mesh {
         opacity,
     )));
     let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
-    super::mesh::mesh_blocks(lod, lod.cell, style(false, false), &tint, &light).opaque
+    super::mesh::mesh_blocks(lod, lod.cell, style, &tint, &light)
 }
 
 // each face's normal and its vertices' positions
@@ -1143,25 +1147,133 @@ fn leaf_cube_chunk() -> ChunkData {
 }
 
 #[test]
-fn test_full_detail_leaves_show_the_leaves_behind_them() {
+fn test_full_detail_leaves_mesh_the_leaves_behind_them_apart() {
     // blocks 4 and 5 meet at 4.5, where the faces between them show through the holes
-    let mesh = mesh_chunk(leaf_cube_chunk()).opaque;
-    assert!(vertices_in_plane(&mesh, 4.5) > 0);
+    let meshes = mesh_chunk(leaf_cube_chunk());
+    let inner = meshes.inner_leaves.expect("faces between leaves");
+    assert!(vertices_in_plane(&inner, 4.5) > 0);
+    // and only those: the shell is drawn with the rest of the chunk
+    assert_eq!(
+        0,
+        vertices_in_plane(&inner, 3.5) + vertices_in_plane(&inner, 5.5)
+    );
+    assert_eq!(0, vertices_in_plane(&meshes.opaque, 4.5));
+    assert!(
+        vertices_in_plane(&meshes.opaque, 3.5) > 0 && vertices_in_plane(&meshes.opaque, 5.5) > 0
+    );
+}
+
+#[test]
+fn test_leaves_alone_have_no_inner_faces() {
+    let mut chunk = ChunkData::default();
+    chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Leaves);
+    chunk.set_block_at(U16Vec3::new(5, 4, 4), BlockType::Stone);
+    let meshes = mesh_chunk(chunk);
+    assert!(meshes.inner_leaves.is_none());
+}
+
+#[test]
+fn test_leaves_on_the_chunks_edge_keep_their_faces_with_the_rest() {
+    // past the edge the leaves may be drawn by a LOD node, with none just there
+    let mut chunk = ChunkData::default();
+    chunk.set_block_at(U16Vec3::new(15, 4, 4), BlockType::Leaves);
+    let mut east = ChunkData::default();
+    east.set_block_at(U16Vec3::new(0, 4, 4), BlockType::Leaves);
+    let mut neighbours = vec![None; 26];
+    neighbours[neighbor_26_index(1, 0, 0)] = Some(Arc::new(east));
+    let meshes = generate_chunk_mesh(
+        Arc::new(chunk),
+        neighbours,
+        ChunkCoordinate(I64Vec3::new(0, 40, 0)),
+        &NoiseGenerator::new(3),
+        false,
+    );
+    assert!(meshes.inner_leaves.is_none());
+    assert!(vertices_in_plane(&meshes.opaque, 15.5) > 0);
 }
 
 #[test]
 fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
     let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
-    let mesh = generate_chunk_mesh(
+    let meshes = generate_chunk_mesh(
         Arc::new(leaf_cube_chunk()),
         vec![None; 26],
         coord,
         &NoiseGenerator::new(3),
         true,
-    )
-    .opaque;
+    );
+    assert!(meshes.inner_leaves.is_none());
+    let mesh = meshes.opaque;
     assert_eq!(0, vertices_in_plane(&mesh, 4.5));
     assert!(vertices_in_plane(&mesh, 3.5) > 0 && vertices_in_plane(&mesh, 5.5) > 0);
+}
+
+#[test]
+fn test_leaves_drawn_with_their_holes_have_the_shell_solid_leaves_have() {
+    // so far off, where the faces between them aren't drawn, a crown is just as it is drawn solid
+    let mesh = |solid| {
+        generate_chunk_mesh(
+            Arc::new(leaf_cube_chunk()),
+            vec![None; 26],
+            ChunkCoordinate(I64Vec3::new(0, 40, 0)),
+            &NoiseGenerator::new(3),
+            solid,
+        )
+    };
+    let (holed, solid) = (mesh(false), mesh(true));
+    assert_eq!(
+        faces(&solid.opaque).len(),
+        faces(&holed.opaque).len(),
+        "the shell"
+    );
+    assert_eq!(solid.opaque.count_vertices(), holed.opaque.count_vertices());
+    assert!(holed.inner_vertices() > 0);
+}
+
+#[test]
+fn test_faces_between_leaves_are_shaded_and_lit_as_the_rest() {
+    // a torch beside the crown lights the faces inside it, which carry block light as the
+    // shell does, and draw their own tile with its holes
+    let mut chunk = leaf_cube_chunk();
+    chunk.set_block_at(U16Vec3::new(7, 4, 4), BlockType::Torch);
+    let meshes = mesh_chunk(chunk);
+    let inner = meshes.inner_leaves.expect("faces between leaves");
+    for mesh in [&meshes.opaque, &inner] {
+        assert!(
+            mesh.contains_attribute(Mesh::ATTRIBUTE_TANGENT),
+            "block light"
+        );
+    }
+    let Some(VertexAttributeValues::Float32x2(draws)) = inner.attribute(Mesh::ATTRIBUTE_UV_1)
+    else {
+        panic!("light and how faces draw");
+    };
+    assert!(draws
+        .iter()
+        .all(|[sky, how]| *sky > 0.0 && *how == TEXTURED));
+    assert_eq!(
+        inner.count_vertices(),
+        tile_vertices(&inner, Tile::Leaves).len()
+    );
+}
+
+#[test]
+fn test_textured_lod_leaves_mesh_the_leaves_behind_them_apart() {
+    // cells 4 wide keep their texture's holes, so the faces between leaves cast shadows
+    let lod = lod_with(&leaf_cube(4));
+    let textured = MeshStyle {
+        textured: true,
+        inner_leaves: InnerLeaves::Apart,
+        ..style(true, true)
+    };
+    let meshes = mesh_lod_styled(&lod, textured);
+    let inner = meshes.inner_leaves.expect("faces between leaves");
+    assert!(vertices_in_plane(&inner, 4.5) > 0);
+    assert_eq!(0, vertices_in_plane(&meshes.opaque, 4.5));
+    // untextured, they're drawn solid and hide them
+    assert!(mesh_lod_styled(&lod, style(true, false))
+        .inner_leaves
+        .is_none());
 }
 
 #[test]

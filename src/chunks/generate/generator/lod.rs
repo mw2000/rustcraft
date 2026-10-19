@@ -1,4 +1,4 @@
-use super::buffers::{ChunkMeshes, GrassTint, MeshStyle, TEXTURE_MAX_CELL_SIZE};
+use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle, TEXTURE_MAX_CELL_SIZE};
 use super::canopy::{
     crown_layers, Canopy, BOX_CROWN_CELL, CANOPY_CELL, CANOPY_SHADE, CANOPY_SHADE_SPAN,
     FOREST_COVER, FOREST_DARKEN, TREE_MAX_CELL, TRUNK_MAX_CELL,
@@ -652,14 +652,20 @@ pub fn generate_lod_mesh(
         ))
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
-    // untextured leaves are drawn solid, so hide the leaves behind them
+    // untextured leaves are drawn solid, so hide the leaves behind them. Textured ones are
+    // nearly all past `INNER_LEAVES_REACH`, with their holes filled, but those between them
+    // still cast the sun's shadows, so are meshed apart as full detail's are.
     let meshes = mesh_blocks(
         &blocks,
         cell_size,
         MeshStyle {
             ambient_occlusion: true,
             textured,
-            solid_leaves: !textured,
+            inner_leaves: if textured {
+                InnerLeaves::Apart
+            } else {
+                InnerLeaves::Hidden
+            },
             // LODs draw no plants
             origin: I64Vec3::ZERO,
         },

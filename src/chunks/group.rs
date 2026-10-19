@@ -22,6 +22,7 @@ use super::{
     chunk::ChunkCoordinate,
     chunk_loader::{ChunkLoader, Unsettled},
     generate::generator::{generate_chunk_mesh, ChunkMeshes},
+    inner_leaves::{draw_inner_leaves, split_children, InnerLeafFaces},
     lod::LodKey,
     material::ChunkMaterial,
 };
@@ -222,13 +223,15 @@ pub fn load_groups(
     mut meshes: ResMut<Assets<Mesh>>,
     mut building: Query<(
         Entity,
+        &ChunkGroup,
         &mut BuildChunkGroup,
         Has<BuiltGroup>,
         Has<Mesh3d>,
         Option<&Children>,
     )>,
+    inner: Query<(), With<InnerLeafFaces>>,
 ) {
-    for (entity, mut build, built, has_opaque, children) in building.iter_mut() {
+    for (entity, group, mut build, built, has_opaque, children) in building.iter_mut() {
         let Some(merged) = futures::check_ready(&mut build.task) else {
             continue;
         };
@@ -246,8 +249,19 @@ pub fn load_groups(
                 .entity(entity)
                 .remove::<(Mesh3d, MeshMaterial3d<ChunkMaterial>)>();
         }
-        // water is drawn by the group's only child
-        match (merged.water, children.and_then(|c| c.first().copied())) {
+        // water and the faces between leaves are drawn by children of the group
+        let (water, inner_leaves) = split_children(children, &inner);
+        draw_inner_leaves(
+            &mut commands,
+            &mut meshes,
+            &loader.material,
+            entity,
+            group.key,
+            merged.inner_leaves,
+            inner_leaves,
+            group_aabb(),
+        );
+        match (merged.water, water) {
             (Some(water), Some(child)) => {
                 commands.entity(child).insert(Mesh3d(meshes.add(water)));
             }
@@ -365,9 +379,11 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
 pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
     let mut opaque = Vec::new();
     let mut water = Vec::new();
+    let mut inner_leaves = Vec::new();
     for (offset, meshes) in parts {
         opaque.push((offset, meshes.opaque));
         water.extend(meshes.water.map(|mesh| (offset, mesh)));
+        inner_leaves.extend(meshes.inner_leaves.map(|mesh| (offset, mesh)));
     }
     ChunkMeshes {
         // an empty mesh, so there's always something to hand back
@@ -378,6 +394,7 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
             )
         }),
         water: merge_meshes(water),
+        inner_leaves: merge_meshes(inner_leaves),
     }
 }
 
@@ -453,6 +470,26 @@ mod tests {
         assert!(indices
             .iter()
             .all(|&i| (i as usize) < merged.opaque.count_vertices()));
+    }
+
+    #[test]
+    fn test_faces_between_leaves_merge_apart() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Leaves);
+        chunk.set_block_at(U16Vec3::new(5, 4, 4), BlockType::Leaves);
+        let meshes = generate_chunk_mesh(
+            Arc::new(chunk),
+            vec![None; 26],
+            ChunkCoordinate(I64Vec3::ZERO),
+            &NoiseGenerator::new(1),
+            false,
+        );
+        let (inner, opaque) = (meshes.inner_vertices(), meshes.opaque.count_vertices());
+        let stone = block_mesh(U16Vec3::ONE);
+        let stone_vertices = stone.opaque.count_vertices();
+        let merged = merge_chunk_meshes(vec![(Vec3::ZERO, meshes), (Vec3::ZERO, stone)]);
+        assert_eq!(inner, merged.inner_vertices());
+        assert_eq!(opaque + stone_vertices, merged.opaque.count_vertices());
     }
 
     #[test]

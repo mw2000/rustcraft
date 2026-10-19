@@ -87,10 +87,10 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3, mode: Option<&str>) {
         .filter(|c| c.neighbors_26().iter().all(|n| data.contains_key(n)))
         .collect();
     let mut best = Duration::MAX;
-    let mut vertices = 0;
+    let (mut vertices, mut inner) = (0, 0);
     for _ in 0..3 {
         let start = Instant::now();
-        vertices = 0;
+        (vertices, inner) = (0, 0);
         for &c in &meshed {
             let neighbours = c
                 .neighbors_26()
@@ -100,11 +100,12 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3, mode: Option<&str>) {
             let meshes =
                 generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
             vertices += meshes.opaque.count_vertices();
+            inner += meshes.inner_vertices();
         }
         best = best.min(start.elapsed());
     }
     println!(
-        "{:>16}: {best:>8.1?} best of 3, {} chunks, {vertices} vertices",
+        "{:>16}: {best:>8.1?} best of 3, {} chunks, {vertices} vertices, {inner} between leaves",
         "mesh chunks",
         meshed.len()
     );
@@ -172,26 +173,32 @@ fn lods(regions: &Arc<RegionStore>, spawn: I64Vec3) {
     let mesh = |level: u8| {
         keys(level)
             .filter_map(|key| generate_lod_mesh(regions.clone(), key, None))
-            .map(|meshes| meshes.opaque.count_vertices())
-            .sum::<usize>()
+            .map(|meshes| (meshes.opaque.count_vertices(), meshes.inner_vertices()))
+            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
     };
     for level in LEVELS {
         mesh(level);
     }
-    let (mut total, mut vertices) = (Duration::ZERO, 0);
+    let (mut total, mut vertices, mut inner) = (Duration::ZERO, 0, 0);
     for level in LEVELS {
         let mut best = Duration::MAX;
+        let mut counts = (0, 0);
         for _ in 0..3 {
             let start = Instant::now();
-            vertices += mesh(level);
+            counts = mesh(level);
             best = best.min(start.elapsed());
         }
         total += best;
-        println!("{:>16}: {best:>8.1?}", format!("lod level {level}"));
+        (vertices, inner) = (vertices + counts.0, inner + counts.1);
+        println!(
+            "{:>16}: {best:>8.1?}, {} vertices, {} between leaves",
+            format!("lod level {level}"),
+            counts.0,
+            counts.1
+        );
     }
     println!(
-        "{:>16}: {total:>8.1?}, {} vertices",
+        "{:>16}: {total:>8.1?}, {vertices} vertices, {inner} between leaves",
         "lod total",
-        vertices / 3
     );
 }

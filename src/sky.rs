@@ -72,6 +72,8 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
             ..Default::default()
         }
         .build(),
+        // what casts shadows unseen too, see `inner_leaves`
+        crate::chunks::inner_leaves::sun_layers(),
     )
 }
 

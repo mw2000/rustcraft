@@ -36,6 +36,10 @@ pub(super) fn mesh_blocks(
         ..Default::default()
     };
     let mut water = MeshBuffers::default();
+    let mut inner_leaves = MeshBuffers {
+        untextured: !textured,
+        ..Default::default()
+    };
 
     // water's surface sits below a full block's height, see `WATER_TOP`
     let water_top = 0.5 - (0.5 - WATER_TOP) / cell_size as f32;
@@ -107,6 +111,7 @@ pub(super) fn mesh_blocks(
         },
         &CUBE,
         &mut opaque,
+        &mut inner_leaves,
         style,
         if textured { cell_size as f32 } else { 1.0 },
         grass_tint,
@@ -191,6 +196,7 @@ pub(super) fn mesh_blocks(
     ChunkMeshes {
         opaque: opaque.build_mesh(),
         water: water_mesh,
+        inner_leaves: (!inner_leaves.vertices.is_empty()).then(|| inner_leaves.build_mesh()),
     }
 }
 

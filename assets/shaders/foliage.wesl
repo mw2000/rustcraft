@@ -15,6 +15,20 @@ fn is_leaf(vertex_alpha: f32) -> bool {
     return abs(vertex_alpha - f32(constants::LEAF_CELL)) < 0.5;
 }
 
+// Whether a block mesh's face of leaves at `world_position`, drawn as `draws` (its second uv's y),
+// has its holes filled with the shade of the leaves behind, at the dither `threshold`: past
+// `INNER_LEAVES_REACH` blocks of the camera at `eye` the faces between leaves aren't drawn, see
+// `chunks::inner_leaves`, and the holes fill in over the band before it. Only faces drawn with
+// their own tile, `generator::TEXTURED`, have holes to fill.
+fn leaf_holes_filled(world_position: vec3<f32>, eye: vec3<f32>, vertex_alpha: f32, draws: f32, threshold: f32) -> bool {
+    if !is_leaf(vertex_alpha) || abs(draws) >= 0.125 {
+        return false;
+    }
+    let reach = f32(constants::INNER_LEAVES_REACH);
+    let band = f32(constants::INNER_LEAVES_BAND);
+    return threshold < smoothstep(reach - band, reach, distance(world_position, eye));
+}
+
 // Whether a block mesh's face is a plant's, from how it draws, its second uv's y: `generator::PLANT`.
 fn is_plant(draws: f32) -> bool {
     return abs(draws - 0.25) < 0.125;

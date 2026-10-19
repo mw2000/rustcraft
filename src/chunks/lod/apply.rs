@@ -10,6 +10,7 @@ use crate::chunks::fade::SolidWater;
 use crate::chunks::generate::generator::ChunkMeshes;
 use crate::chunks::group::BuiltGroup;
 use crate::chunks::group::ChunkGroup;
+use crate::chunks::inner_leaves::draw_inner_leaves;
 use crate::chunks::material::ChunkMaterial;
 use bevy::asset::Assets;
 use bevy::camera::visibility::Visibility;
@@ -59,7 +60,7 @@ pub fn load_lods(
                 node.key,
                 new,
                 false,
-                None,
+                (None, None),
             );
         }
         if has_mesh {
@@ -78,7 +79,8 @@ pub fn load_lods(
 }
 
 /// Draws `new` for the node at `key` on `entity`, which has an opaque mesh already if
-/// `has_opaque`, and a water mesh as its child `water` if it has one, replacing them.
+/// `has_opaque`, and a water mesh and the faces between its leaves as its `children` if it has
+/// them, replacing them.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_meshes(
     commands: &mut Commands,
@@ -88,7 +90,7 @@ pub(super) fn draw_meshes(
     key: LodKey,
     new: ChunkMeshes,
     has_opaque: bool,
-    water: Option<Entity>,
+    (water, inner_leaves): (Option<Entity>, Option<Entity>),
 ) {
     let mut node = commands.entity(entity);
     node.insert(lod_aabb());
@@ -101,6 +103,16 @@ pub(super) fn draw_meshes(
     } else if has_opaque {
         node.remove::<(Mesh3d, MeshMaterial3d<ChunkMaterial>)>();
     }
+    draw_inner_leaves(
+        commands,
+        meshes,
+        &lods.material,
+        entity,
+        key,
+        new.inner_leaves,
+        inner_leaves,
+        lod_aabb(),
+    );
     match (new.water, water) {
         (Some(mesh), Some(child)) => {
             commands.entity(child).insert(Mesh3d(meshes.add(mesh)));

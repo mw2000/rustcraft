@@ -6,6 +6,8 @@ pub mod fade;
 pub mod generate;
 #[cfg(feature = "client")]
 pub mod group;
+#[cfg(feature = "client")]
+pub mod inner_leaves;
 pub mod lod;
 #[cfg(feature = "client")]
 pub mod material;

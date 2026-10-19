@@ -5,14 +5,17 @@ import bevy_pbr::render::{
     view_transformations::position_world_to_clip,
 };
 import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
-import super::foliage::{is_leaf, is_plant, swayed};
+import super::foliage::{is_leaf, is_plant, leaf_holes_filled, swayed};
 import super::fog::{fogged_by, land_haze};
 import super::land_light::land_light;
 import super::lod_patch::patch_tint;
 import super::dither::dither_threshold;
-import super::curvature::{curved, uncurved};
+import super::curvature::{curved, eye, uncurved};
 // How bright the leaves seen through a solid tree box's holes are, to its surface's.
 const HOLE_SHADE: f32 = 0.55;
+// The same for far leaves, see `leaf_holes_filled`. Their holes are a texel or so across, and
+// show the lit face of the next leaf in.
+const FAR_HOLE_SHADE: f32 = 0.8;
 // A torch's flame, the top of its tile down to here, see `generator::TORCH`, which glows this
 // brightly whatever the light.
 const FLAME_BOTTOM: f32 = 9.0 / 16.0;
@@ -99,6 +102,8 @@ fn fragment(
     var color = block_sample(in.uv, in.color.a, footprint);
     // blocks per pixel up the face, worked out here as derivatives need uniform control flow
     let block_rate = length(vec2<f32>(dpdx(in.uv.y), dpdy(in.uv.y)));
+    // fades and far leaves dither with the depth prepass, see `world_prepass.wesl`
+    let threshold = dither_threshold(in.position.xy);
     // coarse LOD cells, where a stretched texture would read as one giant block, and wide
     // tree boxes, which keep it: leaves come out solid, and their shadows match, see
     // `world_prepass.wesl`. How a face draws is `generator::TEXTURED` and so on.
@@ -110,6 +115,13 @@ fn fragment(
         // the holes show deeper leaves, in their shade
         let deeper = block_mean(in.color.a).rgb * HOLE_SHADE;
         color = vec4<f32>(mix(deeper, color.rgb, smoothstep(0.3, 0.7, color.a)), 1.0);
+    } else if leaf_holes_filled(world_position, eye(), in.color.a, in.uv_b.y, threshold) {
+        // the leaves behind aren't drawn this far out, so the holes show them in their shade,
+        // cut where they'd be cut out so the rest is as bright as nearer leaves
+        if color.a < 0.5 {
+            color = vec4<f32>(block_mean(in.color.a).rgb * FAR_HOLE_SHADE, 1.0);
+        }
+        color.a = 1.0;
     }
 }
     // `DebugSettings::solid_leaves`: leaves without their holes, as coarse LODs draw them
@@ -159,7 +171,6 @@ fn fragment(
     color = fogged_by(color, world_position, in.position.xy, land_haze(uncurved(world_position).y));
 
     // after the texture samples above, which need uniform control flow
-    let threshold = dither_threshold(in.position.xy);
     if threshold < material_fade.x || threshold >= material_fade.y {
         discard;
     }

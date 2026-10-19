@@ -1,6 +1,7 @@
 use super::apply::draw_meshes;
 use super::loader::{lod_transform, GenerateLodMesh, LodLoader, LodNode};
 use crate::chunks::generate::generator::{generate_lod_mesh, ChunkMeshes};
+use crate::chunks::inner_leaves::{split_children, InnerLeafFaces};
 use crate::world::World;
 use bevy::asset::Assets;
 use bevy::camera::visibility::Visibility;
@@ -84,6 +85,7 @@ pub fn load_rebuilt_lods(
         Has<Mesh3d>,
         Option<&Children>,
     )>,
+    inner: Query<(), With<InnerLeafFaces>>,
 ) {
     for (entity, node, mut rebuild, has_opaque, children) in &mut rebuilding {
         let Some(result) = futures::check_ready(&mut rebuild.task) else {
@@ -96,7 +98,6 @@ pub fn load_rebuilt_lods(
         }
         match result {
             Some(new) => {
-                let water = children.and_then(|c| c.first().copied());
                 draw_meshes(
                     &mut commands,
                     &lods,
@@ -105,7 +106,7 @@ pub fn load_rebuilt_lods(
                     node.key,
                     new,
                     has_opaque,
-                    water,
+                    split_children(children, &inner),
                 );
             }
             None => {
