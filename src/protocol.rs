@@ -1,7 +1,7 @@
 //! What clients and the server send each other (§4.4). Blocks travel by name (§4.1).
 //!
 //! A player's inventory changes only on the server (INV-4): clients ask with `InventoryClick`,
-//! `InventoryDrag`, `CloseInventory`, `DropItem`, `PickBlock` and `Craft`, and placing a block in survival takes
+//! `InventoryDrag`, `CloseInventory`, `DropItem`, `PickBlock` and `FillGrid`, and placing a block in survival takes
 //! it from the slot `RequestEdit` names. In one App the change is made in the frame it's asked
 //! for, to the same `Inventory`; from M0.6 the server replicates each player's to its owner.
 //! Containers too (§5.2): a player opens one with `UseBlock`, clicks on its slots are
@@ -66,7 +66,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 26;
+pub const PROTOCOL_VERSION: u32 = 27;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -108,7 +108,7 @@ impl Plugin for ProtocolPlugin {
             .add_server_message::<EditSummary>(Channel::Ordered)
             // after the station it's made at's opened
             .add_client_message::<UseBlock>(Channel::Ordered)
-            .add_client_message::<Craft>(Channel::Ordered)
+            .add_client_message::<FillGrid>(Channel::Ordered)
             // before the edit that finishes it
             .add_client_message::<StartBreaking>(Channel::Ordered)
             .add_server_message::<ContainerChanged>(Channel::Ordered)
@@ -238,13 +238,13 @@ pub struct TimeSync {
     pub rate: f32,
 }
 
-/// A click in the inventory screen on slot `slot` of the container at `container`, which the
-/// player has open, or of their inventory if it's none, see `Container::click` and
-/// `Inventory::click`.
+/// A click in the inventory screen on the slot at `place` (`Slots::click`): the player's own, a
+/// cell of the crafting grid or its output, or a slot of the container at `container`, which
+/// the player has open, so a click meant for one that's since closed changes nothing.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InventoryClick {
     pub container: Option<I64Vec3>,
-    pub slot: u8,
+    pub place: Place,
     pub click: Click,
 }
 
@@ -567,9 +567,11 @@ pub struct UseBlock {
     pub block: I64Vec3,
 }
 
-/// Making `recipe` once, or `all` the times the ingredients carried allow, into the inventory.
+/// Laying `recipe`'s ingredients into the crafting grid from the inventory, as the recipe book
+/// does when it's clicked: one set more, or `all` the sets the ingredients carried allow
+/// (`Slots::fill`).
 #[derive(Message, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Craft {
+pub struct FillGrid {
     pub recipe: Recipe,
     pub all: bool,
 }

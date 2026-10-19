@@ -20,14 +20,15 @@ use crate::items::ItemStack;
 use crate::menu::GameState;
 use crate::protocol::ContainerChanged;
 
-// In pixels: the flame and the arrow, their 16-pixel tiles drawn three times the size, bigger
-// than icons, so they read across the room the panel leaves them.
-const ART_SIZE: f32 = 48.0;
+/// In pixels: the flame and the arrow, their 16-pixel tiles drawn three times the size, bigger
+/// than icons, so they read across the room the panel leaves them.
+pub(super) const ART_SIZE: f32 = 48.0;
 // The tiles of `furnace.png`, drawn by the block-textures skill's `ui.py`.
 const FLAME_OUT: usize = 0;
 const FLAME_LIT: usize = 1;
 const ARROW_EMPTY: usize = 2;
-const ARROW_FULL: usize = 3;
+/// The arrow's tile, full.
+pub(super) const ARROW_FULL: usize = 3;
 
 /// The container the inventory screen's open at, if it's one, and what's in it as the server
 /// last said, which is an empty one of its kind until it's said. Both go once the screen closes.
@@ -64,33 +65,52 @@ pub(super) enum Gauge {
     Arrow,
 }
 
+/// The furnace's art, its flame and arrow lit and unlit, which the crafting grid's arrow is
+/// drawn from too.
+#[derive(Clone)]
+pub(super) struct FurnaceArt {
+    image: Handle<Image>,
+    layout: Handle<TextureAtlasLayout>,
+}
+
+impl FurnaceArt {
+    pub(super) fn load(
+        images: &mut Assets<Image>,
+        layouts: &mut Assets<TextureAtlasLayout>,
+    ) -> Self {
+        let art = block_atlas("assets/textures/furnace.png");
+        let tile = art.height();
+        let layout = layouts.add(TextureAtlasLayout::from_grid(
+            UVec2::splat(tile),
+            art.width() / tile,
+            1,
+            None,
+            None,
+        ));
+        Self {
+            image: images.add(art),
+            layout,
+        }
+    }
+
+    /// A picture of its tile `index`.
+    pub(super) fn image(&self, index: usize) -> ImageNode {
+        ImageNode::from_atlas_image(
+            self.image.clone(),
+            TextureAtlas {
+                layout: self.layout.clone(),
+                index,
+            },
+        )
+    }
+}
+
 /// The section, hidden until the screen's opened at a furnace, for the screen to put over the
 /// inventory's slots.
-pub(super) fn spawn_furnace(
-    main: &mut ChildSpawnerCommands,
-    icons: &ItemIcons,
-    images: &mut Assets<Image>,
-    layouts: &mut Assets<TextureAtlasLayout>,
-) {
-    let art = block_atlas("assets/textures/furnace.png");
-    let tile = art.height();
-    let layout = layouts.add(TextureAtlasLayout::from_grid(
-        UVec2::splat(tile),
-        art.width() / tile,
-        1,
-        None,
-        None,
-    ));
-    let art = images.add(art);
+pub(super) fn spawn_furnace(main: &mut ChildSpawnerCommands, icons: &ItemIcons, art: &FurnaceArt) {
     let tile = |index| {
         (
-            ImageNode::from_atlas_image(
-                art.clone(),
-                TextureAtlas {
-                    layout: layout.clone(),
-                    index,
-                },
-            ),
+            art.image(index),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),

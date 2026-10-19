@@ -73,7 +73,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Menus | A title screen over the horizon of a world the terrain renderer draws; worlds to play, make, rename, duplicate and delete; saved servers and joining by address; settings in tabs (video, controls with every key rebindable, audio, accessibility), saved per player; a loading screen; the pause menu with Open to Friends and Save and Quit to Title; one set of shared widgets (M-U1) | `src/menu/`, `src/session.rs`, `src/preferences.rs`, `src/controls.rs`, `src/save/worlds.rs`, `src/client/servers.rs` |
 | UI | Command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival with drags, double clicks, number keys and tooltips (M4.1) and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
-| Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
+| Crafting | Recipes as shaped or shapeless patterns laid in a 2×2 grid in the inventory or a crafting table's 3×3, a recipe book that lays them, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/grid.rs`, `src/inventory/recipes.rs`, `src/inventory/slots.rs`, `src/server/crafting.rs` |
 | Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
@@ -1239,9 +1239,12 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 
 ### 5.3 Crafting and progression
 
-- Recipes are data (INV-6), and a recipe is a list of ingredients and an output, made at a
-  station: by hand, at a crafting table, and for smelting at a furnace (D-4). M4.2 turns them
-  into patterns on a grid with a recipe book (D-11).
+- Recipes are data (INV-6), and since M4.2 a recipe is a pattern laid in a crafting grid and an
+  output (D-11): a 2×2 grid by hand in the inventory screen and a 3×3 at a crafting table, and
+  for smelting one item in a furnace. A shaped recipe is rows of keys, matched anywhere in the
+  grid it fits and mirrored left to right; a shapeless one is a handful of items in any cells,
+  for blends and dyes. A recipe book beside the grid lays a recipe's ingredients in it, so no
+  pattern needs learning. Before M4.2 a recipe was a list of ingredients clicked to make (D-4).
 - Tool tiers set what can be mined: a block mined without its tier drops nothing (§5.1, built in
   M1.2 to tier 4). Coal needs only a wooden pickaxe, rather than stone as first planned, as it's
   for torches, wanted on the first night. Proposed tiers, to rename and tune freely:
@@ -1256,7 +1259,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   | 5 | Bright steel, an alloy of iron and a regional material | The deepest ores | Deep, everywhere |
 
 - **Built (M1.5):** `src/crafting.rs`.
-  - **Recipes** are the `recipes!` table: each row a `Recipe` variant with a stable name, sent
+  - **Recipes** (ingredient lists until M4.2 made them patterns) are the `recipes!` table: each row a `Recipe` variant with a stable name, sent
     by name as blocks and items are, its `Station` (`Hand` or `CraftingTable`), its ingredients
     as items and counts, and its output. A crafting table makes what hands can and more. By
     hand: a log makes 4 planks, 2 planks 4 sticks, and 4 planks a crafting table. At a table:
@@ -1266,7 +1269,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     stick, as coal ore drops itself for now; a coal item, from mining or smelting, can take its
     place later. Smelting comes with the furnace (M1.6). Making a recipe takes its ingredients from the main
     inventory before the hotbar, so what's held stays in hand.
-  - **The crafting list** (`src/inventory/recipes.rs`) is beside the inventory screen's slots:
+  - **The crafting list** (`src/inventory/recipes.rs`, the recipe book since M4.2) was beside the inventory screen's slots:
     two columns of buttons, each the output with its count, an arrow, and the ingredients with
     theirs, bright when what's carried makes it and dimmed when not, its full description
     under the slots as it's hovered. E opens it by hand, and right-clicking a crafting table in
@@ -1274,7 +1277,7 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     hand's; in creative a table is built against like any block. Clicking a recipe makes it
     once into the inventory, rather than onto the cursor, so shift-click, which makes as many
     as the ingredients allow, works the same way.
-  - **The server crafts (INV-4)** (`src/server/crafting.rs`): `UseBlock { block }` from right
+  - **The server crafts (INV-4)** (by `Craft` until M4.2, by the grid since) (`src/server/crafting.rs`): `UseBlock { block }` from right
     click opens a station for the player, if it's one and in reach, kept as `AtStation` on them
     until `CloseInventory`. `Craft { recipe, all }` makes a hand recipe anywhere, and a table's
     only while the player's open table is still there and in reach. What doesn't fit is dropped
@@ -1381,6 +1384,69 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
     bigger than what they cover in the material's colour (`Worn`, replicated beside
     `HeldItem`), and the HUD shows the points as a row of ten chestplates over the hearts while
     any's worn. Sprites by `items.py`, icons by `hud.py`. Armour drops with the rest at death.
+- **Built (M4.2): shaped crafting and the recipe book** (D-11).
+  - **Patterns** (`src/crafting.rs`): each row of the `recipes!` table has a `Pattern` in place
+    of its ingredient list: `Shaped` rows of keys with what each stands for (`shaped!`),
+    `Shapeless` items (`shapeless!`), or `Smelted` for a furnace's one item. Names are as they
+    were, so saves and the protocol name recipes as before. `Recipe::matching` takes a grid's
+    cells and the station: anything in a cell the station doesn't use spoils it; otherwise a
+    shaped pattern must fill the box the grid's items span exactly, as it is or mirrored, and a
+    shapeless one's items must be exactly what's there. `ingredients()` is counted from the
+    pattern once, for the book and its tooltips. The shapes: a pickaxe's head across the top
+    over two sticks down the middle, an axe's head down one side, a shovel's and a sword's one
+    column, a hoe's two across; stairs climbing (6 into 4), slabs a row (3 into 6), walls,
+    panes and trapdoors two rows, a door two columns; furnaces and chests a ring, a barrel's
+    ring with slabs for ends, dyed terracotta a ring round its flower, dark and light planks a
+    cross round their coal or sand, an ember lamp a cross round its ember; a bed wool over
+    planks, a bookshelf wheat between planks, a ladder its rails and rungs, a lantern an ingot
+    over a torch, a bucket a vee, shears a diagonal, blocks of metal and crystal (and the
+    crafting table, polished stone, stone bricks, sandstone, thatch and wool blocks) 2×2.
+    Shapeless: planks from a log, vines from three tall grass, mossy blocks, plaster, adobe and
+    the bright steel blends. Armour is its outline, as Minecraft draws it, which costs more than
+    the lists did: a helmet 5, a chestplate 8, leggings 7 and boots 4 (were 4, 6, 5 and 3), as
+    no outline of the old counts read as the piece or kept clear of the other recipes. A test
+    lays every recipe at every offset and mirrored in each grid it's made in, checking it's
+    matched and that no other recipe's pattern matches the same grid.
+  - **The grid as slots** (`inventory::slots`, server-side, INV-4): `Inventory::grid` holds the
+    3×3's nine cells, the 2×2 being its top left, sent with the inventory and saved with it as
+    `grid` slots (absent from older saves, which read as before). `Place` gains `Grid(n)` and
+    `Output`, and `Slots` the station whose grid the screen shows (none with a container open):
+    by hand the 2×2, at a table the 3×3 while it's still there and in reach (`station_of`), so a
+    table broken mid-craft falls back to hands. Grid cells take clicks, drags, shift-click (out
+    to the inventory), number keys, Q and double clicks as any slot does. The output isn't a
+    slot that holds anything: it's what the grid makes, and taking it uses one of each cell.
+    Left or right click takes it onto the cursor if that's empty or the same with room;
+    shift-click makes as many as the grid allows into the inventory, stopping before one that
+    wouldn't fit whole; a number key makes one into that hotbar slot if it's empty; Q throws
+    one, Ctrl+Q a stack's worth. What's made is new, so tools come out unworn. Closing the
+    screen puts the grid back in the inventory and drops what doesn't fit, as the cursor's
+    stack, and dying drops it with the rest.
+  - **The recipe book** (`src/inventory/recipes.rs`) replaces the crafting list: a card of each
+    recipe's output, seven across and scrolling, the hand's by hand and the hand's and the
+    table's at a table, bright if what's carried (the grid included) makes it and dimmed if not.
+    A search field narrows it to what's called every word typed (clicked to type into; E, Q and
+    the number keys type there rather than act), and a toggle to what can be made now. A card's
+    tooltip has the output, the ingredients and a small picture of the pattern. Clicking one
+    sends `FillGrid { recipe, all }`: the server puts the grid back in the inventory and lays one
+    set more than was laid of that recipe, or with shift as many as there's enough for up to a
+    full stack a cell, a shaped pattern in the grid's top left and a shapeless one along its
+    rows (`Slots::fill`); if there's no room to clear the grid it lays nothing. Without the
+    ingredients the client shows the pattern as a ghost (`grid::Ghost`), faded pictures in the
+    empty cells and the output, until the grid makes it, another recipe's chosen or the screen
+    closes.
+  - **The screen** (`src/inventory/grid.rs`): over the inventory, the armour row and what it's
+    worth on the left and the 2×2 grid with the furnace's arrow to its output on the right; at
+    a table the 3×3 alone, centred, titled "Crafting table".
+  - `PROTOCOL_VERSION` is 27: `InventoryClick` names a `Place`, and `FillGrid` replaces `Craft`.
+    No save format change: the grid's slots are an optional part of a saved inventory.
+  - **Tests:** pattern matching anywhere, mirrored, refused with anything else in the grid or
+    outside the station's cells, and shapeless in any arrangement; every recipe reachable and
+    none clashing; taking the output, topping up the cursor, shift-taking many and into a full
+    inventory, the number key and Q; the grid's cells under drags, shift-click, keys and with a
+    chest open; the book laying enough, more each click, as many as there are, none, and nothing
+    when the grid can't be cleared; closing returning the grid or dropping it; headless, crafting
+    by hand and at a table through the server, a table out of reach or broken, closing, the
+    book's search and its toggle, and a ghost shown until the grid makes it.
 
 ### 5.4 Underground: caves and ores
 
@@ -3041,11 +3107,12 @@ monuments do that job here.
   screenshot, every kind of item in first and third person, fixing how tools, blocks and food sit
   in the hand (§5.2, M-A4). Built: §5.2 (look, tooltips, slots, keys, trading, held items,
   protocol 24).
-- ☐ **M4.2 Shaped crafting and the recipe book** (D-11). A 2×2 grid in the inventory and 3×3 at a
+- ☑ **M4.2 Shaped crafting and the recipe book** (D-11). A 2×2 grid in the inventory and 3×3 at a
   crafting table; recipes become patterns (shaped, or shapeless where order doesn't matter, like
   dyes), and the recipe book beside the grid lists what can be made, dimming what can't, and
   lays a recipe's ingredients into the grid when it's clicked, so no pattern needs learning.
   Every recipe in §5.3 is redrawn as a pattern; smelting stays a furnace's input and fuel.
+  Built: §5.3 (patterns, the grid as slots, the recipe book and its ghosts, protocol 27).
 - ☑ **M4.3 Flowing fluids.** Water and lava as source blocks and flowing levels, spreading on
   server ticks and synced as edits (INV-4), lava slower and shorter; buckets to carry them. Lava
   meeting water makes obsidian (from a lava source), cobblestone (from flowing lava) or stone
@@ -3293,8 +3360,12 @@ they're found.
 - ☐ A drag doesn't preview its share in the slots it crosses or the count left on the cursor,
   only lights them; clicking outside the panels doesn't throw the cursor's stack; no
   scroll-wheel moving of single items (M4.1).
-- ☐ The armour row's panel has the room M4.2's crafting grid takes, empty until then; the
-  inventory has no picture of the player beside the armour (M4.1).
+- ☐ The inventory has no picture of the player beside the armour (M4.1); the crafting grid
+  took the armour row's spare room (M4.2).
+- ☐ The recipe book has no tabs by kind (tools, building, food) and no way to type into the
+  search without clicking it first; a crafting table broken while its screen's open falls back
+  to hands' crafting rather than closing the screen; double-clicking doesn't gather from the
+  crafting grid (M4.2).
 
 **Menus and settings**
 - ☐ The Skin tab's Arms choice shows even with the default skin, whose arms are its own; and
@@ -3518,7 +3589,7 @@ they're found.
 - **D-11 Crafting is a shaped grid with a recipe book** (M4.2), superseding D-4: a 2×2 grid by
   hand and 3×3 at a table, recipes as patterns, and a recipe book that lays a recipe into the
   grid for you, so the feel is Minecraft's and nothing needs learning. Decided 2026-10-19 after
-  the first play: the list felt unlike the game players know.
+  the first play: the list felt unlike the game players know. Built in M4.2 (§5.3).
 - **D-12 Oil feeds a light tech tier** (M4.7): a handful of machines (pump, generator,
   refinery, powered furnace, crusher), not a logistics game. Decided 2026-10-19.
 
@@ -3538,7 +3609,8 @@ they're found.
 - **D-4 (superseded by D-11) Crafting is ingredient lists at stations** (§5.3), not Minecraft's shaped grid: a recipe
   is a list of items and counts making an output, by hand, at a crafting table, or smelted at a
   furnace (M1.6). It's simpler to read and to use, as a recipe shows everything it takes and
-  needs no pattern learnt, and it's less of a copy. Decided 2026-10-18.
+  needs no pattern learnt, and it's less of a copy. Decided 2026-10-18; replaced by M4.2's grid
+  and recipe book (D-11).
 
 - **D-5 Hunger is in, kept simple** (§5.5): a food bar, eating to refill it, healing when it's
   full enough and hurting when it's empty. Farming joins the plan as M1.9 to feed it.

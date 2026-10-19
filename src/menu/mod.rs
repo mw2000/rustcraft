@@ -15,9 +15,9 @@ mod worlds;
 use std::path::PathBuf;
 
 use bevy::input_focus::tab_navigation::TabNavigationPlugin;
-use bevy::input_focus::InputFocusPlugin;
+use bevy::input_focus::{InputFocus, InputFocusPlugin};
 use bevy::prelude::*;
-use bevy::ui_widgets::{observe, Activate};
+use bevy::ui_widgets::{observe, Activate, TextInput};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 
 use crate::client::player::OwnSkin;
@@ -235,12 +235,17 @@ fn escape(
     }
 }
 
+// E types itself into a text field with the keys, such as the recipe book's search, rather than
+// closing the inventory.
 fn toggle_inventory(
     controls: Controls,
     state: Res<State<GameState>>,
+    focus: Res<InputFocus>,
+    fields: Query<(), With<TextInput>>,
     mut next: ResMut<NextState<GameState>>,
 ) {
-    if controls.just_pressed(Action::Inventory) {
+    let typing = focus.get().is_some_and(|focused| fields.contains(focused));
+    if controls.just_pressed(Action::Inventory) && !typing {
         match state.get() {
             GameState::Playing => next.set(GameState::Inventory),
             GameState::Inventory => next.set(GameState::Playing),

@@ -1,22 +1,30 @@
-//! The slots of a player's inventory screen, their own and those of the container they have
-//! open, and what clicks and drags on them do, as Minecraft players expect (M4.1): left and right
-//! clicks, shift-clicks moving stacks across, double clicks gathering a stack onto the cursor,
-//! the number keys swapping a slot with the hotbar's, Q throwing from a slot, and drags sharing
-//! the cursor's stack over the slots they cross. Only the server runs them (INV-4), as clients
-//! ask with `InventoryClick` and `InventoryDrag`.
+//! The slots of a player's inventory screen, their own, those of the container they have open and
+//! those of the crafting grid, and what clicks and drags on them do, as Minecraft players expect
+//! (M4.1): left and right clicks, shift-clicks moving stacks across, double clicks gathering a
+//! stack onto the cursor, the number keys swapping a slot with the hotbar's, Q throwing from a
+//! slot, and drags sharing the cursor's stack over the slots they cross. The crafting grid's
+//! output takes what the grid makes, using one of each ingredient laid (M4.2), and the recipe
+//! book lays a recipe's ingredients into the grid (`Slots::fill`). Only the server runs them
+//! (INV-4), as clients ask with `InventoryClick`, `InventoryDrag` and `FillGrid`.
 
 use serde::{Deserialize, Serialize};
 
-use super::{fits, Click, Inventory, ARMOUR_SLOTS, HOTBAR, HOTBAR_SLOTS, SLOTS};
+use super::{
+    add_to, click_stack, fits, Click, Inventory, ARMOUR_SLOTS, HOTBAR, HOTBAR_SLOTS, SLOTS,
+};
 use crate::containers::Container;
+use crate::crafting::{Recipe, Station};
 use crate::items::{take, Item, ItemStack};
 
 /// A slot in the inventory screen: one of the player's own, numbered as clicks and saves number
-/// them (armour's past the rest), or one of the container they have open.
+/// them (armour's past the rest), one of the container they have open, a cell of the crafting
+/// grid (`crafting::GRID`), or the grid's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Place {
     Own(u8),
     Container(u8),
+    Grid(u8),
+    Output,
 }
 
 /// How a drag shares the cursor's stack over the slots it crosses: evenly with the left button,
@@ -27,17 +35,22 @@ pub enum Spread {
     One,
 }
 
-/// A player's inventory and the container they have open, if they have one, for the clicks and
-/// drags in their inventory screen to change.
+/// A player's inventory, the container they have open, if they have one, and the station their
+/// screen's at, whose crafting grid it shows, for the clicks and drags in their inventory screen
+/// to change. With a container open there's no grid.
 pub struct Slots<'a> {
     pub inventory: &'a mut Inventory,
     pub container: Option<&'a mut Container>,
+    pub station: Station,
 }
 
 impl Slots<'_> {
     /// Does what `click` on the slot at `place` does, returning what it throws, which the caller
     /// drops. A slot there isn't, or a container's with none open, changes nothing.
     pub fn click(&mut self, place: Place, click: Click) -> Option<ItemStack> {
+        if place == Place::Output {
+            return self.click_output(click);
+        }
         match click {
             Click::Gather => {
                 self.gather();
@@ -49,11 +62,22 @@ impl Slots<'_> {
             }
             Click::Throw { all } => take(self.slot_mut(place)?, if all { u8::MAX } else { 1 }),
             Click::Left | Click::Right | Click::Shift => {
+                let in_grid = matches!(place, Place::Grid(cell) if self.in_grid(cell));
                 match (place, self.container.as_deref_mut()) {
                     (Place::Container(slot), Some(container)) => {
                         container.click(usize::from(slot), click, self.inventory);
                     }
-                    (Place::Container(_), None) => {}
+                    (Place::Container(_), None) | (Place::Output, _) => {}
+                    (Place::Grid(cell), _) if in_grid => {
+                        let inventory = &mut *self.inventory;
+                        let held = &mut inventory.grid[usize::from(cell)];
+                        if click == Click::Shift {
+                            *held = held.and_then(|stack| add_to(&mut inventory.slots, stack));
+                        } else {
+                            click_stack(held, &mut inventory.cursor, click);
+                        }
+                    }
+                    (Place::Grid(_), _) => {}
                     (Place::Own(slot), Some(container)) if click == Click::Shift => {
                         shift_into(container, self.inventory, usize::from(slot));
                     }
@@ -115,6 +139,131 @@ impl Slots<'_> {
                 .is_some_and(|held| held.is_none_or(|stack| stack.stacks_with(carried)))
     }
 
+    /// The recipe the crafting grid makes, if it's shown and makes one.
+    pub fn recipe(&self) -> Option<Recipe> {
+        if self.grid().is_empty() {
+            return None;
+        }
+        Recipe::matching(&self.inventory.grid, self.station)
+    }
+
+    /// Lays `recipe`'s ingredients into the crafting grid from the inventory, as clicking it in
+    /// the recipe book does: one set more than the grid holds of it already, or with `all` as
+    /// many as there are enough for, up to a full stack in each cell. What's in the grid goes
+    /// back into the inventory first, so it counts, and if there isn't room for it all nothing's
+    /// laid. Returns whether it laid any.
+    pub fn fill(&mut self, recipe: Recipe, all: bool) -> bool {
+        if self.grid().is_empty() {
+            return false;
+        }
+        let Some(layout) = recipe.layout(self.station) else {
+            return false;
+        };
+        let laid = if self.recipe() == Some(recipe) {
+            let stacks = self.inventory.grid.iter().flatten();
+            stacks.map(|stack| u32::from(stack.count)).min()
+        } else {
+            None
+        };
+        for &cell in self.grid() {
+            if let Some(stack) = self.inventory.grid[cell].take() {
+                self.inventory.grid[cell] = self.inventory.add(stack);
+            }
+        }
+        if self.inventory.grid.iter().any(Option::is_some) {
+            return false;
+        }
+        let most = layout
+            .iter()
+            .flatten()
+            .map(|item| u32::from(item.max_stack()));
+        let wanted = if all { u32::MAX } else { laid.unwrap_or(0) + 1 };
+        let sets = wanted
+            .min(recipe.times_makeable(self.inventory))
+            .min(most.min().unwrap_or(0));
+        if sets == 0 {
+            return false;
+        }
+        for (cell, item) in layout.into_iter().enumerate() {
+            if let Some(item) = item {
+                self.inventory.take_items(item, sets);
+                self.inventory.grid[cell] = Some(ItemStack::new(item, sets as u8));
+            }
+        }
+        true
+    }
+
+    // The cells of the crafting grid shown, none with a container open.
+    fn grid(&self) -> &'static [usize] {
+        match self.container {
+            Some(_) => &[],
+            None => self.station.grid(),
+        }
+    }
+
+    fn in_grid(&self, cell: u8) -> bool {
+        self.grid().contains(&usize::from(cell))
+    }
+
+    // A click on the crafting grid's output: left or right takes what it makes onto the cursor,
+    // if that holds nothing or the same with room for it; shift makes as many as the grid's
+    // ingredients allow into the inventory, until one wouldn't fit whole; a number key makes
+    // one into that hotbar slot if it's empty; and Q makes one and throws it, or with Ctrl as
+    // many as make a stack.
+    fn click_output(&mut self, click: Click) -> Option<ItemStack> {
+        let recipe = self.recipe()?;
+        let made = recipe.output();
+        match click {
+            Click::Left | Click::Right => {
+                let cursor = &mut self.inventory.cursor;
+                match cursor {
+                    None => *cursor = Some(made),
+                    Some(carried) if carried.stacks_with(made) && carried.room() >= made.count => {
+                        carried.count += made.count;
+                    }
+                    Some(_) => return None,
+                }
+                self.use_ingredients();
+            }
+            Click::Shift => {
+                while self.recipe() == Some(recipe) {
+                    let mut slots = self.inventory.slots;
+                    if add_to(&mut slots, made).is_some() {
+                        break;
+                    }
+                    self.inventory.slots = slots;
+                    self.use_ingredients();
+                }
+            }
+            Click::Swap(hotbar) => {
+                let hotbar = usize::from(hotbar);
+                if HOTBAR.contains(&hotbar) && self.inventory.slots[hotbar].is_none() {
+                    self.inventory.slots[hotbar] = Some(made);
+                    self.use_ingredients();
+                }
+            }
+            Click::Throw { all } => {
+                let mut thrown = made;
+                self.use_ingredients();
+                while all && self.recipe() == Some(recipe) && thrown.room() >= made.count {
+                    thrown.count += made.count;
+                    self.use_ingredients();
+                }
+                return Some(thrown);
+            }
+            Click::Gather => {}
+        }
+        None
+    }
+
+    // Takes one from each cell of the crafting grid, as making what it makes does: every cell
+    // with something in it is an ingredient, or it wouldn't have matched.
+    fn use_ingredients(&mut self) {
+        for cell in &mut self.inventory.grid {
+            take(cell, 1);
+        }
+    }
+
     // Gathers stacks of the cursor's item onto it, up to a full stack, as a double click does:
     // the container's first and then the inventory's, and partial stacks before full ones, so
     // full stacks are only broken into if there's no other way.
@@ -163,8 +312,9 @@ impl Slots<'_> {
         self.inventory.slots[hotbar] = theirs;
     }
 
-    // Whether `item` can go in the slot at `place`: anything in the inventory's, a piece of
-    // armour only in its own, and in a container's what it accepts.
+    // Whether `item` can go in the slot at `place`: anything in the inventory's or the grid's,
+    // a piece of armour only in its own, in a container's what it accepts, and nothing in the
+    // grid's output.
     fn accepts(&self, place: Place, item: Item) -> bool {
         match place {
             Place::Own(slot) => {
@@ -179,6 +329,8 @@ impl Slots<'_> {
                 .container
                 .as_ref()
                 .is_some_and(|container| container.accepts(usize::from(slot), item)),
+            Place::Grid(cell) => self.in_grid(cell),
+            Place::Output => false,
         }
     }
 
@@ -193,9 +345,13 @@ impl Slots<'_> {
                 let container = self.container.as_ref()?;
                 container.slots.get(usize::from(slot)).copied()
             }
+            Place::Grid(cell) if self.in_grid(cell) => Some(self.inventory.grid[usize::from(cell)]),
+            Place::Grid(_) => None,
+            Place::Output => Some(self.recipe().map(Recipe::output)),
         }
     }
 
+    // The slot at `place`, to change, but for the output, which is only ever made.
     fn slot_mut(&mut self, place: Place) -> Option<&mut Option<ItemStack>> {
         match place {
             Place::Own(slot) => {
@@ -209,6 +365,10 @@ impl Slots<'_> {
                 let container = self.container.as_deref_mut()?;
                 container.slots.get_mut(usize::from(slot))
             }
+            Place::Grid(cell) if self.in_grid(cell) => {
+                self.inventory.grid.get_mut(usize::from(cell))
+            }
+            Place::Grid(_) | Place::Output => None,
         }
     }
 }
@@ -233,6 +393,7 @@ mod tests {
     use super::{Place, Slots, Spread};
     use crate::block::BlockType;
     use crate::containers::{Container, FUEL, INPUT, OUTPUT};
+    use crate::crafting::{Recipe, Station};
     use crate::inventory::{Click, Inventory, ARMOUR_SLOTS, SLOTS};
     use crate::items::{Item, ItemStack};
 
@@ -252,6 +413,7 @@ mod tests {
         let mut slots = Slots {
             inventory,
             container: None,
+            station: Station::Hand,
         };
         slots.drag(places, spread)
     }
@@ -359,6 +521,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: Some(&mut furnace),
+            station: Station::Hand,
         };
         // never into the output
         let output = Place::Container(OUTPUT as u8);
@@ -383,6 +546,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: Some(&mut chest),
+            station: Station::Hand,
         };
         slots.click(own(3), Click::Gather);
         // the chest's 2, the main inventory's 20 and 32 of the hotbar's 40; the full stack's left
@@ -398,6 +562,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: None,
+            station: Station::Hand,
         };
         slots.click(own(3), Click::Gather);
         assert_eq!(stack(DIRT, 64), inventory.cursor);
@@ -408,6 +573,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: None,
+            station: Station::Hand,
         };
         slots.click(own(0), Click::Gather);
         assert_eq!(before, inventory);
@@ -423,6 +589,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: Some(&mut furnace),
+            station: Station::Hand,
         };
         // ore to the input, coal to the fire, and sand, which smelts, to the input too once it's free
         slots.click(own(0), Click::Shift);
@@ -449,6 +616,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: Some(&mut chest),
+            station: Station::Hand,
         };
         slots.click(own(9), Click::Shift);
         assert_eq!(stack(SAND, 64), chest.slots[4]);
@@ -464,6 +632,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: None,
+            station: Station::Hand,
         };
         slots.click(own(20), Click::Swap(2));
         assert_eq!(stack(SAND, 9), slots.inventory.slots[2]);
@@ -480,6 +649,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: None,
+            station: Station::Hand,
         };
         slots.click(own(SLOTS), Click::Swap(7));
         assert_eq!(stack(Item::IronHelmet, 1), slots.inventory.armour[0]);
@@ -493,6 +663,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: Some(&mut furnace),
+            station: Station::Hand,
         };
         slots.click(Place::Container(OUTPUT as u8), Click::Swap(7));
         assert_eq!(
@@ -515,6 +686,7 @@ mod tests {
         let mut slots = Slots {
             inventory: &mut inventory,
             container: Some(&mut chest),
+            station: Station::Hand,
         };
         assert_eq!(
             stack(DIRT, 1),
@@ -541,5 +713,210 @@ mod tests {
         inventory.cursor = stack(DIRT, 10);
         assert_eq!(stack(DIRT, 10), inventory.put_back_cursor());
         assert_eq!(None, inventory.cursor);
+    }
+
+    const PLANKS: Item = Item::Block(BlockType::Planks);
+    const LOG: Item = Item::Block(BlockType::Log);
+
+    fn at(inventory: &mut Inventory, station: Station) -> Slots<'_> {
+        Slots {
+            inventory,
+            container: None,
+            station,
+        }
+    }
+
+    // A wooden pickaxe's planks and sticks laid in a table's grid, `count` in each cell.
+    fn pickaxe_laid(inventory: &mut Inventory, count: u8) {
+        for cell in [0, 1, 2] {
+            inventory.grid[cell] = stack(PLANKS, count);
+        }
+        for cell in [4, 7] {
+            inventory.grid[cell] = stack(Item::Stick, count);
+        }
+    }
+
+    #[test]
+    fn test_taking_the_output_uses_one_of_each_ingredient_and_makes_a_fresh_tool() {
+        let mut inventory = Inventory::default();
+        pickaxe_laid(&mut inventory, 2);
+        let mut slots = at(&mut inventory, Station::CraftingTable);
+        assert_eq!(Some(Recipe::WoodenPickaxe), slots.recipe());
+        slots.click(Place::Output, Click::Left);
+        assert_eq!(stack(Item::WoodenPickaxe, 1), inventory.cursor);
+        assert_eq!(0, inventory.cursor.unwrap().wear);
+        assert_eq!([stack(PLANKS, 1); 3], inventory.grid[..3]);
+        assert_eq!(stack(Item::Stick, 1), inventory.grid[7]);
+        // a pickaxe on the cursor doesn't stack with another, so nothing's made
+        let before = inventory.clone();
+        at(&mut inventory, Station::CraftingTable).click(Place::Output, Click::Left);
+        assert_eq!(before, inventory);
+        // by hand the same grid makes nothing
+        inventory.cursor = None;
+        let mut slots = at(&mut inventory, Station::Hand);
+        assert_eq!(None, slots.recipe());
+        assert_eq!(None, slots.click(Place::Output, Click::Left));
+        assert_eq!(None, inventory.cursor);
+    }
+
+    #[test]
+    fn test_taking_the_output_onto_the_same_item_tops_the_cursor_up() {
+        let mut inventory = Inventory {
+            cursor: stack(PLANKS, 58),
+            ..Inventory::default()
+        };
+        inventory.grid[3] = stack(LOG, 3);
+        let mut slots = at(&mut inventory, Station::Hand);
+        slots.click(Place::Output, Click::Left);
+        assert_eq!(stack(PLANKS, 62), slots.inventory.cursor);
+        // with room for only two more, the next isn't taken
+        slots.click(Place::Output, Click::Right);
+        assert_eq!(stack(PLANKS, 62), inventory.cursor);
+        assert_eq!(stack(LOG, 2), inventory.grid[3]);
+    }
+
+    #[test]
+    fn test_shift_taking_makes_as_many_as_the_grid_holds_until_the_inventory_is_full() {
+        let mut inventory = Inventory::default();
+        inventory.grid[0] = stack(LOG, 20);
+        at(&mut inventory, Station::Hand).click(Place::Output, Click::Shift);
+        assert_eq!(None, inventory.grid[0]);
+        assert_eq!(80, inventory.count(PLANKS));
+
+        // into a full inventory, as many as fit whole
+        let mut inventory = Inventory {
+            slots: [stack(SAND, 64); SLOTS],
+            ..Inventory::default()
+        };
+        inventory.slots[5] = stack(PLANKS, 55);
+        inventory.grid[4] = stack(LOG, 5);
+        at(&mut inventory, Station::Hand).click(Place::Output, Click::Shift);
+        assert_eq!(stack(PLANKS, 63), inventory.slots[5]);
+        assert_eq!(stack(LOG, 3), inventory.grid[4]);
+        // and tools one at a time into empty slots
+        let mut inventory = Inventory::default();
+        pickaxe_laid(&mut inventory, 3);
+        at(&mut inventory, Station::CraftingTable).click(Place::Output, Click::Shift);
+        assert_eq!(3, inventory.count(Item::WoodenPickaxe));
+        assert!(inventory.grid.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn test_the_output_goes_to_an_empty_hotbar_slot_or_is_thrown() {
+        let mut inventory = Inventory::default();
+        inventory.slots[2] = stack(DIRT, 1);
+        inventory.grid[0] = stack(LOG, 30);
+        let mut slots = at(&mut inventory, Station::Hand);
+        slots.click(Place::Output, Click::Swap(2));
+        slots.click(Place::Output, Click::Swap(3));
+        assert_eq!(stack(PLANKS, 4), slots.inventory.slots[3]);
+        assert_eq!(stack(DIRT, 1), slots.inventory.slots[2]);
+        let one = slots.click(Place::Output, Click::Throw { all: false });
+        assert_eq!(stack(PLANKS, 4), one);
+        // a stack's worth with Ctrl
+        let all = slots.click(Place::Output, Click::Throw { all: true });
+        assert_eq!(stack(PLANKS, 64), all);
+        assert_eq!(stack(LOG, 30 - 2 - 16), inventory.grid[0]);
+    }
+
+    #[test]
+    fn test_the_grid_takes_clicks_drags_and_keys_only_in_its_cells_shown() {
+        let mut inventory = Inventory {
+            cursor: stack(DIRT, 8),
+            ..Inventory::default()
+        };
+        let mut slots = at(&mut inventory, Station::Hand);
+        // the 2×2's cells are 0, 1, 3 and 4 of the 3×3
+        assert!(slots.drag(
+            &[
+                Place::Grid(0),
+                Place::Grid(1),
+                Place::Grid(3),
+                Place::Grid(4)
+            ],
+            Spread::Even
+        ));
+        assert_eq!([stack(DIRT, 2); 2], slots.inventory.grid[..2]);
+        slots.inventory.cursor = stack(DIRT, 4);
+        assert!(!slots.drag(&[Place::Grid(0), Place::Grid(2)], Spread::Even));
+        assert!(!slots.drag(&[Place::Grid(0), Place::Output], Spread::Even));
+        slots.click(Place::Grid(8), Click::Left);
+        assert_eq!(stack(DIRT, 4), slots.inventory.cursor);
+        // shift-click out of the grid into the inventory, a number key swaps, and Q throws
+        slots.click(Place::Grid(0), Click::Shift);
+        assert_eq!(stack(DIRT, 2), slots.inventory.slots[0]);
+        slots.click(Place::Grid(1), Click::Swap(5));
+        assert_eq!(stack(DIRT, 2), slots.inventory.slots[5]);
+        assert_eq!(
+            stack(DIRT, 1),
+            slots.click(Place::Grid(3), Click::Throw { all: false })
+        );
+        assert_eq!(None, slots.inventory.grid[1]);
+        // and with a chest open there's no grid at all
+        let mut chest = Container::new(BlockType::Chest).unwrap();
+        let mut slots = Slots {
+            inventory: &mut inventory,
+            container: Some(&mut chest),
+            station: Station::Hand,
+        };
+        assert_eq!(
+            None,
+            slots.click(Place::Grid(4), Click::Throw { all: true })
+        );
+        assert_eq!(stack(DIRT, 2), inventory.grid[4]);
+    }
+
+    #[test]
+    fn test_the_recipe_book_lays_a_recipe_from_the_inventory_once_more_each_click() {
+        let mut inventory = Inventory::default();
+        inventory.slots[0] = stack(PLANKS, 10);
+        inventory.slots[12] = stack(Item::Stick, 5);
+        inventory.grid[8] = stack(DIRT, 3);
+        let mut slots = at(&mut inventory, Station::CraftingTable);
+        assert!(slots.fill(Recipe::WoodenPickaxe, false));
+        // the dirt went back first
+        assert_eq!(stack(DIRT, 3), slots.inventory.slots[1]);
+        assert_eq!(None, slots.inventory.grid[8]);
+        assert_eq!(Some(Recipe::WoodenPickaxe), slots.recipe());
+        assert_eq!([stack(PLANKS, 1); 3], slots.inventory.grid[..3]);
+        // a second click lays a second set
+        assert!(slots.fill(Recipe::WoodenPickaxe, false));
+        assert_eq!(stack(PLANKS, 2), slots.inventory.grid[0]);
+        assert_eq!(stack(Item::Stick, 2), slots.inventory.grid[7]);
+        // shift lays as many as there's enough for, the sticks here
+        assert!(slots.fill(Recipe::WoodenPickaxe, true));
+        assert_eq!(stack(Item::Stick, 2), slots.inventory.grid[4]);
+        assert_eq!(stack(PLANKS, 2), slots.inventory.grid[0]);
+        assert_eq!(10 - 6, slots.inventory.count(PLANKS));
+        assert_eq!(1, slots.inventory.count(Item::Stick));
+        // a recipe there isn't enough for clears the grid and lays nothing
+        assert!(!slots.fill(Recipe::Bed, false));
+        assert!(slots.inventory.grid.iter().all(Option::is_none));
+        assert_eq!(10, slots.inventory.count(PLANKS));
+        // and a table's recipe isn't laid by hand
+        let mut slots = at(&mut inventory, Station::Hand);
+        assert!(!slots.fill(Recipe::WoodenPickaxe, false));
+        assert!(slots.fill(Recipe::Sticks, true));
+        assert_eq!([stack(PLANKS, 5), None], slots.inventory.grid[..2]);
+        assert_eq!(stack(PLANKS, 5), slots.inventory.grid[3]);
+    }
+
+    #[test]
+    fn test_shift_in_the_recipe_book_lays_up_to_a_full_stack_in_each_cell() {
+        let mut inventory = Inventory::default();
+        inventory.slots[..4].fill(stack(LOG, 64));
+        let mut slots = at(&mut inventory, Station::Hand);
+        assert!(slots.fill(Recipe::Planks, true));
+        assert_eq!(stack(LOG, 64), slots.inventory.grid[0]);
+        assert_eq!(64 * 3, slots.inventory.count(LOG));
+        // with no room to put the grid back, nothing's laid and nothing's lost
+        let mut inventory = Inventory {
+            slots: [stack(SAND, 64); SLOTS],
+            ..Inventory::default()
+        };
+        inventory.grid[0] = stack(DIRT, 1);
+        let before = inventory.clone();
+        assert!(!at(&mut inventory, Station::Hand).fill(Recipe::Planks, false));
+        assert_eq!(before, inventory);
     }
 }

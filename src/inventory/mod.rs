@@ -7,6 +7,8 @@ mod chest;
 #[cfg(feature = "client")]
 pub mod furnace;
 #[cfg(feature = "client")]
+pub mod grid;
+#[cfg(feature = "client")]
 pub mod icons;
 #[cfg(feature = "client")]
 pub mod look;
@@ -26,6 +28,7 @@ use bevy::prelude::*;
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::block::BlockType;
+use crate::crafting::GRID;
 use crate::game_mode::GameMode;
 use crate::items::{take, Item, ItemStack, ARMOUR_POINT};
 
@@ -40,13 +43,15 @@ pub(crate) const HOTBAR: Range<usize> = 0..HOTBAR_SLOTS;
 const MAIN: Range<usize> = HOTBAR_SLOTS..SLOTS;
 
 /// The items a player carries, in slots 0 to 8 for the hotbar and 9 to 35 for the rest, the
-/// armour they wear, and the stack they've picked up in the inventory screen, which follows the
-/// mouse.
+/// armour they wear, the stack they've picked up in the inventory screen, which follows the
+/// mouse, and what they've laid in its crafting grid (`crafting::GRID`), which goes back into
+/// the inventory as the screen closes.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Inventory {
     pub slots: [Option<ItemStack>; SLOTS],
     pub armour: [Option<ItemStack>; 4],
     pub cursor: Option<ItemStack>,
+    pub grid: [Option<ItemStack>; GRID],
 }
 
 impl Default for Inventory {
@@ -55,6 +60,7 @@ impl Default for Inventory {
             slots: [None; SLOTS],
             armour: [None; 4],
             cursor: None,
+            grid: [None; GRID],
         }
     }
 }
@@ -235,14 +241,21 @@ impl Inventory {
         }
     }
 
-    /// Everything it holds, taking it all away: its slots, its armour and the cursor's.
+    /// Everything it holds, taking it all away: its slots, its armour, the cursor's and the
+    /// crafting grid's.
     pub fn empty(&mut self) -> impl Iterator<Item = ItemStack> {
         let Self {
             slots,
             armour,
             cursor,
+            grid,
         } = std::mem::take(self);
-        slots.into_iter().chain(armour).chain([cursor]).flatten()
+        slots
+            .into_iter()
+            .chain(armour)
+            .chain([cursor])
+            .chain(grid)
+            .flatten()
     }
 
     /// Puts the stack on the cursor back in the inventory, as closing the screen does, and
@@ -250,6 +263,15 @@ impl Inventory {
     pub fn put_back_cursor(&mut self) -> Option<ItemStack> {
         let stack = self.cursor.take()?;
         self.add(stack)
+    }
+
+    /// Puts what's in the crafting grid back in the inventory, as closing the screen does, and
+    /// returns what didn't fit, to drop.
+    pub fn put_back_grid(&mut self) -> Vec<ItemStack> {
+        let laid: Vec<_> = self.grid.iter_mut().filter_map(Option::take).collect();
+        laid.into_iter()
+            .filter_map(|stack| self.add(stack))
+            .collect()
     }
 }
 
@@ -310,7 +332,7 @@ impl Serialize for Inventory {
         if serializer.is_human_readable() {
             SavedInventory::from(self.clone()).serialize(serializer)
         } else {
-            (&self.slots[..], self.armour, self.cursor).serialize(serializer)
+            (&self.slots[..], self.armour, self.cursor, self.grid).serialize(serializer)
         }
     }
 }
@@ -321,7 +343,8 @@ impl<'de> Deserialize<'de> for Inventory {
             let saved = SavedInventory::deserialize(deserializer)?;
             return saved.try_into().map_err(D::Error::custom);
         }
-        let (slots, armour, cursor) = <(Vec<Option<ItemStack>>, _, _)>::deserialize(deserializer)?;
+        let (slots, armour, cursor, grid) =
+            <(Vec<Option<ItemStack>>, _, _, _)>::deserialize(deserializer)?;
         let slots = slots
             .try_into()
             .map_err(|_| D::Error::custom("an inventory has the wrong number of slots"))?;
@@ -329,17 +352,21 @@ impl<'de> Deserialize<'de> for Inventory {
             slots,
             armour,
             cursor,
+            grid,
         })
     }
 }
 
 // How an inventory is saved: the stacks in it, each with its slot, armour's past the rest, by
-// item name (§4.1).
+// item name (§4.1), and those in the crafting grid by their cell, which saves from before M4.2
+// have none of.
 #[derive(Serialize, Deserialize)]
 struct SavedInventory {
     slots: Vec<SavedSlot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<ItemStack>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    grid: Vec<SavedSlot>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -357,6 +384,12 @@ impl From<Inventory> for SavedInventory {
                 .filter_map(|(slot, stack)| stack.map(|stack| SavedSlot { slot, stack }))
                 .collect(),
             cursor: inventory.cursor,
+            grid: inventory
+                .grid
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, stack)| stack.map(|stack| SavedSlot { slot, stack }))
+                .collect(),
         }
     }
 }
@@ -383,6 +416,15 @@ impl TryFrom<SavedInventory> for Inventory {
             }
             if held.replace(stack).is_some() {
                 return Err(format!("slot {slot} is saved twice"));
+            }
+        }
+        for SavedSlot { slot, stack } in saved.grid {
+            let held = inventory
+                .grid
+                .get_mut(slot)
+                .ok_or_else(|| format!("the crafting grid has no cell {slot}"))?;
+            if held.replace(stack).is_some() {
+                return Err(format!("cell {slot} is saved twice"));
             }
         }
         Ok(inventory)
@@ -636,6 +678,21 @@ mod tests {
     }
 
     #[test]
+    fn test_closing_puts_the_grid_back_and_hands_back_what_doesnt_fit() {
+        let mut inventory = two_stacks();
+        inventory.grid[0] = stack(DIRT, 3);
+        inventory.grid[8] = stack(Item::Stick, 2);
+        assert!(inventory.put_back_grid().is_empty());
+        assert_eq!(stack(DIRT, 13), inventory.slots[0]);
+        assert_eq!(stack(Item::Stick, 2), inventory.slots[2]);
+        assert!(inventory.grid.iter().all(Option::is_none));
+        inventory.slots = [stack(SAND, 64); SLOTS];
+        inventory.grid[3] = stack(DIRT, 4);
+        assert_eq!(vec![ItemStack::new(DIRT, 4)], inventory.put_back_grid());
+        assert!(inventory.grid.iter().all(Option::is_none));
+    }
+
+    #[test]
     fn test_inventories_round_trip_by_item_name() {
         let mut inventory = two_stacks();
         inventory.slots[35] = stack(Item::Block(BlockType::CraftingTable), 1);
@@ -644,8 +701,15 @@ mod tests {
             ..ItemStack::new(Item::CopperAxe, 1)
         });
         inventory.cursor = stack(DIRT, 3);
+        inventory.grid[4] = stack(SAND, 2);
         let text = toml::to_string(&inventory).unwrap();
         assert!(text.contains("item = \"crafting_table\""), "{text}");
+        // and one saved before the grid, with none in it, reads as it did
+        let mut before = inventory.clone();
+        before.grid = Default::default();
+        let old = toml::to_string(&before).unwrap();
+        assert!(!old.contains("grid"), "{old}");
+        assert_eq!(before, toml::from_str(&old).unwrap());
         assert!(text.contains("wear = 40"), "{text}");
         assert_eq!(inventory, toml::from_str(&text).unwrap());
 

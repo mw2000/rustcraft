@@ -20,7 +20,8 @@ pub const PANEL_PADDING: f32 = 12.0;
 const PANEL: Color = Color::srgb(0.2, 0.215, 0.25);
 const PANEL_LIGHT: Color = Color::srgb(0.44, 0.47, 0.54);
 const PANEL_DARK: Color = Color::srgb(0.07, 0.075, 0.09);
-const WELL: Color = Color::srgb(0.11, 0.12, 0.14);
+/// A sunken slot's colour.
+pub const WELL: Color = Color::srgb(0.11, 0.12, 0.14);
 const WELL_HOVERED: Color = Color::srgb(0.27, 0.3, 0.38);
 // a drag's slots, lit warmer than hovering so the share can be seen spreading
 const WELL_DRAGGED: Color = Color::srgb(0.36, 0.33, 0.22);
@@ -31,7 +32,7 @@ pub const TITLE: Color = Color::srgb(0.98, 0.88, 0.64);
 /// Quieter text: hints, and what's sold out.
 pub const QUIET: Color = Color::srgb(0.62, 0.64, 0.7);
 /// Over what can't be made or paid for.
-pub const DIMMED: Color = Color::srgba(0.05, 0.05, 0.07, 0.62);
+pub const DIMMED: Color = Color::srgba(0.05, 0.05, 0.07, 0.72);
 
 /// A slot in the inventory screen, where it is, for clicks, drags and keys over it to name.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

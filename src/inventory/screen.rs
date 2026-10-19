@@ -1,3 +1,4 @@
+use bevy::input_focus::InputFocus;
 use bevy::picking::events::PointerPress;
 use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
@@ -5,10 +6,13 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use super::chest::{show_chest, spawn_chest};
-use super::furnace::{follow_container, show_furnace, spawn_furnace, ContainerView};
+use super::furnace::{follow_container, show_furnace, spawn_furnace, ContainerView, FurnaceArt};
+use super::grid::{show_ghost, show_grid, spawn_crafting, Ghost};
 use super::icons::{load_icons, stack_view, ItemIcons, StackView};
 use super::look::{self, light_slots, panel, slot_frame, slot_grid, title, SlotAt, QUIET};
-use super::recipes::{show_recipes, spawn_recipes, CraftingStation};
+use super::recipes::{
+    show_recipes, spawn_recipes, typing, CraftingStation, MakeableOnly, SearchField,
+};
 use super::slots::{Place, Slots, Spread};
 use super::tooltip::{show_tooltip, spawn_tooltip};
 use super::trade::{
@@ -17,6 +21,7 @@ use super::trade::{
 use super::{Click, Inventory, ARMOUR_SLOTS, HOTBAR_SLOTS, SLOTS};
 use crate::client::player::LocalPlayer;
 use crate::controls::{Action, Controls};
+use crate::crafting::Station;
 use crate::game_mode::GameMode;
 use crate::interaction::TargetCreature;
 use crate::menu::{font, free_cursor, GameState, TEXT_SHADOW};
@@ -37,12 +42,13 @@ const HINT: &str = "Drag to share a stack · double-click gathers · shift-click
 
 /// In survival, the inventory (E) is the inventory screen, in one look for every station
 /// (`look`): a panel with the main inventory's 27 slots over the hotbar's 9, as in Minecraft,
-/// and over them the armour worn, or the chest's slots, or the furnace's, if it was opened at
-/// one; beside it, a panel of the recipes that can be made by hand or at the crafting table it
-/// was opened at, or of a villager's trades. Clicks, drags and keys over the slots ask the
-/// server to move stacks about (`slots::Slots`), the stack picked up follows the mouse until
-/// it's put down, and what's hovered is described beside the pointer. The game carries on
-/// behind it, as behind the block picker, and closing it puts the stack carried back.
+/// and over them the armour worn beside the 2×2 crafting grid, or a crafting table's 3×3 grid,
+/// or the chest's slots, or the furnace's, if it was opened at one; beside it, the recipe book
+/// of what can be made there, or a villager's trades. Clicks, drags and keys over the slots ask
+/// the server to move stacks about (`slots::Slots`), the stack picked up follows the mouse
+/// until it's put down, and what's hovered is described beside the pointer. The game carries
+/// on behind it, as behind the block picker, and closing it puts the stack carried and what's
+/// in the grid back.
 pub struct InventoryScreenPlugin;
 
 impl Plugin for InventoryScreenPlugin {
@@ -52,6 +58,8 @@ impl Plugin for InventoryScreenPlugin {
             .init_resource::<TradeView>()
             .init_resource::<Dragging>()
             .init_resource::<LastPress>()
+            .init_resource::<Ghost>()
+            .init_resource::<MakeableOnly>()
             .add_systems(Startup, (spawn_screen.after(load_icons), spawn_label))
             .add_systems(
                 Update,
@@ -64,7 +72,7 @@ impl Plugin for InventoryScreenPlugin {
                     (
                         (drag, keys_over_slots).chain(),
                         carry_to_mouse,
-                        show_recipes,
+                        (show_recipes, show_grid, show_ghost),
                         show_furnace,
                         show_chest,
                         show_trade,
@@ -87,7 +95,11 @@ struct Screen;
 #[derive(Component)]
 struct Carried;
 
-// The armour worn and what it's worth, over the inventory when no container's open.
+// What's over the inventory when no container's open: the armour worn and what it's worth,
+// beside the crafting grid, or at a crafting table its grid alone.
+#[derive(Component)]
+struct TopSection;
+
 #[derive(Component)]
 struct ArmourSection;
 
@@ -128,6 +140,7 @@ fn spawn_screen(
     mut images: ResMut<Assets<Image>>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
+    let art = FurnaceArt::load(&mut images, &mut layouts);
     commands
         .spawn((
             Screen,
@@ -158,9 +171,21 @@ fn spawn_screen(
                     spawn_recipes(row, &icons);
                     spawn_trade(row);
                     row.spawn(panel()).with_children(|main| {
-                        spawn_armour(main, &icons);
+                        main.spawn((
+                            TopSection,
+                            Node {
+                                justify_content: JustifyContent::SpaceBetween,
+                                align_items: AlignItems::End,
+                                margin: UiRect::bottom(Val::Px(4.0)),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|top| {
+                            spawn_armour(top, &icons);
+                            spawn_crafting(top, &icons, &art);
+                        });
                         spawn_chest(main, &icons);
-                        spawn_furnace(main, &icons, &mut images, &mut layouts);
+                        spawn_furnace(main, &icons, &art);
                         main.spawn((
                             InventoryLabel,
                             title("Inventory"),
@@ -198,35 +223,50 @@ fn spawn_screen(
                 GlobalZIndex(4),
                 children![stack_view(&icons, StackView::Cursor)],
             ));
-        });
+        })
+        .observe(blur_search);
 }
 
-// The four armour slots in a row, and what they're worth beside them. M4.2's crafting grid goes
-// beside them too.
-fn spawn_armour(main: &mut ChildSpawnerCommands, icons: &ItemIcons) {
-    main.spawn((
+// A press anywhere in the screen but the search field lets go of the keys it had, as the field
+// keeps the presses on it to itself.
+fn blur_search(
+    _: On<PointerPress>,
+    mut focus: ResMut<InputFocus>,
+    fields: Query<(), With<SearchField>>,
+) {
+    if typing(&focus, &fields) {
+        focus.clear();
+    }
+}
+
+// The four armour slots in a row, and what they're worth under them, beside the crafting grid.
+fn spawn_armour(top: &mut ChildSpawnerCommands, icons: &ItemIcons) {
+    top.spawn((
         ArmourSection,
         Node {
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(look::SLOT_GAP),
-            margin: UiRect::bottom(Val::Px(4.0)),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
             ..default()
         },
     ))
-    .with_children(|row| {
-        for slot in ARMOUR_SLOTS {
-            spawn_slot(row, icons, Place::Own(slot as u8));
-        }
-        row.spawn((
+    .with_children(|section| {
+        section.spawn(title("Armour"));
+        section
+            .spawn(Node {
+                column_gap: Val::Px(look::SLOT_GAP),
+                ..default()
+            })
+            .with_children(|row| {
+                for slot in ARMOUR_SLOTS {
+                    spawn_slot(row, icons, Place::Own(slot as u8));
+                }
+            });
+        section.spawn((
             ArmourWorth,
             Text::new(""),
             font(15.0),
             TextColor(QUIET),
             TEXT_SHADOW,
-            Node {
-                margin: UiRect::left(Val::Px(12.0)),
-                ..default()
-            },
             Pickable::IGNORE,
         ));
     });
@@ -251,15 +291,21 @@ fn spawn_slots(
 }
 
 /// A slot at `place` with its stack in it, which presses on ask the server to change.
-pub(super) fn spawn_slot(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, place: Place) {
+pub(super) fn spawn_slot<'a>(
+    parent: &'a mut ChildSpawnerCommands,
+    icons: &ItemIcons,
+    place: Place,
+) -> EntityCommands<'a> {
     let shows = match place {
         Place::Own(slot) => StackView::Slot(usize::from(slot)),
         Place::Container(slot) => StackView::Container(usize::from(slot)),
+        Place::Grid(cell) => StackView::Grid(usize::from(cell)),
+        Place::Output => StackView::Output,
     };
-    parent
-        .spawn(slot_frame(place))
-        .with_child(stack_view(icons, shows))
+    let mut slot = parent.spawn(slot_frame(place));
+    slot.with_child(stack_view(icons, shows))
         .observe(press_slot);
+    slot
 }
 
 // The click a press on a slot makes, to send it as it's pressed: picking up, a shift-click or
@@ -314,16 +360,16 @@ fn send_click(
 ) {
     // the server makes the change, as it does all changes to inventories (INV-4), naming the
     // container so a click meant for one that's since closed changes nothing
-    let (container, slot) = match place {
-        Place::Own(slot) => (None, slot),
-        Place::Container(slot) => match view.at {
-            Some(at) => (Some(at), slot),
+    let container = match place {
+        Place::Container(_) => match view.at {
+            Some(at) => Some(at),
             None => return,
         },
+        Place::Own(_) | Place::Grid(_) | Place::Output => None,
     };
     clicks.write(InventoryClick {
         container,
-        slot,
+        place,
         click,
     });
 }
@@ -338,6 +384,7 @@ fn drag(
     hovered: Query<(&SlotAt, &Hovered)>,
     player: Query<&Inventory, With<LocalPlayer>>,
     view: Res<ContainerView>,
+    station: Res<CraftingStation>,
     mut dragging: ResMut<Dragging>,
     mut clicks: MessageWriter<InventoryClick>,
     mut drags: MessageWriter<InventoryDrag>,
@@ -354,6 +401,7 @@ fn drag(
         let slots = Slots {
             inventory: &mut inventory,
             container: container.as_mut(),
+            station: station.0,
         };
         for (&SlotAt(place), hover) in &hovered {
             let room = places.len() < usize::from(carried.count);
@@ -386,16 +434,19 @@ fn drag(
 }
 
 // Over a slot, 1 to 9 swap it with that hotbar slot, and Q throws one from it, or the stack with
-// Ctrl, as in Minecraft.
+// Ctrl, as in Minecraft; but not while they're typed into the recipe book's search.
+#[allow(clippy::too_many_arguments)]
 fn keys_over_slots(
     controls: Controls,
     keys: Res<ButtonInput<KeyCode>>,
     hovered: Query<(&SlotAt, &Hovered)>,
     view: Res<ContainerView>,
     dragging: Res<Dragging>,
+    focus: Res<InputFocus>,
+    fields: Query<(), With<SearchField>>,
     mut clicks: MessageWriter<InventoryClick>,
 ) {
-    if dragging.0.is_some() {
+    if dragging.0.is_some() || typing(&focus, &fields) {
         return;
     }
     let Some(place) = hovered.iter().find(|(_, h)| h.get()).map(|(at, _)| at.0) else {
@@ -432,22 +483,37 @@ fn carry_to_mouse(
     }
 }
 
-// The armour slots and what they're worth, when no container's open, and the label over the
-// player's slots, when one is.
+// The armour slots and what they're worth beside the crafting grid, when no container's open,
+// and at a crafting table its grid alone, in the middle.
 #[allow(clippy::type_complexity)]
 fn show_armour(
     view: Res<ContainerView>,
+    station: Res<CraftingStation>,
     player: Query<Ref<Inventory>, With<LocalPlayer>>,
-    mut section: Query<&mut Node, With<ArmourSection>>,
+    mut top: Query<&mut Node, With<TopSection>>,
+    mut section: Query<&mut Node, (With<ArmourSection>, Without<TopSection>)>,
     mut worth: Query<&mut Text, With<ArmourWorth>>,
 ) {
-    let display = match view.at {
-        None => Display::Flex,
-        Some(_) => Display::None,
+    let at_table = station.0 == Station::CraftingTable;
+    let (display, justify) = match (view.at, at_table) {
+        (Some(_), _) => (Display::None, JustifyContent::SpaceBetween),
+        (None, false) => (Display::Flex, JustifyContent::SpaceBetween),
+        (None, true) => (Display::Flex, JustifyContent::Center),
+    };
+    for mut node in &mut top {
+        if node.display != display || node.justify_content != justify {
+            node.display = display;
+            node.justify_content = justify;
+        }
+    }
+    let armour = if at_table {
+        Display::None
+    } else {
+        Display::Flex
     };
     for mut node in &mut section {
-        if node.display != display {
-            node.display = display;
+        if node.display != armour {
+            node.display = armour;
         }
     }
     let Ok(inventory) = player.single() else {
@@ -485,8 +551,9 @@ fn open(
 }
 
 // The menu holds the cursor again as play resumes. The next time it opens, it's by hand,
-// unless it's at a station or a container again. A drag still going is dropped, and the server
-// puts what's on the cursor back.
+// unless it's at a station or a container again. A drag still going is dropped, a ghost in the
+// grid goes, the search lets go of the keys, and the server puts what's on the cursor and in
+// the grid back.
 #[allow(clippy::too_many_arguments)]
 fn close(
     mut screen: Query<&mut Node, With<Screen>>,
@@ -496,12 +563,19 @@ fn close(
     mut trade: ResMut<TradeView>,
     mut dragging: ResMut<Dragging>,
     mut last: ResMut<LastPress>,
+    mut ghost: ResMut<Ghost>,
+    mut focus: ResMut<InputFocus>,
+    fields: Query<(), With<SearchField>>,
 ) {
     *station = CraftingStation::default();
     *view = ContainerView::default();
     *trade = TradeView::default();
     dragging.0 = None;
     last.0 = None;
+    ghost.0 = None;
+    if typing(&focus, &fields) {
+        focus.clear();
+    }
     for mut node in &mut screen {
         if node.display == Display::Flex {
             node.display = Display::None;
@@ -527,14 +601,17 @@ mod tests {
     use crate::crafting::{Recipe, Station};
     use crate::game_mode::GameMode;
     use crate::hotbar::HotbarPlugin;
-    use crate::inventory::recipes::{CraftingStation, Dimmed, RecipeCard};
+    use crate::inventory::grid::{Ghost, GhostIcon};
+    use crate::inventory::recipes::{
+        CraftingStation, Dimmed, MakeableOnly, RecipeCard, SearchField,
+    };
     use crate::inventory::slots::{Place, Spread};
     use crate::inventory::{Click, Hotbar, Inventory};
     use crate::items::{Item, ItemStack};
     use crate::menu::{GameState, MenuPlugin};
     use crate::picker::PickerPlugin;
     use crate::player::{Player, PlayerOwner};
-    use crate::protocol::{InventoryClick, ProtocolPlugin};
+    use crate::protocol::{FillGrid, InventoryClick, ProtocolPlugin};
     use crate::server::ServerPlugin;
     use crate::world::World;
 
@@ -623,7 +700,7 @@ mod tests {
         press(&mut app, KeyCode::KeyE);
         app.world_mut().write_message(InventoryClick {
             container: None,
-            slot: 0,
+            place: Place::Own(0),
             click: Click::Left,
         });
         app.update();
@@ -642,7 +719,7 @@ mod tests {
         press(&mut app, KeyCode::KeyE);
         app.world_mut().write_message(InventoryClick {
             container: None,
-            slot: 0,
+            place: Place::Own(0),
             click: Click::Left,
         });
         app.update();
@@ -731,5 +808,106 @@ mod tests {
             CraftingStation(Station::Hand),
             *app.world().resource::<CraftingStation>()
         );
+    }
+
+    fn give(app: &mut App, slot: usize, stack: ItemStack) {
+        let mut query = app.world_mut().query::<&mut Inventory>();
+        query.single_mut(app.world_mut()).unwrap().slots[slot] = Some(stack);
+    }
+
+    #[test]
+    fn test_the_recipe_book_searches_and_shows_only_what_can_be_made_if_asked() {
+        let mut app = app(GameMode::Survival);
+        give(&mut app, 1, ItemStack::new(Item::Block(BlockType::Log), 1));
+        app.insert_resource(CraftingStation(Station::CraftingTable));
+        press(&mut app, KeyCode::KeyE);
+        // a search for stairs finds only stairs
+        let mut field = app
+            .world_mut()
+            .query_filtered::<Entity, With<SearchField>>();
+        let field = field.single(app.world()).unwrap();
+        app.world_mut()
+            .entity_mut(field)
+            .insert(bevy::text::EditableText::new("Stairs"));
+        app.update();
+        let found = listed(&mut app);
+        assert_eq!(8, found.len(), "{found:?}");
+        assert!(found
+            .iter()
+            .all(|(recipe, _)| recipe.name().ends_with("_stairs")));
+        // and with only what can be made now, of everything, planks
+        app.world_mut()
+            .entity_mut(field)
+            .insert(bevy::text::EditableText::new(""));
+        app.insert_resource(MakeableOnly(true));
+        app.update();
+        assert_eq!(vec![(Recipe::Planks, true)], listed(&mut app));
+    }
+
+    // The ghost's pictures showing, in the grid and the output.
+    fn ghosts(app: &mut App) -> Vec<Place> {
+        let mut query = app.world_mut().query::<(&GhostIcon, &Visibility)>();
+        let world = app.world();
+        let shown = query.iter(world).filter(|(_, v)| **v != Visibility::Hidden);
+        shown.map(|(ghost, _)| ghost.0).collect()
+    }
+
+    fn lay_in_grid(app: &mut App, cell: usize, stack: ItemStack) {
+        let mut query = app.world_mut().query::<&mut Inventory>();
+        query.single_mut(app.world_mut()).unwrap().grid[cell] = Some(stack);
+        app.update();
+    }
+
+    #[test]
+    fn test_a_ghost_shows_what_a_recipe_needs_until_the_grid_makes_it() {
+        let mut app = app(GameMode::Survival);
+        app.insert_resource(CraftingStation(Station::CraftingTable));
+        press(&mut app, KeyCode::KeyE);
+        app.insert_resource(Ghost(Some(Recipe::WoodenPickaxe)));
+        app.update();
+        // three planks, two sticks and what they make
+        assert_eq!(6, ghosts(&mut app).len());
+        let planks = ItemStack::new(Item::Block(BlockType::Planks), 1);
+        lay_in_grid(&mut app, 0, planks);
+        let shown = ghosts(&mut app);
+        assert_eq!(5, shown.len());
+        assert!(!shown.contains(&Place::Grid(0)) && shown.contains(&Place::Output));
+        for cell in [1, 2] {
+            lay_in_grid(&mut app, cell, planks);
+        }
+        lay_in_grid(&mut app, 4, ItemStack::new(Item::Stick, 1));
+        lay_in_grid(&mut app, 7, ItemStack::new(Item::Stick, 1));
+        // once it's made, the ghost's gone
+        assert_eq!(Ghost(None), *app.world().resource::<Ghost>());
+        assert!(ghosts(&mut app).is_empty());
+        // and closing puts the grid back in the inventory
+        press(&mut app, KeyCode::Escape);
+        let inventory = inventory(&mut app);
+        assert!(inventory.grid.iter().all(Option::is_none));
+        assert_eq!(3, inventory.count(Item::Block(BlockType::Planks)));
+        assert_eq!(2, inventory.count(Item::Stick));
+    }
+
+    #[test]
+    fn test_the_recipe_book_fills_the_grid_and_the_output_takes_from_it() {
+        let mut app = app(GameMode::Survival);
+        give(&mut app, 1, ItemStack::new(Item::Block(BlockType::Log), 3));
+        press(&mut app, KeyCode::KeyE);
+        app.world_mut().write_message(FillGrid {
+            recipe: Recipe::Planks,
+            all: true,
+        });
+        app.update();
+        let laid = Some(ItemStack::new(Item::Block(BlockType::Log), 3));
+        assert_eq!(laid, inventory(&mut app).grid[0]);
+        app.world_mut().write_message(InventoryClick {
+            container: None,
+            place: Place::Output,
+            click: Click::Shift,
+        });
+        app.update();
+        let inventory = inventory(&mut app);
+        assert_eq!(12, inventory.count(Item::Block(BlockType::Planks)));
+        assert_eq!(None, inventory.grid[0]);
     }
 }

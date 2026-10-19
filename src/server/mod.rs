@@ -144,10 +144,10 @@ impl Plugin for ServerPlugin {
                     // opened before it's clicked on
                     (
                         containers::open_containers,
+                        crafting::open_stations,
                         inventory::receive_inventory_requests,
                     )
                         .chain(),
-                    crafting::receive_crafts,
                     commands::run_commands,
                     chat::receive_chat,
                     (clock::wind_clock, clock::sync_clock).chain(),

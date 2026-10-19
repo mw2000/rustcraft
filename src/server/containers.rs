@@ -152,6 +152,7 @@ mod tests {
     use crate::crafting::SMELT_TIME;
     use crate::edits::Edits;
     use crate::game_mode::GameMode;
+    use crate::inventory::slots::Place;
     use crate::inventory::{Click, Inventory};
     use crate::items::{Item, ItemStack};
     use crate::loot::{watchtower_chest, LootTable};
@@ -213,9 +214,14 @@ mod tests {
     }
 
     fn click(container: Option<I64Vec3>, slot: u8, click: Click) -> InventoryClick {
+        // a container's slot when one's named, as the screen sends them
+        let place = match container {
+            Some(_) => Place::Container(slot),
+            None => Place::Own(slot),
+        };
         InventoryClick {
             container,
-            slot,
+            place,
             click,
         }
     }

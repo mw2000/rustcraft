@@ -8,11 +8,13 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use super::furnace::{container_stack, ContainerView};
+use super::recipes::CraftingStation;
 use super::Inventory;
 use crate::block::{BlockType, Face, RenderStyle, Tile};
 use crate::chunks::generate::biome::{Biomes, Climate};
 use crate::chunks::material::block_atlas;
 use crate::client::player::LocalPlayer;
+use crate::crafting::Recipe;
 use crate::game_mode::GameMode;
 use crate::items::{Item, ItemStack};
 use crate::menu::{font, TEXT_SHADOW};
@@ -67,7 +69,7 @@ impl ItemIcons {
     // for the whole of it: grass shows its top, since its side's tile is just a fringe of grass
     // that's drawn over dirt. Shapes are pictures of them cut from their tiles, and other items
     // have tiles of their own.
-    fn paint(&self, image: &mut ImageNode, item: Item) {
+    pub(super) fn paint(&self, image: &mut ImageNode, item: Item) {
         let shape = item.block().and_then(|block| self.shape_icons.get(&block));
         let (atlas, layout, index, tinted) = match (item.block(), item.sprite()) {
             (Some(block), _) if shape.is_some() => (
@@ -207,6 +209,10 @@ pub enum StackView {
     Cursor,
     /// The one in a slot of the container the inventory screen's open at.
     Container(usize),
+    /// The one in a cell of the crafting grid.
+    Grid(usize),
+    /// What the crafting grid makes.
+    Output,
 }
 
 /// The count in the corner of a stack's icon.
@@ -298,12 +304,13 @@ fn count_text(count: String) -> impl Bundle {
 /// Draws the local player's stacks, and the open container's, in every view of them, when they
 /// change. Counts are shown in survival, for stacks of more than one, as creative never runs
 /// out, and so is wear.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn draw_stacks(
     icons: Res<ItemIcons>,
     player: Query<(Ref<Inventory>, Ref<GameMode>), With<LocalPlayer>>,
     // not there without the inventory screen
     container: Option<Res<ContainerView>>,
+    station: Option<Res<CraftingStation>>,
     mut views: Query<(&StackView, &mut ImageNode, &mut Visibility, &Children)>,
     mut counts: Query<&mut Text, With<StackCount>>,
     mut bars: Query<(&mut Node, &Children), With<WearBar>>,
@@ -313,9 +320,17 @@ pub(crate) fn draw_stacks(
         return;
     };
     let container_changed = container.as_ref().is_some_and(|view| view.is_changed());
-    if !inventory.is_changed() && !mode.is_changed() && !container_changed {
+    let station_changed = station.as_ref().is_some_and(|station| station.is_changed());
+    if !inventory.is_changed() && !mode.is_changed() && !container_changed && !station_changed {
         return;
     }
+    // what the grid makes, if the screen shows it
+    let output = match (&station, &container) {
+        (Some(station), Some(view)) if view.at.is_none() => {
+            Recipe::matching(&inventory.grid, station.0).map(Recipe::output)
+        }
+        _ => None,
+    };
     let counted = !mode.has_every_block();
     for (shows, mut image, mut visibility, children) in &mut views {
         let stack = match *shows {
@@ -324,6 +339,8 @@ pub(crate) fn draw_stacks(
             StackView::Container(slot) => container
                 .as_ref()
                 .and_then(|view| container_stack(view, slot)),
+            StackView::Grid(cell) => inventory.grid[cell],
+            StackView::Output => output,
         };
         *visibility = match stack {
             Some(stack) => {
