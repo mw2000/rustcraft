@@ -81,6 +81,7 @@ actions! {
     WindBack, "wind_back", "Wind the clock back", Key(KeyCode::BracketLeft);
     WindForward, "wind_forward", "Wind the clock on", Key(KeyCode::BracketRight);
     DebugOverlay, "debug_overlay", "Debug overlay", Key(KeyCode::F1);
+    CameraView, "camera_view", "First or third person", Key(KeyCode::F5);
 }
 
 impl Action {

@@ -23,6 +23,7 @@ use rustcraft::client::cracks::DrawCracksPlugin;
 use rustcraft::client::creatures::DrawCreaturesPlugin;
 use rustcraft::client::critters::AmbientLifePlugin;
 use rustcraft::client::drops::DrawDropsPlugin;
+use rustcraft::client::hand::HandPlugin;
 use rustcraft::client::model_light::ModelLightPlugin;
 use rustcraft::client::models::DrawPlayersPlugin;
 use rustcraft::client::servers::{ServerList, SERVERS_FILE};
@@ -219,6 +220,7 @@ fn main() {
         ModelLightPlugin,
         DrawDropsPlugin,
         DrawPlayersPlugin,
+        HandPlugin,
         DrawCreaturesPlugin,
         DrawCracksPlugin,
         MapPlugin,

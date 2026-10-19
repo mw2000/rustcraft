@@ -883,6 +883,14 @@ The world's state beyond the seed (INV-1).
   - `tests/multiplayer.rs` adds: a joiner sees a sheep dropped beside it fall smoothly between
     its poses, isn't shown one beside the host 300 blocks off, and hurts it with a hit, its
     flinch reaching it.
+- **Built (M-A4):** a client sends `SetSkin(Option<Skin>)` (ordered) as its player arrives and
+  whenever its choice changes; the server puts it on their player as a replicated `Skin`
+  component, so everyone else sees it and anyone joining later is sent it with the rest of the
+  player, or removes it for the default skin their name gives them. A `Skin` is a PNG of at most
+  32 KB and its arms, checked as it's made and again whenever it's deserialised, so a client
+  can't send the server, or the server a client, anything that isn't one; renet splits the
+  message, so it isn't chunked by hand. `Welcome` now carries the name the server gave the
+  client, so its own model wears the default others see. `PROTOCOL_VERSION` is 22.
 - **Layout:** `src/protocol.rs`; `src/server/` (`mod.rs` with `ServerPlugin`,
   `DedicatedServerPlugins` and `is_authority`, `edits.rs`, `chunks.rs`, `commands.rs`,
   `chat.rs`, `allowances.rs`, `clock.rs`, `console.rs`, `host.rs`, `players.rs`, `sync.rs`,
@@ -2798,6 +2806,8 @@ they're found.
   hundred blocks; a textured, moving magma surface; sharper great peaks from afar (§5.7, M2.7).
 
 **Building and blocks**
+- ☐ A grass block held or dropped shows its side's fringe over nothing, as the cube's tiles
+  aren't layered over dirt as the land's are (M-A4).
 - ☐ Wall torches; stairs' corners joining; double slabs; door hinges from neighbours; chests with
   a facing; a lit furnace look (§4.1, §5.2, M2.4a).
 - ☐ Copy and paste a box, and undo, for building in creative (§5.6, M2.2).
@@ -2836,6 +2846,8 @@ they're found.
 - ☐ Starling chatter and geese honking (§5.8, U-79).
 
 **Multiplayer and servers**
+- ☐ `SetSkin` isn't rate-limited: a client changing its skin every frame has 32 KB relayed to
+  everyone each time; hold changes to one a second or so (§4.4, M-A4).
 - ☐ Authentication: netcode runs unsecure and names aren't authenticated, so operators are only as
   safe as names (§4.4, M0.6a, M0.6d, M0.6e).
 - ☐ The protocol mismatch notice on a reliable channel; clients announcing they're leaving
@@ -2846,6 +2858,8 @@ they're found.
   `help` listing keys it can't press (§4.4, M-R1).
 
 **Menus and settings**
+- ☐ The Skin tab's Arms choice shows even with the default skin, whose arms are its own; and
+  there's no file dialog (§6, M-A4).
 - ☐ Clouds off still leaves their shadows on the land; scrolling a focused list row into view
   (M-U1).
 
@@ -2873,7 +2887,7 @@ they're found.
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
   silent and audio-free. Built: synthesised, with upstream's recorded ambience and wind merged
   in (#77), §5.10.
-- ◐ **M-A4 Player view and skins.**
+- ☑ **M-A4 Player view and skins.**
   - **First person:** the player's own arm and held item drawn in view (a separate view-model
     pass so they never clip into walls), with swing for breaking, placing, attacking and eating,
     a bob while walking, and a lowered-and-raised swap when changing slots; blocks held as small
@@ -2887,6 +2901,52 @@ they're found.
     it's validated (size, format, a byte limit), sent to the server and relayed to everyone, and
     saved with the player. Default skins are our own, drawn by script (INV-8: Mojang's Steve
     and Alex are not ours to ship); skins aren't fetched from Mojang's servers by username.
+  - **Built (M-A4):**
+    - **Skins** (`src/skin.rs`, shared with the server): a PNG of 64×64 or 64×32, refused over
+      32 KB or another size before its pixels are decoded, decoded with `png` under a 1 MB
+      limit. An old skin's left limbs are its right ones mirrored, as that layout draws them,
+      a hat filled solid is taken as none, the base layer's made opaque, and slim arms are
+      told by the clear column right of the right arm's back. Four default skins, a ranger, a
+      miner, a sailor and a botanist (`assets/textures/skins/`), drawn by the block-textures
+      skill's `skins.py`; each player wears one by an FNV-1a hash of their name, the same in
+      every game. Out of scope: fetching skins from Mojang by username, capes, and the
+      layout's other extras (ears, animated skins).
+    - **Model** (`src/client/skins.rs`, `models.rs`): the parts are the layout's boxes, a pixel a
+      sixteenth of a block (two blocks tall), each with its overlay half a pixel (the hat) or a
+      quarter bigger, UV-mapped as the layout unwraps a box, built once for classic and once
+      for slim arms; a skin's one `ModelMaterial` with its picture, cut out, shared by everyone
+      wearing it, so players still draw batched with the light in each part's tag (§5.5).
+      Armour is boxes over the parts in its colour; tools are held upright along the arm.
+    - **Settings:** a Skin tab with a turning preview of the model (a camera of its own
+      rendering to a picture), a PNG file field, a list of those in `skins/` under the data
+      directory, selecting one of which wears it, the arms (set from the skin's alpha as it's
+      chosen), Default Skin, and what's worn or why a file can't be. No file dialog: `rfd`
+      pulls in a desktop portal stack, and the folder list covers it.
+    - **Saving:** `PlayerState::skin` names the file in the world's `skins/` by its hash, with
+      its arms, so each is kept once; only names a hash gives are read back. Old saves read as
+      wearing none, so the format's unchanged.
+    - **Camera** (`player::input::follow_look`): the `CameraView` action (F5) cycles first
+      person, behind and in front, saved in the settings. Third person sits 4 blocks out,
+      pulled 0.3 short of the nearest block on five rays (the line and four round it). The
+      player's own model's drawn in third person, and in first only into the sun's shadows
+      (`SHADOW_ONLY_LAYER`).
+    - **First person** (`src/client/hand.rs`): the right arm and what's held, drawn on layer 1
+      by a camera hung from the world's, after it, with its own multisampled depth, cleared
+      clear and laid over the world's picture premultiplied: they never go into walls and the
+      world's depth of field and TAA don't touch them. It's also the UI's camera, so the UI's
+      over the arm. Cameras that draw a model of their own are `ModelCamera`s, and what follows
+      the world's camera looks for a `WorldCamera`. Models in view are lit `in_view`: by the
+      sky light and block light of where they are, in their tags as every model's, against
+      their material's `daylight`, which the client sets from the sun's height, as that camera
+      has none of the world's lights, fog or curve. Swing (on `Swing`), walking bob, a lower
+      and raise as what's held changes, and eating (on `Eat`) are `HandMotion`. Items are drawn
+      as their pictures a pixel thick, dropped ones too.
+    - **Tests:** skin validation (sizes, formats, the byte limit, garbled files, a huge size
+      claimed), both layouts' and both arm styles' faces by texel, the overlay's alpha and
+      boxes, a skin round trip and refusal as it's read, the default by name, the save format
+      and its file names, a skin shown to another client, taken off and saved as its wearer
+      leaves (`tests/multiplayer.rs`), the views' cycle and placement, the pull-in, the hand
+      hidden but in first person while playing, and its swap, swing, bob and eating.
 - ☑ **M-U1 Menus.** The game opens on a title screen instead of straight into a world, and
   every setting lives in menus rather than environment variables:
   - **Title screen:** Singleplayer, Multiplayer, Settings, Quit, over a slowly panning view of a

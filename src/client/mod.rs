@@ -10,6 +10,7 @@ pub mod creatures;
 pub mod critters;
 pub mod drops;
 pub mod edits;
+pub mod hand;
 pub mod join;
 pub mod model_light;
 pub mod models;
@@ -109,6 +110,7 @@ impl Plugin for ClientPlugin {
                     clock::follow_clock.run_if(not(is_authority)),
                     join::send_pose.run_if(in_state(ClientState::Connected)),
                     player::wear_own_skin,
+                    player::hold_own_items,
                     join::report_connection,
                     (
                         others::see_players,

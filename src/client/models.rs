@@ -18,13 +18,15 @@ use super::animation::{self, arm_swing, breath, ease, ease_angle, stride_swing, 
 use super::drops::DropLooks;
 use super::model_light::{coloured, ModelLook, ModelMaterial, ModelMaterials};
 use super::others::{move_seen, ArmSwing, SeenPlayer};
-use super::player::{ModelCamera, OwnSkin, WorldCamera};
+use super::player::{LocalPlayer, ModelCamera, OwnSkin, WorldCamera};
 use super::skins::{self, load_skins, Part, SkinLooks, Wearing, BODY, HEAD, LEGS, PIXEL};
+use crate::chunks::inner_leaves::SHADOW_ONLY_LAYER;
 use crate::clouds::spawn_clouds;
 use crate::items::{Item, Piece};
 use crate::player::name::PlayerName;
 use crate::player::PlayerLook;
-use crate::preferences::Preferences;
+use crate::preferences::{Preferences, View};
+use crate::protocol::Swing;
 use crate::server::drops::SIZE;
 use crate::server::{HeldItem, Worn};
 use crate::skin::{ArmStyle, Skin};
@@ -68,11 +70,12 @@ impl Plugin for DrawPlayersPlugin {
         }
         app.add_systems(Startup, (load_skins, make_looks).after(spawn_clouds))
             .add_observer(draw_player)
+            .add_observer(draw_own_body)
             .add_observer(draw_preview)
             .add_systems(
                 Update,
                 (
-                    walk.after(move_seen),
+                    (follow_own_body, walk).chain().after(move_seen),
                     (follow_preview, dress).chain(),
                     hold,
                     wear,
@@ -276,6 +279,74 @@ fn spawn_model(
         yaw: None,
         look: Vec2::ZERO,
         seed: animation::hash(body.to_bits() as u32, 1).to_bits(),
+    }
+}
+
+/// The local player's own model, on an entity of its own as others' are, drawn as they're seen
+/// in third person, and in first person only into the sun's shadows, and going with them.
+#[derive(Component)]
+#[relationship(relationship_target = OwnBody)]
+struct BodyOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = BodyOf, linked_spawn)]
+struct OwnBody(Entity);
+
+type OwnBodyParts<'a> = (
+    &'a mut Transform,
+    &'a mut PlayerLook,
+    &'a mut ArmSwing,
+    &'a mut Visibility,
+    &'a mut Propagate<RenderLayers>,
+);
+
+fn draw_own_body(
+    add: On<Add<LocalPlayer>>,
+    skins: Res<SkinLooks>,
+    looks: Res<PlayerLooks>,
+    mut commands: Commands,
+) {
+    let body = commands
+        .spawn((
+            BodyOf(add.entity),
+            Transform::default(),
+            // until it's where they are
+            Visibility::Hidden,
+            Propagate(RenderLayers::default()),
+            PlayerLook::default(),
+            ArmSwing::default(),
+        ))
+        .id();
+    let model = spawn_model(body, add.entity, &skins, &looks, &mut commands);
+    commands.entity(body).insert(model);
+}
+
+// Puts the local player's model where they are, looking the way they do, seen in third person
+// and only casting its shadow in first, and swings its arm as they swing theirs.
+fn follow_own_body(
+    preferences: Res<Preferences>,
+    players: Query<(&Transform, &PlayerLook, &OwnBody)>,
+    mut bodies: Query<OwnBodyParts, Without<OwnBody>>,
+    mut swings: MessageReader<Swing>,
+) {
+    let swung = swings.read().count() > 0;
+    for (feet, look, body) in &players {
+        let Ok((mut at, mut looks, mut swing, mut visibility, mut layers)) = bodies.get_mut(body.0)
+        else {
+            continue;
+        };
+        at.translation = feet.translation;
+        *looks = *look;
+        if swung {
+            swing.0 = 0.0;
+        }
+        visibility.set_if_neq(Visibility::Inherited);
+        let seen = if preferences.view == View::FirstPerson {
+            RenderLayers::layer(SHADOW_ONLY_LAYER)
+        } else {
+            RenderLayers::default()
+        };
+        layers.set_if_neq(Propagate(seen));
     }
 }
 
@@ -516,7 +587,7 @@ fn hold(
         let mut hand = commands.entity(model.held);
         match item.0 {
             Some(item) => {
-                let (mesh, material) = looks.of(item, &mut meshes);
+                let (mesh, material) = looks.of(item, false, &mut meshes);
                 hand.insert((
                     Mesh3d(mesh),
                     MeshMaterial3d(material),

@@ -39,6 +39,29 @@ pub struct Preferences {
     pub audio: Volumes,
     pub accessibility: Accessibility,
     pub skin: SkinSettings,
+    /// Where the player's seen from, as the camera view key cycles it.
+    pub view: View,
+}
+
+/// Where the camera is: in the player's eyes, or out behind them or in front, looking back.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum View {
+    #[default]
+    FirstPerson,
+    Behind,
+    InFront,
+}
+
+impl View {
+    /// The view after this one, as the camera view key goes round them.
+    pub fn next(self) -> Self {
+        match self {
+            View::FirstPerson => View::Behind,
+            View::Behind => View::InFront,
+            View::InFront => View::FirstPerson,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -184,6 +207,7 @@ impl Preferences {
                 crosshair: Crosshair::default(),
             },
             skin: SkinSettings::default(),
+            view: View::default(),
         }
     }
 

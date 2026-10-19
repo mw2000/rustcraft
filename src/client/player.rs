@@ -1,8 +1,10 @@
 use bevy::prelude::*;
 use bevy_replicon::prelude::ClientId;
 
+use crate::inventory::{Hotbar, Inventory};
 use crate::player::{PlayerOwner, EYE_HEIGHT};
 use crate::protocol::SetSkin;
+use crate::server::{HeldItem, Worn};
 use crate::skin::Skin;
 
 /// On the player this App's client plays as: the one its input moves and its camera hangs from.
@@ -92,5 +94,33 @@ pub(super) fn wear_own_skin(
             commands.entity(player).remove::<Skin>();
         }
         _ => {}
+    }
+}
+
+/// Keeps what the local player holds and wears on them, as the server keeps it on others for
+/// everyone to see, for their own model and their hand to show.
+#[allow(clippy::type_complexity)]
+pub(super) fn hold_own_items(
+    players: Query<
+        (
+            Entity,
+            &Inventory,
+            &Hotbar,
+            Option<&HeldItem>,
+            Option<&Worn>,
+        ),
+        (With<LocalPlayer>, Or<(Changed<Inventory>, Changed<Hotbar>)>),
+    >,
+    mut commands: Commands,
+) {
+    for (player, inventory, hotbar, held, worn) in &players {
+        let holds = HeldItem(hotbar.held(inventory).map(|stack| stack.item));
+        let wears = Worn(inventory.armour.map(|stack| stack.map(|s| s.item)));
+        if held != Some(&holds) {
+            commands.entity(player).insert(holds);
+        }
+        if worn != Some(&wears) {
+            commands.entity(player).insert(wears);
+        }
     }
 }

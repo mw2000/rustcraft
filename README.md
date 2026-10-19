@@ -29,6 +29,7 @@ The game opens on the title screen, over a view of a world's horizon:
   - *Controls:* mouse sensitivity, inverting the mouse, and a key for every action: click one and press the key or mouse button it should be. Keys bound twice show in red, and Reset Keys puts them all back.
   - *Audio:* the volume, and the effects, ambience and music each on their own.
   - *Accessibility:* the view's tilt when you're hurt, larger text, and the crosshair's style.
+  - *Skin:* how others see you. Type the path of a skin, a 64×64 or 64×32 PNG in Minecraft's layout of up to 32 KB, or keep yours in the `skins` folder under your data directory and pick one from the list; it shows on a turning model beside them. Classic or slim arms are set from the skin and can be switched. Default Skin goes back to one of the game's own, chosen by your name.
 
 Escape in the game opens the game menu: Back to Game, Settings, Open to Friends (see below), and Save and Quit to Title, which saves the world and goes back to the title screen, ready to play another. Escape goes back a page anywhere in the menus, Tab and the arrow keys move between buttons, and Enter presses them.
 
@@ -61,6 +62,7 @@ These are the keys as they start; any can be changed in Settings, Controls.
 - Staying safe: nothing ever appears where a torch or lantern lights the ground, so a lit base is safe, and walls and a roof keep out what comes from further off. Light your way through caves.
 - Fighting: swords (2 of a material and a stick at a crafting table, in wood, stone, copper, iron and bright steel) hit hardest and quickest, axes nearly as hard but slower. Hitting while you're coming down from a jump is a critical hit, half as hard again. Armour, a helmet, chestplate, leggings and boots of leather, iron or bright steel, goes in the four slots beside the inventory and takes part of every blow, wearing as it does; the bar over your hearts shows how much you wear. When you're hit the view shakes and a red mark round the crosshair shows where it came from.
 - M opens the map of the land you've explored, centred on you: the arrow is you and the way you face, with the world's spawn, your bed and your friends marked. Scroll to zoom, drag to look around, and M or Escape closes it. It fills in as you go, a few hundred blocks around you, and it's kept on your computer with the world, or under the server's address when you join one.
+- F5 goes round first person, third person from behind, and third person from in front looking back at you.
 - `[` and `]` move the sun, and F1 shows the debug overlay.
 
 ## Commands
