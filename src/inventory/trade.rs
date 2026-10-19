@@ -6,28 +6,26 @@
 //! villager looked at is named under the crosshair.
 
 use bevy::picking::events::PointerPress;
-use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use bevy::ui_widgets::Button;
 
 use super::icons::{counted_icon, ItemIcons};
+use super::look::{card, panel, shade, title, QUIET};
 use super::Inventory;
 use crate::client::player::LocalPlayer;
 use crate::controls::{Action, Controls};
 use crate::creatures::{Creature, CreatureKind, Villager};
 use crate::game_mode::GameMode;
 use crate::interaction::TargetCreature;
-use crate::menu::{font, GameState, InWorld, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
+use crate::menu::{font, GameState, InWorld, TEXT_SHADOW};
 use crate::protocol::{Trade, TradeOffers, UseCreature};
 use crate::trading::{Offer, OFFERED};
 
 // In pixels, as the crafting list's cards, but wider for the count left.
-const CARD_WIDTH: f32 = 220.0;
-const CARD_HEIGHT: f32 = 44.0;
-const CARD_BORDER: f32 = 2.0;
-// Over a trade that can't be made.
-const DIMMED: Color = Color::srgba(0.0, 0.0, 0.0, 0.65);
+const CARD_WIDTH: f32 = 240.0;
+const CARD_HEIGHT: f32 = 46.0;
+// What's sold out says so in red.
+const SOLD_OUT: Color = Color::srgb(0.95, 0.45, 0.4);
 
 /// The villager the inventory screen's open at, if it's one, its name, and its trades as the
 /// server last sent them, none until it's sent them. It all goes as the screen closes.
@@ -46,7 +44,7 @@ pub(super) struct TradeName;
 
 // A button making the trade at its place among those offered.
 #[derive(Component)]
-pub(super) struct TradeCard(usize);
+pub(super) struct TradeCard(pub(super) usize);
 
 // The villager looked at's name, under the crosshair.
 #[derive(Component)]
@@ -62,33 +60,21 @@ pub fn called(villager: &Villager, kind: CreatureKind) -> String {
 pub(super) fn spawn_trade(row: &mut ChildSpawnerCommands) {
     row.spawn((
         TradePanel,
-        Node {
-            display: Display::None,
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(8.0),
-            ..default()
-        },
+        // shown by `show_trade` while the screen's open at a villager
+        panel(),
     ))
     .with_children(|panel| {
-        panel.spawn((TradeName, Text::new(""), font(18.0), TEXT_SHADOW));
+        panel.spawn((TradeName, title("")));
+        panel.spawn((
+            Text::new("Trades today"),
+            font(14.0),
+            TextColor(QUIET),
+            TEXT_SHADOW,
+            Pickable::IGNORE,
+        ));
         for offer in 0..OFFERED {
             panel
-                .spawn((
-                    TradeCard(offer),
-                    Button,
-                    Hovered::default(),
-                    Node {
-                        width: Val::Px(CARD_WIDTH),
-                        height: Val::Px(CARD_HEIGHT),
-                        border: UiRect::all(Val::Px(CARD_BORDER)),
-                        padding: UiRect::horizontal(Val::Px(6.0)),
-                        column_gap: Val::Px(6.0),
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(BUTTON_COLOR),
-                    BorderColor::all(BUTTON_BORDER_COLOR),
-                ))
+                .spawn((TradeCard(offer), card(CARD_WIDTH, CARD_HEIGHT)))
                 .observe(trade);
         }
     });
@@ -98,6 +84,7 @@ pub(super) fn spawn_trade(row: &mut ChildSpawnerCommands) {
 fn trade(
     press: On<PointerPress>,
     cards: Query<&TradeCard>,
+    keys: Res<ButtonInput<KeyCode>>,
     view: Res<TradeView>,
     mut trades: MessageWriter<Trade>,
 ) {
@@ -107,9 +94,11 @@ fn trade(
         return;
     };
     if view.offers.get(card.0).is_some_and(|&(_, left)| left > 0) {
+        // shift-clicked, as many times as can be paid for
         trades.write(Trade {
             villager,
             offer: card.0 as u8,
+            all: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
         });
     }
 }
@@ -205,29 +194,43 @@ pub(super) fn show_trade(
             .despawn_related::<Children>()
             .with_children(|card| {
                 card.spawn(counted_icon(&icons, takes.0, takes.1));
-                card.spawn((Text::new(">"), font(16.0), TEXT_SHADOW, Pickable::IGNORE));
+                card.spawn(arrow());
                 card.spawn(counted_icon(&icons, gives.0, gives.1));
-                let stock = match left {
-                    0 => "sold out".to_string(),
-                    left => format!("{left} left"),
+                let (stock, colour) = match left {
+                    0 => ("Sold out".to_string(), SOLD_OUT),
+                    left => (format!("{left} left"), QUIET),
                 };
-                card.spawn((Text::new(stock), font(14.0), TEXT_SHADOW, Pickable::IGNORE));
+                card.spawn((
+                    Text::new(stock),
+                    font(14.0),
+                    TextColor(colour),
+                    TEXT_SHADOW,
+                    Pickable::IGNORE,
+                    Node {
+                        margin: UiRect::left(Val::Auto),
+                        ..default()
+                    },
+                ));
                 if !makeable {
-                    card.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(0.0),
-                            right: Val::Px(0.0),
-                            top: Val::Px(0.0),
-                            bottom: Val::Px(0.0),
-                            ..default()
-                        },
-                        BackgroundColor(DIMMED),
-                        Pickable::IGNORE,
-                    ));
+                    card.spawn(shade());
                 }
             });
     }
+}
+
+// The arrow from what a trade takes to what it gives.
+fn arrow() -> impl Bundle {
+    (
+        Text::new("→"),
+        font(18.0),
+        TextColor(QUIET),
+        TEXT_SHADOW,
+        Pickable::IGNORE,
+        Node {
+            margin: UiRect::horizontal(Val::Px(6.0)),
+            ..default()
+        },
+    )
 }
 
 /// The label naming the villager looked at, under the crosshair.

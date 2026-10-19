@@ -114,22 +114,26 @@ fn spawn_hotbar(mut commands: Commands, icons: Res<ItemIcons>) {
 }
 
 // The number keys choose a slot, and the wheel steps through them, but only while playing: over
-// the inventory or the block picker it's theirs, to scroll their lists.
+// the inventory or the block picker it's theirs, to scroll their lists. Over the survival
+// inventory screen the number keys are its too, swapping the slot under the pointer with the
+// hotbar's.
 fn select_slot(
     controls: Controls,
     state: Res<State<GameState>>,
     scroll: Res<AccumulatedMouseScroll>,
-    mut hotbar: Query<&mut Hotbar, With<LocalPlayer>>,
+    mut hotbar: Query<(&mut Hotbar, Option<&GameMode>), With<LocalPlayer>>,
     // how far the wheel's turned towards the next notch
     mut notches: Local<f32>,
 ) {
-    let Ok(mut hotbar) = hotbar.single_mut() else {
+    let Ok((mut hotbar, mode)) = hotbar.single_mut() else {
         return;
     };
-    if let Some(slot) = Action::SLOTS
+    let survival_screen =
+        *state.get() == GameState::Inventory && mode.is_some_and(|mode| !mode.has_every_block());
+    let key = Action::SLOTS
         .iter()
-        .position(|&slot| controls.just_pressed(slot))
-    {
+        .position(|&slot| controls.just_pressed(slot));
+    if let Some(slot) = key.filter(|_| !survival_screen) {
         hotbar.selected = slot;
     }
     if *state.get() != GameState::Playing {

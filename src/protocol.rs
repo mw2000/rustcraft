@@ -1,7 +1,7 @@
 //! What clients and the server send each other (§4.4). Blocks travel by name (§4.1).
 //!
 //! A player's inventory changes only on the server (INV-4): clients ask with `InventoryClick`,
-//! `CloseInventory`, `DropItem`, `PickBlock` and `Craft`, and placing a block in survival takes
+//! `InventoryDrag`, `CloseInventory`, `DropItem`, `PickBlock` and `Craft`, and placing a block in survival takes
 //! it from the slot `RequestEdit` names. In one App the change is made in the frame it's asked
 //! for, to the same `Inventory`; from M0.6 the server replicates each player's to its owner.
 //! Containers too (§5.2): a player opens one with `UseBlock`, clicks on its slots are
@@ -47,6 +47,7 @@ use crate::creatures::{
     Condition, Creature, CreaturePose, Flinches, Missile, Stance, Vanishing, Villager,
 };
 use crate::game_mode::GameMode;
+use crate::inventory::slots::{Place, Spread};
 use crate::inventory::{Click, Inventory};
 use crate::items::Item;
 use crate::player::name::PlayerName;
@@ -65,7 +66,7 @@ pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -93,6 +94,7 @@ impl Plugin for ProtocolPlugin {
             .add_server_message::<TimeSync>(Channel::Ordered)
             // in order, as each click starts from where the last left the inventory
             .add_client_message::<InventoryClick>(Channel::Ordered)
+            .add_client_message::<InventoryDrag>(Channel::Ordered)
             .add_client_message::<CloseInventory>(Channel::Ordered)
             .add_client_message::<DropItem>(Channel::Ordered)
             .add_client_message::<PickBlock>(Channel::Ordered)
@@ -244,6 +246,17 @@ pub struct InventoryClick {
     pub container: Option<I64Vec3>,
     pub slot: u8,
     pub click: Click,
+}
+
+/// A drag across the inventory screen's slots at `places`, in the order it crossed them,
+/// sharing the stack on the cursor over them as `spread` says, in one request so it's made
+/// whole or not at all (`Slots::drag`). `container` names the container open, as a click's
+/// does, for drags crossing its slots.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct InventoryDrag {
+    pub container: Option<I64Vec3>,
+    pub places: Vec<Place>,
+    pub spread: Spread,
 }
 
 /// The inventory screen closing, which puts the stack on the cursor back, or drops what
@@ -587,12 +600,14 @@ pub struct UseCreature {
 }
 
 /// A player making the trade `offer`, by its place among those the villager `villager` offers,
-/// once, as clicking it does. The server checks they're trading with it and have what it takes.
+/// once, as clicking it does, or with `all` as many times as they can pay for and it has stock,
+/// as shift-clicking does. The server checks they're trading with it and have what it takes.
 #[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Trade {
     #[entities]
     pub villager: Entity,
     pub offer: u8,
+    pub all: bool,
 }
 
 /// The trades the villager a player's trading with offers them, each with how many more times

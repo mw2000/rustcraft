@@ -5,7 +5,7 @@
 //! names over their heads (M-A2, `client::animation`). Every player shares the meshes, and
 //! everyone wearing a skin its material, so Bevy draws them batched.
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::TAU;
 
 use bevy::app::{HierarchyPropagatePlugin, Propagate};
 use bevy::camera::visibility::RenderLayers;
@@ -15,7 +15,8 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use super::animation::{self, arm_swing, breath, ease, ease_angle, stride_swing, wrap};
-use super::drops::DropLooks;
+use super::drops::{is_flat, DropLooks};
+use super::hand::grip;
 use super::model_light::{coloured, ModelLook, ModelMaterial, ModelMaterials};
 use super::others::{move_seen, ArmSwing, SeenPlayer};
 use super::player::{LocalPlayer, ModelCamera, OwnSkin, WorldCamera};
@@ -51,6 +52,11 @@ const LABEL_HEIGHT: f32 = 2.4;
 // boots and helmets a little more.
 const ARMOUR_GROW: f32 = 0.75;
 const BOOT_GROW: f32 = 1.0;
+// How much bigger than a dropped item what's held is drawn, a cube and a picture, so it reads at
+// a distance, and how far forward the arm holding it's raised, in radians.
+const HELD_BLOCK_SCALE: f32 = 1.5;
+const HELD_PICTURE_SCALE: f32 = 2.0;
+const HOLDING_RAISE: f32 = 0.4;
 // The skin's preview is drawn on a layer of its own, out of the way high over the world, so
 // it's lit as under the open sky, turning this many radians
 // a second, seen from in front and a little above with a narrow lens.
@@ -518,6 +524,7 @@ fn dress(
 // more the faster, and the right arm as they break or place; and breathes.
 fn walk(
     time: Res<Time>,
+    held: Query<&HeldItem>,
     mut models: Query<(&mut Transform, &PlayerLook, &mut ArmSwing, &mut Model)>,
     mut parts: Query<&mut Transform, Without<Model>>,
 ) {
@@ -551,7 +558,10 @@ fn walk(
             }
         }
         swung.0 += dt;
-        let raised = [0.0, arm_swing(swung.0)];
+        // the right arm's a little forward while it holds something, as if ready to use it
+        let holding = held.get(model.player).is_ok_and(|held| held.0.is_some());
+        let ready = if holding { HOLDING_RAISE } else { 0.0 };
+        let raised = [0.0, arm_swing(swung.0) + ready];
         for ((arm, side), raised) in model.arms.into_iter().zip([-1.0, 1.0]).zip(raised) {
             if let Ok(mut arm) = parts.get_mut(arm) {
                 arm.rotation = Quat::from_rotation_x(angle * side * ARM_SWING + raised);
@@ -569,7 +579,7 @@ fn walk(
 }
 
 // Puts what each player holds in their hand as it changes: a block in their grip, and a tool or
-// another item upright along their arm, pointing forward, as a sword's held.
+// another picture by its handle, its head up and forward, as a sword's held.
 fn hold(
     models: Query<Ref<Model>>,
     held: Query<Ref<HeldItem>>,
@@ -602,16 +612,21 @@ fn hold(
     }
 }
 
-/// Where `item`'s held in the hand, from the bottom of the arm, which hangs down along -y.
+/// Where `item`'s held in the hand, from the bottom of the arm, which hangs down along -y with
+/// the model facing -z: a block as a small cube in the fist, and a picture gripped near its
+/// bottom left corner, a tool's handle, its head reaching up and forward and its face turned out
+/// to the side, drawn about twice a dropped item's size so it reads at a distance, as the first
+/// person view holds it (`hand::grip`).
 pub(super) fn held_in_hand(item: Item) -> Transform {
-    let grip = Vec3::new(1.0, -10.0, -1.0) * PIXEL;
-    if item.block().is_some() {
-        return Transform::from_translation(grip + Vec3::NEG_Y * SIZE / 2.0);
+    let fist = Vec3::new(1.0, -10.0, -1.0) * PIXEL;
+    if !is_flat(item) {
+        return Transform::from_translation(fist + Vec3::NEG_Y * SIZE * HELD_BLOCK_SCALE / 2.0)
+            .with_scale(Vec3::splat(HELD_BLOCK_SCALE));
     }
-    // its picture's handle in the hand and its head up and forward, facing out sideways
-    let turned = Quat::from_rotation_y(FRAC_PI_2);
-    Transform::from_translation(grip + turned * Vec3::new(SIZE, SIZE, 0.0) * 0.35)
-        .with_rotation(turned)
+    // turned out and a little back, so the face shows from behind as well as from the side
+    let at = fist + Vec3::X * 2.0 * PIXEL;
+    let (reach, facing) = (Vec3::new(0.0, 0.6, -1.0), Vec3::new(1.0, 0.0, 0.7));
+    grip(item, reach, facing, HELD_PICTURE_SCALE, at)
 }
 
 // Shows the armour each player wears as it changes, in its material's colour.

@@ -1,5 +1,6 @@
 //! Drawing the items lying in the world, which the server moves (`server::drops`): each a little
-//! cube of its block, or the picture of an item that isn't one given a pixel's thickness,
+//! cube of its block, or the picture of an item that isn't one, or of a flat block such as a
+//! torch or a flower, given a pixel's thickness,
 //! spinning and bobbing over the spot. Every one of an item shares a mesh, and all blocks share a material and all pictures
 //! another, so Bevy draws them batched.
 
@@ -11,7 +12,7 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use super::model_light::{ModelLook, ModelMaterial, ModelMaterials};
-use crate::block::{BlockType, Face, TILE_COUNT};
+use crate::block::{BlockType, Face, RenderStyle, TILE_COUNT};
 use crate::clouds::spawn_clouds;
 use crate::inventory::icons::{load_icons, ItemIcons};
 use crate::items::Item;
@@ -43,8 +44,10 @@ pub(super) struct DropLooks {
     material: Handle<ModelMaterial>,
     sprites: Handle<ModelMaterial>,
     pub(super) in_view: [Handle<ModelMaterial>; 2],
-    // a row of bits for each row of each picture, from the top, the lowest bit leftmost
+    // a row of bits for each row of each picture, from the top, the lowest bit leftmost, and
+    // the same for each of the block atlas's tiles
     drawn: Vec<[u16; 16]>,
+    tiles_drawn: Vec<[u16; 16]>,
     meshes: HashMap<Item, Handle<Mesh>>,
     grass: LinearRgba,
 }
@@ -57,15 +60,26 @@ impl DropLooks {
         in_view: bool,
         meshes: &mut Assets<Mesh>,
     ) -> (Handle<Mesh>, Handle<ModelMaterial>) {
-        let (grass, drawn) = (self.grass, &self.drawn);
+        let (grass, drawn, tiles) = (self.grass, &self.drawn, &self.tiles_drawn);
         let mesh = self
             .meshes
             .entry(item)
             .or_insert_with(|| match (item.block(), item.sprite()) {
+                (Some(block), _) if is_flat(item) => {
+                    let tile = block.tile(Face::Side);
+                    let colour = if tile.tinted() {
+                        grass
+                    } else {
+                        LinearRgba::WHITE
+                    };
+                    let cell = tile.atlas_cell() as usize;
+                    meshes.add(picture(cell, TILE_COUNT, &tiles[cell], colour))
+                }
                 (Some(block), _) => meshes.add(cube(block, grass)),
                 (None, sprite) => {
                     let sprite = sprite.expect("an item has a block or a sprite");
-                    meshes.add(picture(sprite, &drawn[sprite]))
+                    let white = LinearRgba::WHITE;
+                    meshes.add(picture(sprite, Item::sprites(), &drawn[sprite], white))
                 }
             })
             .clone();
@@ -78,6 +92,14 @@ impl DropLooks {
         };
         (mesh, material.clone())
     }
+}
+
+/// Whether `item` is drawn as a picture given thickness rather than a cube: every item that isn't
+/// a block, and blocks that are flat in the world too, torches and plants, as Minecraft draws
+/// them in the hand.
+pub(super) fn is_flat(item: Item) -> bool {
+    item.block()
+        .is_none_or(|block| matches!(block.style(), RenderStyle::Cross | RenderStyle::Torch))
 }
 
 // The cube drawn for a dropped item, a child of it so the server's `Transform` is left alone,
@@ -112,24 +134,37 @@ fn make_material(
         .data
         .as_deref()
         .expect("the items' pictures are kept until drawn");
-    let drawn = (0..Item::sprites())
-        .map(|sprite| {
-            std::array::from_fn(|y| {
-                (0..16).fold(0, |row, x| {
-                    let alpha = data[(y * width + sprite * 16 + x) * 4 + 3];
-                    row | u16::from(alpha >= 128) << x
-                })
-            })
-        })
-        .collect();
+    let drawn = drawn_pixels(data, width, Item::sprites());
+    let atlas = images.get(blocks).expect("the block atlas is loaded");
+    let atlas_data = atlas
+        .data
+        .as_deref()
+        .expect("the block atlas is kept until drawn");
+    let tiles_drawn = drawn_pixels(atlas_data, atlas.width() as usize, TILE_COUNT);
     commands.insert_resource(DropLooks {
         material,
         sprites,
         in_view,
         drawn,
+        tiles_drawn,
         meshes: HashMap::new(),
         grass: icons.grass().into(),
     });
+}
+
+// Which pixels of each of a strip of `tiles` 16-pixel tiles, `width` pixels across, are drawn:
+// a row of bits for each row, from the top, the lowest bit leftmost.
+fn drawn_pixels(data: &[u8], width: usize, tiles: usize) -> Vec<[u16; 16]> {
+    (0..tiles)
+        .map(|tile| {
+            std::array::from_fn(|y| {
+                (0..16).fold(0, |row, x| {
+                    let alpha = data[(y * width + tile * 16 + x) * 4 + 3];
+                    row | u16::from(alpha >= 128) << x
+                })
+            })
+        })
+        .collect()
 }
 
 fn draw_drop(
@@ -165,13 +200,13 @@ fn spin_and_bob(time: Res<Time>, mut cubes: Query<(&Spinning, &mut Transform)>) 
     }
 }
 
-// A picture `SIZE` across around its middle, upright, facing +z, drawing tile `sprite` of the
-// items' atlas, a pixel thick: its front and back, and a side along each edge of a pixel
-// that's drawn against one that isn't, in that pixel's colour. `drawn` has a row of bits for
-// each row of its pixels.
-fn picture(sprite: usize, drawn: &[u16; 16]) -> Mesh {
+// A picture `SIZE` across around its middle, upright, facing +z, drawing tile `sprite` of a strip
+// of `tiles`, a pixel thick: its front and back, and a side along each edge of a pixel that's
+// drawn against one that isn't, in that pixel's colour, tinted `colour`. `drawn` has a row of
+// bits for each row of its pixels.
+fn picture(sprite: usize, tiles: usize, drawn: &[u16; 16], colour: LinearRgba) -> Mesh {
     let pixel = SIZE / 16.0;
-    let tiles = Item::sprites() as f32;
+    let tiles = tiles as f32;
     let is_drawn = |x: i32, y: i32| {
         (0..16).contains(&x) && (0..16).contains(&y) && drawn[y as usize] >> x & 1 == 1
     };
@@ -235,6 +270,7 @@ fn picture(sprite: usize, drawn: &[u16; 16]) -> Mesh {
             }
         }
     }
+    let colours = vec![colour.to_f32_array(); positions.len()];
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
@@ -242,6 +278,7 @@ fn picture(sprite: usize, drawn: &[u16; 16]) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colours)
     .with_inserted_indices(Indices::U16(indices))
 }
 

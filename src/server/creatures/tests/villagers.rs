@@ -271,13 +271,18 @@ fn test_trading_takes_the_price_gives_the_goods_and_refuses_without_payment() {
     let offers = stock.offers(calling);
     let (offer, left) = offers[0];
     // without what it takes, nothing changes
-    let trade = |app: &mut App| {
+    let trade_as = |app: &mut App, all| {
         app.world_mut().write_message(FromClient {
             client_id: ClientId::Server,
-            message: Trade { villager, offer: 0 },
+            message: Trade {
+                villager,
+                offer: 0,
+                all,
+            },
         });
         app.update();
     };
+    let trade = |app: &mut App| trade_as(app, false);
     trade(&mut app);
     let inventory = |app: &App| app.world().get::<Inventory>(player).unwrap().clone();
     assert_eq!(0, inventory(&app).count(offer.gives.0));
@@ -315,6 +320,23 @@ fn test_trading_takes_the_price_gives_the_goods_and_refuses_without_payment() {
         Some(Some(restocked.offers(calling).to_vec())),
         offered(&mut app).pop()
     );
+    // shift-clicking trades as many times as it can, here all it has left today, of the day's
+    // own first offer, which may not be yesterday's
+    let (today, left) = restocked.offers(calling)[0];
+    let (price, count) = today.takes;
+    let had = inventory(&app).count(today.gives.0);
+    for _ in 0..left {
+        app.world_mut()
+            .get_mut::<Inventory>(player)
+            .unwrap()
+            .add(ItemStack::new(price, count));
+    }
+    let paid = inventory(&app).count(price) - u32::from(left) * u32::from(count);
+    trade_as(&mut app, true);
+    let sold = app.world().get::<Townsfolk>(villager).unwrap().0.stock;
+    assert_eq!(0, sold.offers(calling)[0].1);
+    assert_eq!(paid, inventory(&app).count(price));
+    assert!(inventory(&app).count(today.gives.0) > had);
     // and walking off ends it
     app.world_mut()
         .get_mut::<Transform>(player)

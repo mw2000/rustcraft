@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
 
 use super::animation::{ease, smoothstep};
-use super::drops::DropLooks;
+use super::drops::{is_flat, DropLooks};
 use super::model_light::{ModelMaterial, ModelMaterials};
 use super::player::{LocalPlayer, ModelCamera, WorldCamera};
 use super::skins::{skin_look, SkinLooks, Wearing};
@@ -29,6 +29,7 @@ use crate::player::name::PlayerName;
 use crate::player::{Movement, Player};
 use crate::preferences::{Preferences, View};
 use crate::protocol::{Eat, Swing};
+use crate::server::drops::SIZE;
 use crate::server::HeldItem;
 use crate::skin::Skin;
 use crate::sky::sun_direction;
@@ -43,12 +44,17 @@ const HAND: Vec3 = Vec3::new(0.24, -0.18, -0.6);
 // How far the hand is from the shoulder, down the arm, as the skin's model has it.
 const ARM_LENGTH: f32 = 10.0 / 16.0;
 // Where what's held is from the hand, and how it's turned and how big it's drawn: a block
-// turned to show three faces, and a picture such as a tool upright and turned half towards
-// the eye, as it's gripped.
+// turned to show three faces, a small cube over the fist.
 const BLOCK_HELD: Vec3 = Vec3::new(-0.03, 0.05, -0.06);
-const BLOCK_SCALE: f32 = 0.6;
-const PICTURE_HELD: Vec3 = Vec3::new(-0.06, 0.13, -0.06);
-const PICTURE_SCALE: f32 = 0.9;
+const BLOCK_SCALE: f32 = 0.5;
+// A picture, a tool's or food's or a torch's, is gripped by its handle (`grip`) reaching up and
+// away from the eye, its head up and forward, and its face turned to the left and the eye, as
+// Minecraft holds tools: where the grip is from the fist, which way it reaches, which way its
+// face turns, and how big it's drawn.
+const PICTURE_HELD: Vec3 = Vec3::new(-0.02, 0.04, -0.02);
+const PICTURE_REACH: Vec3 = Vec3::new(-0.25, 0.75, -0.6);
+const PICTURE_FACING: Vec3 = Vec3::new(-0.8, 0.1, 0.6);
+const PICTURE_SCALE: f32 = 0.85;
 // How long a swing takes, in seconds, and how far it chops down and across, in radians, and
 // moves the hand in and up, in blocks.
 const SWING_SECONDS: f32 = 0.3;
@@ -359,15 +365,42 @@ fn move_hand(
 // Where `item`'s held in view, from the shoulder.
 fn held_in_view(item: Item) -> Transform {
     let hand = (HAND - SHOULDER).normalize() * ARM_LENGTH;
-    if item.block().is_some() {
-        Transform::from_translation(hand + BLOCK_HELD)
+    if !is_flat(item) {
+        return Transform::from_translation(hand + BLOCK_HELD)
             .with_rotation(Quat::from_rotation_y(PI / 4.0) * Quat::from_rotation_x(0.35))
-            .with_scale(Vec3::splat(BLOCK_SCALE))
-    } else {
-        Transform::from_translation(hand + PICTURE_HELD)
-            .with_rotation(Quat::from_rotation_y(-1.15) * Quat::from_rotation_z(0.1))
-            .with_scale(Vec3::splat(PICTURE_SCALE))
+            .with_scale(Vec3::splat(BLOCK_SCALE));
     }
+    grip(
+        item,
+        PICTURE_REACH,
+        PICTURE_FACING,
+        PICTURE_SCALE,
+        hand + PICTURE_HELD,
+    )
+}
+
+/// How a picture of `item`, drawn `scale` times a dropped one's size, is held with its grip at
+/// `at`, reaching along `reach` with its face as near `facing` as that leaves it. A tool's or
+/// food's picture lies on its tile's diagonal, its handle at the bottom left, so it's gripped
+/// there with the diagonal along `reach`; a flat block's, a torch's or a flower's, stands
+/// upright in its tile, so it's gripped low in the middle and stood along `reach`.
+pub(super) fn grip(item: Item, reach: Vec3, facing: Vec3, scale: f32, at: Vec3) -> Transform {
+    let along = reach.normalize();
+    let face = facing.reject_from(along).normalize();
+    let (x, y, held) = if item.block().is_some() {
+        (along.cross(face), along, Vec2::new(0.0, -0.3))
+    } else {
+        // the other diagonal, from its bottom right to its top left
+        let across = face.cross(along);
+        let x = (along - across) / std::f32::consts::SQRT_2;
+        let y = (along + across) / std::f32::consts::SQRT_2;
+        (x, y, Vec2::new(-0.3, -0.3))
+    };
+    let rotation = Quat::from_mat3(&Mat3::from_cols(x, y, face));
+    let held = (held * SIZE * scale).extend(0.0);
+    Transform::from_translation(at - rotation * held)
+        .with_rotation(rotation)
+        .with_scale(Vec3::splat(scale))
 }
 
 // Lights the hand's materials with the open sky's light as the day has it, as the hand's camera
@@ -432,6 +465,26 @@ mod tests {
         ] {
             assert!(!hand_shown(&state, View::FirstPerson), "{state:?}");
         }
+    }
+
+    #[test]
+    fn test_a_tool_is_gripped_by_its_handle_with_its_head_up_and_away() {
+        let held = held_in_view(Item::IronPickaxe);
+        let corner = |x: f32, y: f32| held.transform_point(Vec3::new(x, y, 0.0) * SIZE / 2.0);
+        let (handle, head) = (corner(-1.0, -1.0), corner(1.0, 1.0));
+        let fist = (HAND - SHOULDER).normalize() * ARM_LENGTH;
+        // the handle's by the fist, and the head over it and further from the eye
+        assert!(handle.distance(fist) < SIZE * 0.6, "{handle} {fist}");
+        assert!(head.y > handle.y + SIZE * 0.6 && head.z < handle.z - SIZE * 0.4);
+        // its face turned towards the eye, which is up the shoulder's +z from it
+        let face = held.rotation * Vec3::Z;
+        assert!(face.z > 0.3 && face.x < 0.0, "{face}");
+        // and blocks are cubes, torches pictures, held upright
+        assert!(!is_flat(Item::Block(BlockType::Planks)));
+        assert!(is_flat(Item::Block(BlockType::Torch)) && is_flat(Item::Bread));
+        let torch = held_in_view(Item::Block(BlockType::Torch));
+        let up = torch.rotation * Vec3::Y;
+        assert!(up.y > 0.6, "{up}");
     }
 
     #[test]

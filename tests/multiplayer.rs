@@ -2133,6 +2133,7 @@ fn test_a_joiner_trades_with_a_villager_and_is_refused_without_payment() {
     let trade = Trade {
         villager: shown,
         offer: 0,
+        all: false,
     };
     client.world_mut().write_message(trade);
     for _ in 0..20 {

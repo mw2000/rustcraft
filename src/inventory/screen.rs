@@ -2,48 +2,47 @@ use bevy::picking::events::PointerPress;
 use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use bevy::ui_widgets::Button;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use super::chest::{show_chest, spawn_chest};
-use super::furnace::{
-    container_stack, follow_container, show_furnace, spawn_furnace, ContainerSlot, ContainerView,
-};
+use super::furnace::{follow_container, show_furnace, spawn_furnace, ContainerView};
 use super::icons::{load_icons, stack_view, ItemIcons, StackView};
-use super::recipes::{describe, show_recipes, spawn_recipes, CraftingStation, RecipeCard};
+use super::look::{self, light_slots, panel, slot_frame, slot_grid, title, SlotAt, QUIET};
+use super::recipes::{show_recipes, spawn_recipes, CraftingStation};
+use super::slots::{Place, Slots, Spread};
+use super::tooltip::{show_tooltip, spawn_tooltip};
 use super::trade::{
     follow_offers, name_villager, show_trade, spawn_label, spawn_trade, talk, TradeView,
 };
 use super::{Click, Inventory, ARMOUR_SLOTS, HOTBAR_SLOTS, SLOTS};
 use crate::client::player::LocalPlayer;
+use crate::controls::{Action, Controls};
 use crate::game_mode::GameMode;
 use crate::interaction::TargetCreature;
-use crate::menu::{font, free_cursor, GameState, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
-use crate::protocol::{CloseInventory, InventoryClick};
+use crate::menu::{font, free_cursor, GameState, TEXT_SHADOW};
+use crate::protocol::{CloseInventory, InventoryClick, InventoryDrag};
 
-// In pixels: slots like the block picker's buttons, and the gap between the main inventory and
-// the hotbar under it.
-const SLOT_SIZE: f32 = 48.0;
-const SLOT_BORDER: f32 = 2.0;
-const SLOT_GAP: f32 = 4.0;
-const HOTBAR_GAP: f32 = 16.0;
-// between the slots and the recipes beside them
-const RECIPES_GAP: f32 = 24.0;
+// In pixels: between the main inventory and the hotbar under it, and between the panels.
+const HOTBAR_GAP: f32 = 10.0;
+const PANEL_GAP: f32 = 16.0;
 // half an icon, so the stack carried is held by its middle
 const CARRIED_OFFSET: f32 = 16.0;
+// How soon a second click on a slot makes a double click, in seconds.
+const DOUBLE_CLICK: f32 = 0.3;
 
-const HINT: &str = "Right click takes half a stack or puts down one, and shift-click moves a \
-                    stack across, puts armour on or crafts all you can";
-// What each armour slot's for, shown as it's hovered empty.
-const ARMOUR_NAMES: [&str; 4] = ["Helmet", "Chestplate", "Leggings", "Boots"];
+const HINT_COLOUR: Color = Color::srgb(0.8, 0.82, 0.86);
+const HINT_BACKING: Color = Color::srgba(0.05, 0.05, 0.07, 0.6);
+const HINT: &str = "Drag to share a stack · double-click gathers · shift-click moves across · \
+                    1-9 swaps with the hotbar · Q drops";
 
-/// In survival, the inventory (E) is the inventory screen: the main inventory's 27 slots over
-/// the hotbar's 9, as in Minecraft, the four armour slots to their left, beside the recipes that can be made by hand, or at the
-/// crafting table it was opened at, or beside the furnace's slots if it was opened at one, or
-/// under a chest's if it was opened at one of those.
-/// Clicks on the slots ask the server to move stacks about, and the stack picked up follows the
-/// mouse until it's put down. The game carries on behind it, as behind the block picker, and
-/// closing it puts the stack carried back.
+/// In survival, the inventory (E) is the inventory screen, in one look for every station
+/// (`look`): a panel with the main inventory's 27 slots over the hotbar's 9, as in Minecraft,
+/// and over them the armour worn, or the chest's slots, or the furnace's, if it was opened at
+/// one; beside it, a panel of the recipes that can be made by hand or at the crafting table it
+/// was opened at, or of a villager's trades. Clicks, drags and keys over the slots ask the
+/// server to move stacks about (`slots::Slots`), the stack picked up follows the mouse until
+/// it's put down, and what's hovered is described beside the pointer. The game carries on
+/// behind it, as behind the block picker, and closing it puts the stack carried back.
 pub struct InventoryScreenPlugin;
 
 impl Plugin for InventoryScreenPlugin {
@@ -51,6 +50,8 @@ impl Plugin for InventoryScreenPlugin {
         app.init_resource::<CraftingStation>()
             .init_resource::<ContainerView>()
             .init_resource::<TradeView>()
+            .init_resource::<Dragging>()
+            .init_resource::<LastPress>()
             .add_systems(Startup, (spawn_screen.after(load_icons), spawn_label))
             .add_systems(
                 Update,
@@ -61,12 +62,15 @@ impl Plugin for InventoryScreenPlugin {
                     (name_villager, talk.run_if(in_state(GameState::Playing)))
                         .run_if(resource_exists::<TargetCreature>),
                     (
+                        (drag, keys_over_slots).chain(),
                         carry_to_mouse,
-                        name_hovered_item,
                         show_recipes,
                         show_furnace,
                         show_chest,
                         show_trade,
+                        show_armour,
+                        light_slots,
+                        show_tooltip,
                     )
                         .run_if(in_state(GameState::Inventory)),
                 ),
@@ -79,15 +83,44 @@ impl Plugin for InventoryScreenPlugin {
 #[derive(Component)]
 struct Screen;
 
-#[derive(Component)]
-struct Slot(usize);
-
 // The stack on the cursor.
 #[derive(Component)]
 struct Carried;
 
+// The armour worn and what it's worth, over the inventory when no container's open.
 #[derive(Component)]
-struct ItemName;
+struct ArmourSection;
+
+#[derive(Component)]
+struct ArmourWorth;
+
+// The label over the player's own slots.
+#[derive(Component)]
+struct InventoryLabel;
+
+/// A drag in progress across the slots, from a press over a slot with a stack on the cursor
+/// until the button's let go: the slots crossed so far, in order, and how it shares.
+#[derive(Resource, Default, Debug)]
+pub struct Dragging(Option<(MouseButton, Spread, Vec<Place>)>);
+
+impl Dragging {
+    /// Whether a drag's going on.
+    pub fn active(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether the drag's crossed the slot at `place`, to be lit. A drag of one slot is still
+    /// only a click, and isn't lit.
+    pub fn crosses(&self, place: Place) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|(_, _, places)| places.len() > 1 && places.contains(&place))
+    }
+}
+
+// The last press on a slot, and when, to tell a double click by.
+#[derive(Resource, Default)]
+struct LastPress(Option<(Place, f32)>);
 
 fn spawn_screen(
     mut commands: Commands,
@@ -105,66 +138,55 @@ fn spawn_screen(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                row_gap: Val::Px(10.0),
+                row_gap: Val::Px(12.0),
                 display: Display::None,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
             // over the debug overlay, as the block picker is
             GlobalZIndex(1),
         ))
         .with_children(|screen| {
-            screen.spawn((
-                Text::new("Inventory"),
-                font(24.0),
-                TextColor(Color::WHITE),
-                TEXT_SHADOW,
-                Node {
-                    margin: UiRect::bottom(Val::Px(20.0)),
-                    ..default()
-                },
-            ));
             screen
                 .spawn(Node {
-                    column_gap: Val::Px(RECIPES_GAP),
+                    column_gap: Val::Px(PANEL_GAP),
+                    align_items: AlignItems::Start,
                     ..default()
                 })
                 .with_children(|row| {
-                    row.spawn(Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(SLOT_GAP),
-                        align_self: AlignSelf::End,
-                        margin: UiRect::right(Val::Px(HOTBAR_GAP - RECIPES_GAP)),
-                        ..default()
-                    })
-                    .with_children(|armour| {
-                        for slot in ARMOUR_SLOTS {
-                            spawn_slot(armour, &icons, slot);
-                        }
-                    });
-                    row.spawn(Node {
-                        flex_direction: FlexDirection::Column,
-                        ..default()
-                    })
-                    .with_children(|slots| {
-                        spawn_chest(slots, &icons);
-                        spawn_slots(slots, &icons, HOTBAR_SLOTS..SLOTS, 0.0);
-                        spawn_slots(slots, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP);
-                    });
+                    // beside the inventory, where Minecraft keeps its recipe book
                     spawn_recipes(row, &icons);
                     spawn_trade(row);
-                    spawn_furnace(row, &icons, &mut images, &mut layouts);
+                    row.spawn(panel()).with_children(|main| {
+                        spawn_armour(main, &icons);
+                        spawn_chest(main, &icons);
+                        spawn_furnace(main, &icons, &mut images, &mut layouts);
+                        main.spawn((
+                            InventoryLabel,
+                            title("Inventory"),
+                            Node {
+                                margin: UiRect::top(Val::Px(4.0)),
+                                ..default()
+                            },
+                        ));
+                        spawn_slots(main, &icons, HOTBAR_SLOTS..SLOTS, 0.0);
+                        spawn_slots(main, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP - 6.0);
+                    });
                 });
+            // on a dark strip, so it reads over bright sand and snow
             screen.spawn((
-                ItemName,
                 Text::new(HINT),
-                font(18.0),
+                font(15.0),
+                TextColor(HINT_COLOUR),
                 TEXT_SHADOW,
                 Node {
-                    margin: UiRect::top(Val::Px(10.0)),
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
                     ..default()
                 },
+                BackgroundColor(HINT_BACKING),
+                Pickable::IGNORE,
             ));
+            spawn_tooltip(screen);
             // last, so it's drawn over the slots
             screen.spawn((
                 Carried,
@@ -173,91 +195,221 @@ fn spawn_screen(
                     ..default()
                 },
                 Pickable::IGNORE,
+                GlobalZIndex(4),
                 children![stack_view(&icons, StackView::Cursor)],
             ));
         });
 }
 
-// A grid of `slots`, nine to a row, `gap` pixels below what's above it. Each is a button like
-// the block picker's, which `highlight_buttons` lights up under the pointer.
+// The four armour slots in a row, and what they're worth beside them. M4.2's crafting grid goes
+// beside them too.
+fn spawn_armour(main: &mut ChildSpawnerCommands, icons: &ItemIcons) {
+    main.spawn((
+        ArmourSection,
+        Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(look::SLOT_GAP),
+            margin: UiRect::bottom(Val::Px(4.0)),
+            ..default()
+        },
+    ))
+    .with_children(|row| {
+        for slot in ARMOUR_SLOTS {
+            spawn_slot(row, icons, Place::Own(slot as u8));
+        }
+        row.spawn((
+            ArmourWorth,
+            Text::new(""),
+            font(15.0),
+            TextColor(QUIET),
+            TEXT_SHADOW,
+            Node {
+                margin: UiRect::left(Val::Px(12.0)),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ));
+    });
+}
+
+// A grid of `slots`, nine to a row, `gap` pixels below what's above it.
 fn spawn_slots(
-    screen: &mut ChildSpawnerCommands,
+    parent: &mut ChildSpawnerCommands,
     icons: &ItemIcons,
     slots: std::ops::Range<usize>,
     gap: f32,
 ) {
-    screen.spawn(slot_grid(gap)).with_children(|grid| {
+    let grid = Node {
+        margin: UiRect::top(Val::Px(gap)),
+        ..slot_grid(HOTBAR_SLOTS as u16)
+    };
+    parent.spawn(grid).with_children(|grid| {
         for slot in slots {
-            spawn_slot(grid, icons, slot);
+            spawn_slot(grid, icons, Place::Own(slot as u8));
         }
     });
 }
 
-fn spawn_slot(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, slot: usize) {
+/// A slot at `place` with its stack in it, which presses on ask the server to change.
+pub(super) fn spawn_slot(parent: &mut ChildSpawnerCommands, icons: &ItemIcons, place: Place) {
+    let shows = match place {
+        Place::Own(slot) => StackView::Slot(usize::from(slot)),
+        Place::Container(slot) => StackView::Container(usize::from(slot)),
+    };
     parent
-        .spawn((Slot(slot), slot_button()))
-        .with_child(stack_view(icons, StackView::Slot(slot)))
-        .observe(click_slot);
+        .spawn(slot_frame(place))
+        .with_child(stack_view(icons, shows))
+        .observe(press_slot);
 }
 
-/// A grid of slots nine to a row, as wide as the hotbar, `gap` pixels below what's above it.
-pub(super) fn slot_grid(gap: f32) -> Node {
-    Node {
-        display: Display::Grid,
-        grid_template_columns: RepeatedGridTrack::px(HOTBAR_SLOTS as u16, SLOT_SIZE),
-        row_gap: Val::Px(SLOT_GAP),
-        column_gap: Val::Px(SLOT_GAP),
-        margin: UiRect::top(Val::Px(gap)),
-        ..default()
-    }
-}
-
-/// A slot's button, for an inventory's slot or a container's.
-pub(super) fn slot_button() -> impl Bundle {
-    (
-        Button,
-        Hovered::default(),
-        Node {
-            width: Val::Px(SLOT_SIZE),
-            height: Val::Px(SLOT_SIZE),
-            border: UiRect::all(Val::Px(SLOT_BORDER)),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        BackgroundColor(BUTTON_COLOR),
-        BorderColor::all(BUTTON_BORDER_COLOR),
-    )
-}
-
-// The server makes the change, as it does all changes to inventories (INV-4), in this frame in
-// singleplayer.
-fn click_slot(
+// The click a press on a slot makes, to send it as it's pressed: picking up, a shift-click or
+// a double click, all at once. A press with a stack on the cursor starts a drag instead, which
+// is a click after all if it ends without crossing another slot (`drag`).
+#[allow(clippy::too_many_arguments)]
+fn press_slot(
     press: On<PointerPress>,
-    slots: Query<&Slot>,
+    slots: Query<&SlotAt>,
     keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    player: Query<&Inventory, With<LocalPlayer>>,
+    view: Res<ContainerView>,
+    mut last: ResMut<LastPress>,
+    mut dragging: ResMut<Dragging>,
     mut clicks: MessageWriter<InventoryClick>,
 ) {
-    let Ok(slot) = slots.get(press.entity) else {
+    let Ok(&SlotAt(place)) = slots.get(press.entity) else {
         return;
     };
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    if let Some(click) = click_of(press.button, shift) {
-        clicks.write(InventoryClick {
-            container: None,
-            slot: slot.0 as u8,
-            click,
-        });
-    }
+    let now = time.elapsed_secs();
+    let double = last
+        .0
+        .is_some_and(|(at, when)| at == place && now - when < DOUBLE_CLICK);
+    let carrying = player.single().is_ok_and(|i| i.cursor.is_some());
+    let (button, spread, click) = match press.button {
+        PointerButton::Primary => (MouseButton::Left, Spread::Even, Click::Left),
+        PointerButton::Secondary => (MouseButton::Right, Spread::One, Click::Right),
+        PointerButton::Middle => return,
+    };
+    let primary = press.button == PointerButton::Primary;
+    last.0 = (primary && !double).then_some((place, now));
+    let click = if primary && shift {
+        Click::Shift
+    } else if primary && double {
+        Click::Gather
+    } else if carrying {
+        dragging.0 = Some((button, spread, vec![place]));
+        return;
+    } else {
+        click
+    };
+    send_click(&mut clicks, &view, place, click);
 }
 
-pub(super) fn click_of(button: PointerButton, shift: bool) -> Option<Click> {
-    match button {
-        PointerButton::Primary if shift => Some(Click::Shift),
-        PointerButton::Primary => Some(Click::Left),
-        PointerButton::Secondary => Some(Click::Right),
-        PointerButton::Middle => None,
+fn send_click(
+    clicks: &mut MessageWriter<InventoryClick>,
+    view: &ContainerView,
+    place: Place,
+    click: Click,
+) {
+    // the server makes the change, as it does all changes to inventories (INV-4), naming the
+    // container so a click meant for one that's since closed changes nothing
+    let (container, slot) = match place {
+        Place::Own(slot) => (None, slot),
+        Place::Container(slot) => match view.at {
+            Some(at) => (Some(at), slot),
+            None => return,
+        },
+    };
+    clicks.write(InventoryClick {
+        container,
+        slot,
+        click,
+    });
+}
+
+// Adds the slots the pointer crosses to the drag, while the button's held, those that would take
+// some of the cursor's stack and no more of them than there are items, as the server will check;
+// and once it's let go sends the drag, all of it at once, or the click it was if it crossed no
+// other slot.
+#[allow(clippy::too_many_arguments)]
+fn drag(
+    mouse: Res<ButtonInput<MouseButton>>,
+    hovered: Query<(&SlotAt, &Hovered)>,
+    player: Query<&Inventory, With<LocalPlayer>>,
+    view: Res<ContainerView>,
+    mut dragging: ResMut<Dragging>,
+    mut clicks: MessageWriter<InventoryClick>,
+    mut drags: MessageWriter<InventoryDrag>,
+) {
+    let Some((button, spread, places)) = &mut dragging.0 else {
+        return;
+    };
+    let Ok(inventory) = player.single() else {
+        return;
+    };
+    if let Some(carried) = inventory.cursor {
+        let mut inventory = inventory.clone();
+        let mut container = view.container.clone();
+        let slots = Slots {
+            inventory: &mut inventory,
+            container: container.as_mut(),
+        };
+        for (&SlotAt(place), hover) in &hovered {
+            let room = places.len() < usize::from(carried.count);
+            if hover.get() && room && !places.contains(&place) && slots.takes(place, carried) {
+                places.push(place);
+            }
+        }
     }
+    if mouse.pressed(*button) {
+        return;
+    }
+    match places.as_slice() {
+        [] => {}
+        [place] => {
+            let click = match spread {
+                Spread::Even => Click::Left,
+                Spread::One => Click::Right,
+            };
+            send_click(&mut clicks, &view, *place, click);
+        }
+        _ => {
+            drags.write(InventoryDrag {
+                container: view.at,
+                places: places.clone(),
+                spread: *spread,
+            });
+        }
+    }
+    dragging.0 = None;
+}
+
+// Over a slot, 1 to 9 swap it with that hotbar slot, and Q throws one from it, or the stack with
+// Ctrl, as in Minecraft.
+fn keys_over_slots(
+    controls: Controls,
+    keys: Res<ButtonInput<KeyCode>>,
+    hovered: Query<(&SlotAt, &Hovered)>,
+    view: Res<ContainerView>,
+    dragging: Res<Dragging>,
+    mut clicks: MessageWriter<InventoryClick>,
+) {
+    if dragging.0.is_some() {
+        return;
+    }
+    let Some(place) = hovered.iter().find(|(_, h)| h.get()).map(|(at, _)| at.0) else {
+        return;
+    };
+    let swap = Action::SLOTS.iter().position(|&s| controls.just_pressed(s));
+    let click = match swap {
+        Some(hotbar) => Click::Swap(hotbar as u8),
+        None if controls.just_pressed(Action::Drop) => Click::Throw {
+            all: keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
+        },
+        None => return,
+    };
+    send_click(&mut clicks, &view, place, click);
 }
 
 // Moved only when the mouse is, so the layout isn't redone every frame.
@@ -280,44 +432,41 @@ fn carry_to_mouse(
     }
 }
 
-// The hovered stack's name, or what the hovered recipe makes and from what.
+// The armour slots and what they're worth, when no container's open, and the label over the
+// player's slots, when one is.
 #[allow(clippy::type_complexity)]
-fn name_hovered_item(
-    changed: Query<
-        (),
-        (
-            Or<(With<Slot>, With<ContainerSlot>, With<RecipeCard>)>,
-            Changed<Hovered>,
-        ),
-    >,
-    player: Query<Ref<Inventory>, With<LocalPlayer>>,
+fn show_armour(
     view: Res<ContainerView>,
-    slots: Query<(&Slot, &Hovered)>,
-    container_slots: Query<(&ContainerSlot, &Hovered)>,
-    recipes: Query<(&RecipeCard, &Hovered)>,
-    mut name: Query<&mut Text, With<ItemName>>,
+    player: Query<Ref<Inventory>, With<LocalPlayer>>,
+    mut section: Query<&mut Node, With<ArmourSection>>,
+    mut worth: Query<&mut Text, With<ArmourWorth>>,
 ) {
+    let display = match view.at {
+        None => Display::Flex,
+        Some(_) => Display::None,
+    };
+    for mut node in &mut section {
+        if node.display != display {
+            node.display = display;
+        }
+    }
     let Ok(inventory) = player.single() else {
         return;
     };
-    if changed.is_empty() && !inventory.is_changed() && !view.is_changed() {
+    if !inventory.is_changed() {
         return;
     }
-    let slot = slots.iter().find(|(_, hovered)| hovered.get());
-    let in_container = container_slots.iter().find(|(_, hovered)| hovered.get());
-    let stack = slot
-        .and_then(|(slot, _)| inventory.get(slot.0))
-        .or_else(|| in_container.and_then(|(slot, _)| container_stack(&view, slot.0)));
-    let recipe = recipes.iter().find(|(_, hovered)| hovered.get());
-    let armour = slot.and_then(|(slot, _)| slot.0.checked_sub(SLOTS));
-    let text = match (stack, recipe, armour) {
-        (Some(stack), ..) => stack.item.display_name(),
-        (None, Some((card, _)), _) => describe(card.0),
-        (None, None, Some(piece)) => ARMOUR_NAMES[piece].into(),
-        (None, None, None) => HINT.into(),
+    let text = match inventory.armour_points() {
+        0 => "No armour worn".to_string(),
+        points => format!(
+            "Armour {points}\ntakes {:.0}% of a blow",
+            inventory.protection() * 100.0
+        ),
     };
-    if let Ok(mut name) = name.single_mut() {
-        name.0 = text;
+    for mut worth in &mut worth {
+        if worth.0 != text {
+            worth.0.clone_from(&text);
+        }
     }
 }
 
@@ -336,17 +485,23 @@ fn open(
 }
 
 // The menu holds the cursor again as play resumes. The next time it opens, it's by hand,
-// unless it's at a station or a container again.
+// unless it's at a station or a container again. A drag still going is dropped, and the server
+// puts what's on the cursor back.
+#[allow(clippy::too_many_arguments)]
 fn close(
     mut screen: Query<&mut Node, With<Screen>>,
     mut closes: MessageWriter<CloseInventory>,
     mut station: ResMut<CraftingStation>,
     mut view: ResMut<ContainerView>,
     mut trade: ResMut<TradeView>,
+    mut dragging: ResMut<Dragging>,
+    mut last: ResMut<LastPress>,
 ) {
     *station = CraftingStation::default();
     *view = ContainerView::default();
     *trade = TradeView::default();
+    dragging.0 = None;
+    last.0 = None;
     for mut node in &mut screen {
         if node.display == Display::Flex {
             node.display = Display::None;
@@ -359,14 +514,13 @@ fn close(
 mod tests {
     use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
     use bevy::input::{ButtonState, InputPlugin};
-    use bevy::picking::pointer::PointerButton;
     use bevy::prelude::*;
     use bevy::state::app::StatesPlugin;
     use bevy::window::WindowFocused;
     use bevy_replicon::prelude::ClientId;
     use bevy_replicon::RepliconPlugins;
 
-    use super::{click_of, InventoryScreenPlugin, Screen};
+    use super::{Dragging, InventoryScreenPlugin, Screen};
     use crate::block::BlockType;
     use crate::client::command_bar::CommandPlugin;
     use crate::client::player::LocalPlayer;
@@ -374,7 +528,8 @@ mod tests {
     use crate::game_mode::GameMode;
     use crate::hotbar::HotbarPlugin;
     use crate::inventory::recipes::{CraftingStation, Dimmed, RecipeCard};
-    use crate::inventory::{Click, Inventory};
+    use crate::inventory::slots::{Place, Spread};
+    use crate::inventory::{Click, Hotbar, Inventory};
     use crate::items::{Item, ItemStack};
     use crate::menu::{GameState, MenuPlugin};
     use crate::picker::PickerPlugin;
@@ -382,6 +537,8 @@ mod tests {
     use crate::protocol::{InventoryClick, ProtocolPlugin};
     use crate::server::ServerPlugin;
     use crate::world::World;
+
+    const DIRT: Item = Item::Block(BlockType::Dirt);
 
     // The game's UI and the server, headless, with a player in `mode` carrying some dirt.
     fn app(mode: GameMode) -> App {
@@ -406,7 +563,7 @@ mod tests {
         .add_message::<WindowFocused>()
         .insert_resource(World::new(16));
         let mut inventory = Inventory::default();
-        inventory.slots[0] = Some(ItemStack::new(Item::Block(BlockType::Dirt), 5));
+        inventory.slots[0] = Some(ItemStack::new(DIRT, 5));
         app.world_mut().spawn((
             Player::default(),
             PlayerOwner(ClientId::Server),
@@ -461,17 +618,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clicks_are_left_right_or_shift() {
-        assert_eq!(Some(Click::Left), click_of(PointerButton::Primary, false));
-        assert_eq!(Some(Click::Shift), click_of(PointerButton::Primary, true));
-        assert_eq!(
-            Some(Click::Right),
-            click_of(PointerButton::Secondary, false)
-        );
-        assert_eq!(None, click_of(PointerButton::Middle, false));
-    }
-
-    #[test]
     fn test_closing_puts_the_stack_carried_back() {
         let mut app = app(GameMode::Survival);
         press(&mut app, KeyCode::KeyE);
@@ -483,11 +629,54 @@ mod tests {
         app.update();
         assert!(inventory(&mut app).cursor.is_some());
         press(&mut app, KeyCode::Escape);
-        let dirt = Some(ItemStack::new(Item::Block(BlockType::Dirt), 5));
+        let dirt = Some(ItemStack::new(DIRT, 5));
         assert_eq!(
             (dirt, None),
             (inventory(&mut app).slots[0], inventory(&mut app).cursor)
         );
+    }
+
+    #[test]
+    fn test_a_drag_let_go_is_sent_whole_and_one_of_a_single_slot_is_a_click() {
+        let mut app = app(GameMode::Survival);
+        press(&mut app, KeyCode::KeyE);
+        app.world_mut().write_message(InventoryClick {
+            container: None,
+            slot: 0,
+            click: Click::Left,
+        });
+        app.update();
+        // as the press and the pointer crossing two more slots would leave it, the button up
+        app.insert_resource(Dragging(Some((
+            MouseButton::Left,
+            Spread::Even,
+            vec![Place::Own(9), Place::Own(10)],
+        ))));
+        app.update();
+        let inventory = inventory(&mut app);
+        let two = Some(ItemStack::new(DIRT, 2));
+        assert_eq!([two, two], [inventory.slots[9], inventory.slots[10]]);
+        assert_eq!(Some(ItemStack::new(DIRT, 1)), inventory.cursor);
+        assert!(app.world().resource::<Dragging>().0.is_none());
+        // a right drag that crossed nothing else puts one down, as a right click
+        app.insert_resource(Dragging(Some((
+            MouseButton::Right,
+            Spread::One,
+            vec![Place::Own(20)],
+        ))));
+        app.update();
+        let inventory = self::inventory(&mut app);
+        assert_eq!(Some(ItemStack::new(DIRT, 1)), inventory.slots[20]);
+        assert_eq!(None, inventory.cursor);
+    }
+
+    #[test]
+    fn test_number_keys_in_the_screen_dont_change_the_slot_held() {
+        let mut app = app(GameMode::Survival);
+        press(&mut app, KeyCode::KeyE);
+        press(&mut app, KeyCode::Digit4);
+        let mut hotbar = app.world_mut().query::<&Hotbar>();
+        assert_eq!(0, hotbar.single(app.world()).unwrap().selected);
     }
 
     // The recipes listed, and whether each is bright, in the table's order.

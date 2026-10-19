@@ -71,7 +71,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Sky | A day's clock, 3D clouds, sun and moon, night sky, sun glare, water reflections, tonemapping | `src/clock.rs`, `src/clouds.rs`, `src/sky*.rs`, `src/tonemap.rs` |
 | Player | Flying, or walking under gravity with block collision; swimming; survival (the default) and creative modes; breaking that takes time and the right tool in survival (§5.1) | `src/player/`, `src/collision.rs`, `src/game_mode.rs` |
 | Menus | A title screen over the horizon of a world the terrain renderer draws; worlds to play, make, rename, duplicate and delete; saved servers and joining by address; settings in tabs (video, controls with every key rebindable, audio, accessibility), saved per player; a loading screen; the pause menu with Open to Friends and Save and Quit to Title; one set of shared widgets (M-U1) | `src/menu/`, `src/session.rs`, `src/preferences.rs`, `src/controls.rs`, `src/save/worlds.rs`, `src/client/servers.rs` |
-| UI | Command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
+| UI | Command bar with `/tp`, `/seed`, `/gamemode`, `/help` (T or /), hotbar (1–9, wheel, Q to drop), inventory screen in survival with drags, double clicks, number keys and tooltips (M4.1) and block picker in creative (E), map of explored land (M, §5.7), debug overlay (F1) | `src/menu.rs`, `src/client/command_bar.rs`, `src/hotbar.rs`, `src/inventory/`, `src/picker.rs`, `src/map/`, `src/debug.rs` |
 | Items | Every placeable block as an item, sticks, coal, ingots and tools that wear, stacks, a 36-slot inventory per player, blocks that drop items when broken in survival, dropped items to pick up (§5.2) | `src/items.rs`, `src/inventory/`, `src/server/drops.rs`, `src/client/drops.rs` |
 | Crafting | Recipes from ingredient lists, by hand in the inventory screen or at a crafting table, and smelting in furnaces (§5.3) | `src/crafting.rs`, `src/inventory/recipes.rs`, `src/server/crafting.rs` |
 | Containers | Blocks holding items of their own in the world, furnaces and chests, saved with the edits (§5.2) | `src/containers.rs`, `src/server/containers.rs`, `src/inventory/furnace.rs`, `src/inventory/chest.rs` |
@@ -1172,6 +1172,65 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
   - **Loot:** a chest the world generated is filled from a loot table the first time it's
     opened or broken (§5.6).
   - `PROTOCOL_VERSION` is 10, for the new block and recipe.
+- **Built (M4.1): screens and slots.**
+  - **One look** (`src/inventory/look.rs`): every station's screen is one raised slate panel
+    with a bevelled edge (light along the top and left, dark along the bottom and right), its
+    slots sunk into it the other way, titles in a warm light, and recipes and trades as raised
+    cards; a slot lights under the pointer, warmer while a drag crosses it, and a card lights
+    too. Dark and cool where Minecraft's are light grey, and none of its pictures (INV-8). The
+    panel has the main inventory over the hotbar, and over them the armour worn in a row with
+    what it's worth, or the chest's or barrel's 27 slots, or the furnace (input over its flame
+    over the fuel, an arrow filling to the output, the art drawn three times its size). Beside
+    it on the left, where Minecraft keeps its recipe book, a panel of the crafting list (four
+    columns of cards now, output ← ingredients) or of a villager's trades (cost → result and
+    how many are left, red when sold out, shaded when what's carried won't pay). The armour
+    row leaves the room M4.2's crafting grid takes. A line of quiet hints runs under it all.
+  - **Tooltips** (`tooltip.rs`) beside the pointer, flipped left at the screen's edge: a stack's
+    name, durability left of a tool or armour ("Durability 50 / 64"), what a tool hits for and
+    armour's points, and the hunger food restores ("Restores 2½ hunger"); a recipe's output and
+    ingredients; a trade's goods, price and stock; an empty armour slot's piece. Hidden while a
+    stack's carried. The stack carried follows the pointer, held by its middle, with its count.
+  - **Slots as Minecraft players expect** (`inventory::slots`, decided on the server, INV-4):
+    `Slots` is a player's inventory and the container they have open, and `Place` a slot of
+    either (`Own(n)`, armour past the rest, or `Container(n)`). `Click` gains `Gather` (a
+    double click on a slot, within 0.3 s: stacks of the cursor's item onto it up to a full
+    stack, the container's first, partial stacks before full ones), `Swap(n)` (1–9 over a
+    slot: swap with that hotbar slot, armour only with its own piece, a furnace's output only
+    out into an empty one, its fuel slot only taking fuel) and `Throw { all }` (Q over a slot,
+    Ctrl+Q for the stack, from either side). Shift-click works as it did, between a container
+    and the inventory both ways. A press with a stack on the cursor starts a drag: the client
+    gathers the slots the pointer crosses that would take some (no more of them than there
+    are items) and sends them as one `InventoryDrag { container, places, spread }` when the
+    button's let go, or the plain click it was if it crossed no other slot. `Slots::drag`
+    takes it whole or refuses it whole: a slot there twice, not there, holding another item or
+    not taking this one (armour, a furnace's output), or more slots than items, and nothing
+    changes. A left drag shares evenly (`Spread::Even`), a right drag puts one in each
+    (`Spread::One`), each slot only up to a full stack, and the rest stays on the cursor.
+    Closing puts the cursor's stack back, or throws what there's no room for, as before.
+  - **Keys:** over the survival screen the number keys are its, so they no longer change the
+    slot held; Q in play throws from what's held as before.
+  - **Trading:** `Trade` gains `all`: shift-clicking an offer trades as many times as it's paid
+    for and in stock, stopping at the first goods that don't fit (dropped, as one trade's are).
+    Our trades have no input slots to shift-click into, so this is shift-click's job there.
+  - **Held items** (M-A4 audit by screenshot, every kind in first person and both third-person
+    views): tools and other pictures floated face-on to the left of the fist rather than in it;
+    a torch (and any plant) was a cube of its tile; in third person tools were a dropped item's
+    size, hanging at the hip and all but invisible. Now flat blocks (`RenderStyle::Cross` and
+    `Torch`) are pictures given thickness from their block tile, held and dropped
+    (`drops::is_flat`); a picture is gripped near its bottom-left corner, a tool's handle, with
+    its diagonal reaching up and away and its face turned to the left and the eye
+    (`hand::gripped`), in first person and on the model alike, there twice a dropped item's
+    size; a held block is a smaller cube in first person and a bigger one on the model; and a
+    model's right arm is raised a little forward while it holds anything.
+  - `PROTOCOL_VERSION` is 24, for `InventoryDrag`, `Click`'s new kinds and `Trade::all`. Saves
+    are unchanged.
+  - **Tests:** the drag split (even shares with the remainder kept, full stacks, a right drag,
+    a furnace's slots, mixed items and every other refusal leaving all as it was), the double
+    click's gather, shift-click into and out of a furnace and a chest, the number-key swap
+    with armour and a furnace, Q from a slot, closing with a stack carried; tooltips' lines;
+    headless, a drag made whole in one request and one across a container not open refused,
+    Q in the screen, a drag let go sent whole or as a click, the number keys in the screen
+    leaving the slot held, and shift-trading with a villager; the tool's grip in view.
 
 ### 5.3 Crafting and progression
 
@@ -2776,7 +2835,7 @@ caves read as random holes, and there was too little to travel for or on. Phase 
 M3.5 (U-84, U-80) is in. One world, no other dimensions: the depths, the regions and the
 monuments do that job here.
 
-- ☐ **M4.1 Screens and slots.** The inventory, chest, furnace, crafting and trading screens
+- ☑ **M4.1 Screens and slots.** The inventory, chest, furnace, crafting and trading screens
   redone in one visual language (bevelled slots, a furnace with its flame and arrow filling, a
   trader's offers listed with their costs), and slots handled as Minecraft players expect: a
   left drag shares the cursor's stack evenly over the slots it crosses and a right drag drops one
@@ -2784,7 +2843,8 @@ monuments do that job here.
   between a container and the inventory, 1–9 over a slot swaps it with that hotbar slot, Q drops,
   and tooltips give an item's name, durability and food. With it, an audit of the held item by
   screenshot, every kind of item in first and third person, fixing how tools, blocks and food sit
-  in the hand (§5.2, M-A4).
+  in the hand (§5.2, M-A4). Built: §5.2 (look, tooltips, slots, keys, trading, held items,
+  protocol 24).
 - ☐ **M4.2 Shaped crafting and the recipe book** (D-11). A 2×2 grid in the inventory and 3×3 at a
   crafting table; recipes become patterns (shaped, or shapeless where order doesn't matter, like
   dyes), and the recipe book beside the grid lists what can be made, dimming what can't, and
@@ -3019,6 +3079,13 @@ they're found.
 - ☐ The dedicated server: saving on SIGTERM when started with SIGINT ignored; the console's
   `help` listing keys it can't press (§4.4, M-R1).
 
+**Screens**
+- ☐ A drag doesn't preview its share in the slots it crosses or the count left on the cursor,
+  only lights them; clicking outside the panels doesn't throw the cursor's stack; no
+  scroll-wheel moving of single items (M4.1).
+- ☐ The armour row's panel has the room M4.2's crafting grid takes, empty until then; the
+  inventory has no picture of the player beside the armour (M4.1).
+
 **Menus and settings**
 - ☐ The Skin tab's Arms choice shows even with the default skin, whose arms are its own; and
   there's no file dialog (§6, M-A4).
@@ -3079,7 +3146,8 @@ they're found.
       quarter bigger, UV-mapped as the layout unwraps a box, built once for classic and once
       for slim arms; a skin's one `ModelMaterial` with its picture, cut out, shared by everyone
       wearing it, so players still draw batched with the light in each part's tag (§5.5).
-      Armour is boxes over the parts in its colour; tools are held upright along the arm.
+      Armour is boxes over the parts in its colour; tools are held upright along the arm
+      (since M4.1 gripped by the handle, head up and forward, §5.2).
     - **Settings:** a Skin tab with a turning preview of the model (a camera of its own
       rendering to a picture), a PNG file field, a list of those in `skins/` under the data
       directory, selecting one of which wears it, the arms (set from the skin's alpha as it's

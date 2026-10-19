@@ -79,9 +79,9 @@ impl Container {
         Container::new(self.block).is_some_and(|empty| empty.slots.len() == self.slots.len())
     }
 
-    // Whether `item` can be put in `slot`: only fuel in a furnace's fuel slot, and nothing in its
-    // output, which is only taken from. A chest takes anything anywhere.
-    fn accepts(&self, slot: usize, item: Item) -> bool {
+    /// Whether `item` can be put in `slot`: only fuel in a furnace's fuel slot, and nothing in
+    /// its output, which is only taken from. A chest takes anything anywhere.
+    pub fn accepts(&self, slot: usize, item: Item) -> bool {
         if self.block != BlockType::Furnace {
             return true;
         }

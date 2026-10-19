@@ -437,24 +437,32 @@ pub(in crate::server) fn make_trades(
         };
         let calling = creature.0.properties().calling.as_ref().unwrap();
         let settler = &mut townsfolk.0;
-        let stock = settler.stock.restocked(calling, settler.villager.seed, day);
         let index = message.offer as usize;
-        let Some(&(offer, left)) = stock.offers(calling).get(index) else {
-            continue;
-        };
-        if left == 0 {
-            continue;
-        }
-        let Ok(spare) = offer.make(&mut inventory) else {
-            continue;
-        };
-        settler.stock = Stock {
-            sold: std::array::from_fn(|i| stock.sold[i] + u8::from(i == index)),
-            ..stock
-        };
-        if let Some(spare) = spare {
-            let (dropped, at) = DroppedItem::scattered(spare, body.translation, &mut chance.0);
-            commands.spawn((dropped, at, Replicated));
+        // once, or as many times as it can be paid for and has stock, stopping once what it
+        // gives no longer fits, so shift-clicking never makes a heap
+        loop {
+            let stock = settler.stock.restocked(calling, settler.villager.seed, day);
+            let Some(&(offer, left)) = stock.offers(calling).get(index) else {
+                break;
+            };
+            if left == 0 {
+                break;
+            }
+            let Ok(spare) = offer.make(&mut inventory) else {
+                break;
+            };
+            settler.stock = Stock {
+                sold: std::array::from_fn(|i| stock.sold[i] + u8::from(i == index)),
+                ..stock
+            };
+            if let Some(spare) = spare {
+                let (dropped, at) = DroppedItem::scattered(spare, body.translation, &mut chance.0);
+                commands.spawn((dropped, at, Replicated));
+                break;
+            }
+            if !message.all {
+                break;
+            }
         }
     }
     for FromClient { client_id, .. } in closes.read() {

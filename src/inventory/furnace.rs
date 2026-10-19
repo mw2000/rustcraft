@@ -1,26 +1,28 @@
-//! The furnace's panel, beside the inventory screen's slots in place of the crafting list when
-//! it's opened at a furnace: the input over the flame over the fuel, and an arrow to the output,
-//! as the server last sent them (`ContainerChanged`). The flame burns down as the fuel does and
-//! the arrow fills as an item smelts. Clicks on its slots ask the server to move stacks about,
-//! as the inventory's do.
+//! The furnace's section, over the inventory's slots in the inventory screen's panel when it's
+//! opened at a furnace: the input over the flame over the fuel, and an arrow to the output, as
+//! the server last sent them (`ContainerChanged`). The flame burns down as the fuel does and the
+//! arrow fills as an item smelts. Clicks on its slots ask the server to move stacks about, as
+//! the inventory's do.
 
 use bevy::math::I64Vec3;
-use bevy::picking::events::PointerPress;
 use bevy::prelude::*;
 
-use super::icons::{stack_view, ItemIcons, StackView};
+use super::icons::ItemIcons;
+use super::look::title;
 use super::recipes::CraftingStation;
-use super::screen::{click_of, slot_button};
+use super::screen::spawn_slot;
+use super::slots::Place;
 use crate::block::BlockType;
 use crate::chunks::material::block_atlas;
 use crate::containers::{Container, FUEL, INPUT, OUTPUT};
 use crate::crafting::Station;
 use crate::items::ItemStack;
-use crate::menu::{font, GameState, TEXT_SHADOW};
-use crate::protocol::{ContainerChanged, InventoryClick};
+use crate::menu::GameState;
+use crate::protocol::ContainerChanged;
 
-// In pixels: the flame and the arrow, their 16-pixel tiles drawn twice the size, as icons are.
-const ART_SIZE: f32 = 32.0;
+// In pixels: the flame and the arrow, their 16-pixel tiles drawn three times the size, bigger
+// than icons, so they read across the room the panel leaves them.
+const ART_SIZE: f32 = 48.0;
 // The tiles of `furnace.png`, drawn by the block-textures skill's `ui.py`.
 const FLAME_OUT: usize = 0;
 const FLAME_LIT: usize = 1;
@@ -51,10 +53,6 @@ impl ContainerView {
     }
 }
 
-/// A slot of the open container, in the inventory screen.
-#[derive(Component)]
-pub(super) struct ContainerSlot(pub(super) usize);
-
 #[derive(Component)]
 pub(super) struct FurnacePanel;
 
@@ -66,10 +64,10 @@ pub(super) enum Gauge {
     Arrow,
 }
 
-/// The panel, hidden until the screen's opened at a furnace, for the screen to put beside its
-/// slots.
+/// The section, hidden until the screen's opened at a furnace, for the screen to put over the
+/// inventory's slots.
 pub(super) fn spawn_furnace(
-    row: &mut ChildSpawnerCommands,
+    main: &mut ChildSpawnerCommands,
     icons: &ItemIcons,
     images: &mut Assets<Image>,
     layouts: &mut Assets<TextureAtlasLayout>,
@@ -148,66 +146,42 @@ pub(super) fn spawn_furnace(
             ],
         )
     };
-    let slot = |slot| {
-        (
-            ContainerSlot(slot),
-            slot_button(),
-            children![stack_view(icons, StackView::Container(slot))],
-        )
-    };
     let column = Node {
         flex_direction: FlexDirection::Column,
         align_items: AlignItems::Center,
-        row_gap: Val::Px(8.0),
+        row_gap: Val::Px(2.0),
         ..default()
     };
-    row.spawn((
+    let slot = |slot: usize| Place::Container(slot as u8);
+    main.spawn((
         FurnacePanel,
         Node {
             display: Display::None,
-            ..column.clone()
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            margin: UiRect::bottom(Val::Px(6.0)),
+            ..default()
         },
     ))
-    .with_children(|panel| {
-        panel.spawn((Text::new("Furnace"), font(18.0), TEXT_SHADOW));
-        panel
+    .with_children(|section| {
+        section.spawn(title("Furnace"));
+        section
             .spawn(Node {
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(16.0),
+                justify_content: JustifyContent::Center,
+                column_gap: Val::Px(28.0),
                 ..default()
             })
             .with_children(|row| {
                 row.spawn(column).with_children(|fire| {
-                    fire.spawn(slot(INPUT)).observe(click_slot);
+                    spawn_slot(fire, icons, slot(INPUT));
                     fire.spawn(gauge(Gauge::Flame));
-                    fire.spawn(slot(FUEL)).observe(click_slot);
+                    spawn_slot(fire, icons, slot(FUEL));
                 });
                 row.spawn(gauge(Gauge::Arrow));
-                row.spawn(slot(OUTPUT)).observe(click_slot);
+                spawn_slot(row, icons, slot(OUTPUT));
             });
     });
-}
-
-/// The server makes the change, as it does all changes to containers (INV-4), naming the
-/// container so a click meant for one that's since closed changes nothing.
-pub(super) fn click_slot(
-    press: On<PointerPress>,
-    slots: Query<&ContainerSlot>,
-    keys: Res<ButtonInput<KeyCode>>,
-    view: Res<ContainerView>,
-    mut clicks: MessageWriter<InventoryClick>,
-) {
-    let (Ok(slot), Some(at)) = (slots.get(press.entity), view.at) else {
-        return;
-    };
-    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    if let Some(click) = click_of(press.button, shift) {
-        clicks.write(InventoryClick {
-            container: Some(at),
-            slot: slot.0 as u8,
-            click,
-        });
-    }
 }
 
 /// Keeps what the server says of the container open, and closes the screen once it says it's

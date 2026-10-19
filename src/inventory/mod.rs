@@ -9,9 +9,14 @@ pub mod furnace;
 #[cfg(feature = "client")]
 pub mod icons;
 #[cfg(feature = "client")]
+pub mod look;
+#[cfg(feature = "client")]
 pub mod recipes;
 #[cfg(feature = "client")]
 pub mod screen;
+pub mod slots;
+#[cfg(feature = "client")]
+mod tooltip;
 #[cfg(feature = "client")]
 pub mod trade;
 
@@ -31,7 +36,7 @@ pub const SLOTS: usize = 36;
 pub const ARMOUR_SLOTS: Range<usize> = SLOTS..SLOTS + 4;
 /// How many of them are the hotbar, along the bottom of the screen.
 pub const HOTBAR_SLOTS: usize = 9;
-const HOTBAR: Range<usize> = 0..HOTBAR_SLOTS;
+pub(crate) const HOTBAR: Range<usize> = 0..HOTBAR_SLOTS;
 const MAIN: Range<usize> = HOTBAR_SLOTS..SLOTS;
 
 /// The items a player carries, in slots 0 to 8 for the hotbar and 9 to 35 for the rest, the
@@ -62,8 +67,15 @@ pub enum Click {
     Left,
     /// Right: picks up half the slot's stack, or puts one of the cursor's down.
     Right,
-    /// Shift and left: moves the slot's stack between the hotbar and the main inventory.
+    /// Shift and left: moves the slot's stack between the hotbar and the main inventory, or
+    /// between the inventory and the container open.
     Shift,
+    /// A double click: gathers stacks of the cursor's item onto it, up to a full stack.
+    Gather,
+    /// A number key over the slot: swaps it with that hotbar slot, 0 to 8.
+    Swap(u8),
+    /// Q over the slot: throws one of its stack, or with Ctrl all of it.
+    Throw { all: bool },
 }
 
 impl Inventory {
@@ -159,15 +171,18 @@ impl Inventory {
         }
     }
 
-    /// Does what clicking `slot` in the inventory screen does. A slot there isn't is ignored.
-    /// An armour slot takes only its own piece, and shift-clicking armour puts it on if that
-    /// piece isn't worn.
+    /// Does what a left, right or shift click on `slot` in the inventory screen does, with no
+    /// container open; the other clicks are `slots::Slots`'. A slot there isn't is ignored. An
+    /// armour slot takes only its own piece, and shift-clicking armour puts it on if that piece
+    /// isn't worn.
     pub fn click(&mut self, slot: usize, click: Click) {
         if ARMOUR_SLOTS.contains(&slot) {
             let worn = &mut self.armour[slot - SLOTS];
             if click == Click::Shift {
                 *worn = worn.and_then(|stack| add_to(&mut self.slots, stack));
-            } else if self.cursor.is_none_or(|stack| fits(stack, slot - SLOTS)) {
+            } else if matches!(click, Click::Left | Click::Right)
+                && self.cursor.is_none_or(|stack| fits(stack, slot - SLOTS))
+            {
                 std::mem::swap(worn, &mut self.cursor);
             }
             return;
@@ -179,6 +194,7 @@ impl Inventory {
             click_stack(&mut self.slots[slot], &mut self.cursor, click);
             return;
         }
+
         let Some(stack) = self.slots[slot].take() else {
             return;
         };
@@ -238,7 +254,7 @@ impl Inventory {
 }
 
 // Whether `stack` is the piece of armour worn in armour slot `piece`.
-fn fits(stack: ItemStack, piece: usize) -> bool {
+pub(crate) fn fits(stack: ItemStack, piece: usize) -> bool {
     stack
         .item
         .armour()
@@ -261,8 +277,8 @@ pub fn add_to(slots: &mut [Option<ItemStack>], stack: ItemStack) -> Option<ItemS
 }
 
 /// Does what a left or right click does to the stack `held` in a slot, with the stack `cursor` on
-/// the cursor, in an inventory or a container. Shift-clicks move stacks between slots, which is
-/// for whoever has them to do.
+/// the cursor, in an inventory or a container. Other clicks move stacks between slots, which is
+/// for whoever has them to do (`slots::Slots`).
 pub fn click_stack(held: &mut Option<ItemStack>, cursor: &mut Option<ItemStack>, click: Click) {
     match (click, held.as_mut(), *cursor) {
         (Click::Left, Some(stack), Some(carried)) if stack.stacks_with(carried) => {
@@ -280,7 +296,8 @@ pub fn click_stack(held: &mut Option<ItemStack>, cursor: &mut Option<ItemStack>,
                 take(cursor, 1);
             }
         }
-        (Click::Shift, ..) => {}
+        // the rest move stacks between slots, which is for whoever has them to do
+        (Click::Shift | Click::Gather | Click::Swap(_) | Click::Throw { .. }, ..) => {}
         _ => std::mem::swap(held, cursor),
     }
 }
