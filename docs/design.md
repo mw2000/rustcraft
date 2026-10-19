@@ -2796,7 +2796,7 @@ both sides built the same thing they're merged into one system keeping the best 
   migration from days), and everything that reads the time.
 - ☐ **U-80 Weather** (Aymen Qader, with Rory Nickolls' tuning `fbd522d`, `9307035` and the rain
   half of `7c970d4`): storms, rain, a rainbow, lightning and thunder on the integer clock,
-  replacing M3.5's paused WIP, with our extras on top: snow by climate, rain stopping under
+  replacing M3.5's paused WIP (branch `wip/m3.5-weather` on the fork: snow by climate, `/weather`, beds through storms, synthesised rain and thunder; it was never compiled), with our extras on top: snow by climate, rain stopping under
   roofs, an operator `/weather`, sleeping through storms, a daylight factor for the monsters'
   darkness rule, and a particle setting. Completes M3.5.
 
