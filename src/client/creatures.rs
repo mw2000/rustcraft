@@ -26,7 +26,7 @@ use crate::clouds::spawn_clouds;
 use crate::collision::{ray_distance, Aabb};
 use crate::creatures::{
     Condition, Creature, CreatureKind, CreaturePose, Flinches, Joint, Look, Missile, Part, Stance,
-    Vanishing, YOUNG_SCALE,
+    Vanishing, Villager, VILLAGE_COLOURS, YOUNG_SCALE,
 };
 use crate::player::{PlayerLook, EYE_HEIGHT};
 use crate::server::is_authority;
@@ -241,7 +241,8 @@ impl Plugin for DrawCreaturesPlugin {
 /// What each kind of creature's drawn with, and the heart shown over those in love.
 #[derive(Resource)]
 struct CreatureLooks {
-    kinds: HashMap<CreatureKind, KindLook>,
+    // by kind, and the style of village a villager's from, which its trimmings are drawn in
+    kinds: HashMap<(CreatureKind, u8), KindLook>,
     heart: Handle<Mesh>,
     heart_colour: Handle<ModelMaterial>,
     missile: Handle<Mesh>,
@@ -278,6 +279,7 @@ struct CreaturePart;
 #[derive(Component)]
 struct Model {
     kind: CreatureKind,
+    style: u8,
     parts: Vec<Entity>,
     trunk: Entity,
     head: Entity,
@@ -351,7 +353,18 @@ fn make_looks(
     };
     let (lit, glowing) = (shades(ModelLook::lit()), shades(ModelLook::glowing()));
     let mut kinds = HashMap::new();
-    for &kind in CreatureKind::ALL {
+    let styles = |kind: CreatureKind| {
+        let trimmed = kind.properties().model.iter().any(|p| p.look == Look::Trim);
+        0..if trimmed {
+            VILLAGE_COLOURS.len() as u8
+        } else {
+            1
+        }
+    };
+    for (kind, style) in CreatureKind::ALL
+        .iter()
+        .flat_map(|&kind| styles(kind).map(move |style| (kind, style)))
+    {
         let properties = kind.properties();
         // the body breathes from the middle of its biggest box
         let volume = |part: &&Part| part.size.element_product();
@@ -369,10 +382,14 @@ fn make_looks(
                 Joint::Head => properties.neck,
                 _ => Vec3::ZERO,
             };
-            let [r, g, b] = part.colour;
+            let colour = match part.look {
+                Look::Trim => VILLAGE_COLOURS[style as usize],
+                _ => part.colour,
+            };
+            let [r, g, b] = colour;
             let mesh = Mesh::from(Cuboid::from_size(part.size)).translated_by(part.centre - pivot);
             let mesh = coloured(mesh, Color::srgb(r, g, b));
-            let (material, hurt, fading) = if part.look == Look::Glow {
+            let (material, hurt, fading) = if matches!(part.look, Look::Glow | Look::Lamp) {
                 glowing.clone()
             } else {
                 lit.clone()
@@ -393,7 +410,7 @@ fn make_looks(
             .map(|part| part.centre.y + part.size.y / 2.0);
         let heart = top.fold(0.0, f32::max) + HEART_OVER;
         kinds.insert(
-            kind,
+            (kind, style),
             KindLook {
                 parts,
                 trunk,
@@ -421,14 +438,23 @@ fn make_looks(
 fn draw_creature(
     add: On<Add<SeenCreature>>,
     seen: Query<&SeenCreature>,
-    creatures: Query<&Creature>,
+    creatures: Query<(&Creature, Option<&Villager>)>,
     looks: Res<CreatureLooks>,
     mut commands: Commands,
 ) {
-    let Ok(&Creature(kind)) = seen.get(add.entity).and_then(|seen| creatures.get(seen.0)) else {
+    let Ok((&Creature(kind), villager)) =
+        seen.get(add.entity).and_then(|seen| creatures.get(seen.0))
+    else {
         return;
     };
-    let look = &looks.kinds[&kind];
+    // drawn in its own village's colours, if they're among those there are
+    let style = villager.map_or(0, |v| v.style);
+    let style = if looks.kinds.contains_key(&(kind, style)) {
+        style
+    } else {
+        0
+    };
+    let look = &looks.kinds[&(kind, style)];
     let properties = kind.properties();
     let mut joint = |at: Vec3, parent: Entity| {
         let transform = Transform::from_translation(at);
@@ -450,6 +476,7 @@ fn draw_creature(
     let bits = add.entity.to_bits();
     let mut model = Model {
         kind,
+        style,
         parts: Vec::with_capacity(look.parts.len()),
         trunk,
         head,
@@ -508,7 +535,7 @@ fn draw_creature(
         match part.look {
             Look::Eye | Look::Glow => model.eyes.push(entity),
             Look::Fleece => model.fleece.push(entity),
-            Look::Plain => {}
+            Look::Plain | Look::Trim | Look::Lamp => {}
         }
     }
     commands.entity(add.entity).insert(model);
@@ -708,7 +735,11 @@ fn show_death(
             continue;
         }
         model.faded = step;
-        for (&part, look) in model.parts.iter().zip(&looks.kinds[&model.kind].parts) {
+        for (&part, look) in model
+            .parts
+            .iter()
+            .zip(&looks.kinds[&(model.kind, model.style)].parts)
+        {
             if let Ok((mut material, _)) = parts.get_mut(part) {
                 material.0 = look.fading[step.max(1) - 1].clone();
             }
@@ -739,7 +770,11 @@ fn flash(
             continue;
         }
         model.flashing = red;
-        for (&part, look) in model.parts.iter().zip(&looks.kinds[&model.kind].parts) {
+        for (&part, look) in model
+            .parts
+            .iter()
+            .zip(&looks.kinds[&(model.kind, model.style)].parts)
+        {
             if let Ok(mut material) = materials.get_mut(part) {
                 material.0 = if red { &look.hurt } else { &look.material }.clone();
             }
@@ -907,9 +942,9 @@ mod tests {
         let mut shared = HashSet::new();
         for &kind in CreatureKind::ALL {
             let parts = kind.properties().model;
-            for (part, look) in parts.iter().zip(&looks.kinds[&kind].parts) {
+            for (part, look) in parts.iter().zip(&looks.kinds[&(kind, 0)].parts) {
                 shared.insert(look.material.id());
-                let glows = part.look == Look::Glow;
+                let glows = matches!(part.look, Look::Glow | Look::Lamp);
                 for material in [&look.material, &look.hurt].into_iter().chain(&look.fading) {
                     assert_eq!(glows, materials.get(material).unwrap().glows());
                 }

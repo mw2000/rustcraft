@@ -1,4 +1,5 @@
 mod monsters;
+mod villagers;
 
 use std::time::{Duration, Instant};
 
@@ -484,7 +485,11 @@ fn animals_appear_in(biome: &str) {
     }
     run(&mut app, 20.0);
     let kinds = kinds(&mut app);
-    for &kind in CreatureKind::ALL {
+    // villagers live only in villages
+    for &kind in CreatureKind::ALL
+        .iter()
+        .filter(|k| k.properties().spawns.is_some())
+    {
         let spawns = kind.properties().spawns.as_ref().unwrap();
         let count = kinds.iter().filter(|&&k| k == kind).count();
         // and no monsters, by day

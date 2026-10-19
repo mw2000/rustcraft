@@ -182,7 +182,7 @@ pub const TABLES: &[LootTable] = &[
             entry(BrightSteelAxe, 1..=1, 1),
         ],
     },
-    // a village's houses, inn and smithy (M3.4), kept in food and a little metal, which is
+    // a village's houses, inn and smithy (M3.4), kept in food and a little money, which is
     // worth taking only once, as the chests aren't filled again
     LootTable {
         name: "village",
@@ -193,6 +193,7 @@ pub const TABLES: &[LootTable] = &[
             entry(Apple, 1..=4, 6),
             entry(Seeds, 2..=8, 5),
             entry(block(BlockType::Torch), 2..=6, 5),
+            entry(Coin, 1..=3, 4),
             entry(Coal, 2..=5, 4),
             entry(Wool, 1..=3, 3),
             entry(IronIngot, 1..=2, 2),

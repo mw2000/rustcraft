@@ -144,12 +144,13 @@ fn craft(
 }
 
 /// Shows the recipes made at the screen's station, dimming those there aren't the ingredients
-/// for, or none at a container, which shows its own slots instead.
+/// for, or none at a container or a villager, which show their own instead.
 /// Run every frame the screen's open, changing only what's changed, as there are a handful.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn show_recipes(
     station: Res<CraftingStation>,
     view: Res<ContainerView>,
+    trade: Res<super::trade::TradeView>,
     player: Query<&Inventory, With<LocalPlayer>>,
     mut list: Query<&mut Node, With<RecipeList>>,
     mut cards: Query<(&RecipeCard, &mut Node, &Children), Without<RecipeList>>,
@@ -159,9 +160,9 @@ pub(super) fn show_recipes(
     let Ok(inventory) = player.single() else {
         return;
     };
-    let display = match view.at {
-        Some(_) => Display::None,
-        None => Display::Flex,
+    let display = match (view.at, trade.villager) {
+        (None, None) => Display::Flex,
+        _ => Display::None,
     };
     for mut node in &mut list {
         if node.display != display {

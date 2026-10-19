@@ -11,9 +11,13 @@ use super::furnace::{
 };
 use super::icons::{load_icons, stack_view, ItemIcons, StackView};
 use super::recipes::{describe, show_recipes, spawn_recipes, CraftingStation, RecipeCard};
+use super::trade::{
+    follow_offers, name_villager, show_trade, spawn_label, spawn_trade, talk, TradeView,
+};
 use super::{Click, Inventory, ARMOUR_SLOTS, HOTBAR_SLOTS, SLOTS};
 use crate::client::player::LocalPlayer;
 use crate::game_mode::GameMode;
+use crate::interaction::TargetCreature;
 use crate::menu::{font, free_cursor, GameState, BUTTON_BORDER_COLOR, BUTTON_COLOR, TEXT_SHADOW};
 use crate::protocol::{CloseInventory, InventoryClick};
 
@@ -46,17 +50,23 @@ impl Plugin for InventoryScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CraftingStation>()
             .init_resource::<ContainerView>()
-            .add_systems(Startup, spawn_screen.after(load_icons))
+            .init_resource::<TradeView>()
+            .add_systems(Startup, (spawn_screen.after(load_icons), spawn_label))
             .add_systems(
                 Update,
                 (
                     follow_container,
+                    follow_offers,
+                    // with the creature looked at, as the game has it
+                    (name_villager, talk.run_if(in_state(GameState::Playing)))
+                        .run_if(resource_exists::<TargetCreature>),
                     (
                         carry_to_mouse,
                         name_hovered_item,
                         show_recipes,
                         show_furnace,
                         show_chest,
+                        show_trade,
                     )
                         .run_if(in_state(GameState::Inventory)),
                 ),
@@ -142,6 +152,7 @@ fn spawn_screen(
                         spawn_slots(slots, &icons, 0..HOTBAR_SLOTS, HOTBAR_GAP);
                     });
                     spawn_recipes(row, &icons);
+                    spawn_trade(row);
                     spawn_furnace(row, &icons, &mut images, &mut layouts);
                 });
             screen.spawn((
@@ -331,9 +342,11 @@ fn close(
     mut closes: MessageWriter<CloseInventory>,
     mut station: ResMut<CraftingStation>,
     mut view: ResMut<ContainerView>,
+    mut trade: ResMut<TradeView>,
 ) {
     *station = CraftingStation::default();
     *view = ContainerView::default();
+    *trade = TradeView::default();
     for mut node in &mut screen {
         if node.display == Display::Flex {
             node.display = Display::None;

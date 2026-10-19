@@ -140,6 +140,10 @@ pub struct Village {
     pub pieces: Vec<Placed>,
     /// Its streets, and the ways from them to its pieces' doors.
     pub paths: Vec<Placed>,
+    // its streets, which villagers find their way along, and where each piece's way to its door
+    // leaves one, by the street and how far along it
+    streets: Vec<Street>,
+    doors: Vec<Option<(usize, i64)>>,
     /// The columns it covers, from its lowest corner to its highest.
     pub min: I64Vec2,
     pub max: I64Vec2,
@@ -155,7 +159,133 @@ impl Village {
     pub fn overlaps(&self, min: I64Vec2, max: I64Vec2) -> bool {
         self.min.cmple(max).all() && self.max.cmpge(min).all()
     }
+
+    /// The role of its piece `piece`.
+    pub fn role(&self, piece: usize) -> Role {
+        match self.pieces[piece].kind {
+            Kind::Piece(kind) => PIECES[kind].piece.role,
+            _ => unreachable!("a village's pieces are pieces"),
+        }
+    }
+
+    /// Where someone stands just outside its piece `piece`, by the door, if it has one.
+    pub fn entrance(&self, piece: usize) -> Option<I64Vec3> {
+        let placed = &self.pieces[piece];
+        placed
+            .markers()
+            .find(|(kind, _)| *kind == ENTRANCE)
+            .map(|(_, at)| at)
+    }
+
+    /// The way along its streets from `from` to `to` in its piece `piece`, as the cells to walk
+    /// through in turn, each a few blocks from the last, for a villager to find its way from one
+    /// to the next: out of the piece it's in by the door, along the streets and up to the well
+    /// if it must, along the way to `piece`'s door, and in.
+    pub fn way(&self, from: I64Vec3, piece: usize, to: I64Vec3) -> Vec<I64Vec3> {
+        let mut way = Vec::new();
+        let inside = (0..self.pieces.len()).find(|&p| self.pieces[p].covers(from.x, from.z));
+        // already in the piece, it's a step or two
+        if inside == Some(piece) {
+            return vec![to];
+        }
+        // out of where it is, or from the street nearest it
+        let start = match inside {
+            Some(0) => None,
+            Some(here) if self.doors[here].is_some() => {
+                way.extend(self.entrance(here));
+                way.extend(self.outside(here));
+                self.doors[here]
+            }
+            _ => self.nearest_street(from),
+        };
+        let end = if piece == 0 { None } else { self.doors[piece] };
+        let (up, down) = (self.towards_well(start), self.towards_well(end));
+        // up the streets from where it starts until one the way down to the piece takes, and
+        // along that to where the way down leaves it, or else by the well
+        let meets = up.iter().enumerate().find_map(|(i, &(street, _))| {
+            let j = down.iter().position(|&(s, _)| s == street)?;
+            Some((i, j))
+        });
+        let (up_to, down_from) = meets.unwrap_or((up.len(), down.len()));
+        for &(street, along) in &up[..up_to] {
+            self.walk(&mut way, street, along, 0);
+        }
+        match meets {
+            Some((i, j)) => self.walk(&mut way, up[i].0, up[i].1, down[j].1),
+            None => {
+                if let Some(&(street, _)) = down.last() {
+                    way.push(self.cell(street, 0));
+                }
+            }
+        }
+        for &(street, along) in down[..down_from].iter().rev() {
+            self.walk(&mut way, street, 0, along);
+        }
+        if piece != 0 {
+            way.extend(self.outside(piece));
+            way.extend(self.entrance(piece));
+        }
+        way.push(to);
+        way.dedup();
+        way
+    }
+
+    // The feet cell on street `street` `along` it.
+    fn cell(&self, street: usize, along: i64) -> I64Vec3 {
+        let street = &self.streets[street];
+        let tile = street.tile(along);
+        I64Vec3::new(tile.x, street.tops[along as usize], tile.y)
+    }
+
+    // Walks street `street` from `from` along it to `to`, a cell every few blocks.
+    fn walk(&self, way: &mut Vec<I64Vec3>, street: usize, from: i64, to: i64) {
+        let step = if to >= from { WAY_STEP } else { -WAY_STEP };
+        let mut along = from;
+        while (to - along) * step.signum() > 0 {
+            way.push(self.cell(street, along));
+            along += step;
+        }
+        way.push(self.cell(street, to));
+    }
+
+    // The streets from where `at` leaves one up to the well: the street and how far along it,
+    // then the street it branches off and where, and so on.
+    fn towards_well(&self, mut at: Option<(usize, i64)>) -> Vec<(usize, i64)> {
+        let mut chain = Vec::new();
+        while let Some((street, along)) = at {
+            chain.push((street, along));
+            at = self.streets[street].from;
+        }
+        chain
+    }
+
+    // The street, and how far along it, nearest `at`.
+    fn nearest_street(&self, at: I64Vec3) -> Option<(usize, i64)> {
+        let mut nearest = None;
+        let mut best = i64::MAX;
+        for (index, street) in self.streets.iter().enumerate() {
+            for along in 0..street.tops.len() as i64 {
+                let far = (street.tile(along) - at.xz()).abs().max_element();
+                if far < best {
+                    (best, nearest) = (far, Some((index, along)));
+                }
+            }
+        }
+        nearest
+    }
+
+    // Where its piece `piece`'s way to its door leaves it, just out of its footprint.
+    fn outside(&self, piece: usize) -> Option<I64Vec3> {
+        let placed = &self.pieces[piece];
+        let entrance = self.entrance(piece)?;
+        let front = [I64Vec2::Y, I64Vec2::NEG_X, I64Vec2::NEG_Y, I64Vec2::X];
+        let out = front[placed.rotation as usize];
+        Some(entrance + I64Vec3::new(out.x, 0, out.y))
+    }
 }
+
+// How far apart, along a street, the cells of a way are.
+const WAY_STEP: i64 = 8;
 
 /// A stretch of a village's street, or the way from it to a piece's door: `width` blocks across
 /// and `length` along x or z from the corner it's placed at, its surface stepping a block up or
@@ -298,12 +428,15 @@ fn grown((min, max): Rect, by: i64) -> Rect {
     (min - by, max + by)
 }
 
-// A street as it's laid: its middle's first block, the way it runs, and its surface's first air
-// over each block along it.
+// A street as it's laid: its middle's first block, the way it runs, its surface's first air over
+// each block along it, and the street it branches off and how far along that, or none for one
+// from the well.
+#[derive(Debug, Clone, PartialEq)]
 struct Street {
     start: I64Vec2,
     dir: I64Vec2,
     tops: Vec<i64>,
+    from: Option<(usize, i64)>,
 }
 
 impl Street {
@@ -341,6 +474,7 @@ struct Layout<'a> {
     seed: u64,
     middle: I64Vec2,
     pieces: Vec<Placed>,
+    doors: Vec<Option<(usize, i64)>>,
     paths: Vec<Placed>,
     streets: Vec<Street>,
     // what's taken: pieces, streets and the ways to doors
@@ -386,10 +520,12 @@ impl Layout<'_> {
         })
     }
 
-    fn add(&mut self, placed: Placed) {
+    // Adds a piece, whose way to its door leaves the street `door` says.
+    fn add(&mut self, placed: Placed, door: Option<(usize, i64)>) {
         let min = placed.min.xz();
         self.taken.push((min, min + placed.footprint() - 1));
         self.pieces.push(placed);
+        self.doors.push(door);
     }
 
     // Lays the rows of path, each `width` wide from its corner across the way `along_x` says,
@@ -433,12 +569,21 @@ impl Layout<'_> {
 
     // A street from `start` running `dir` for up to `length` blocks, its surface starting within
     // a block of `top`, as far as the ground lets it: over dry land, cut in or raised no more than
-    // `CUT`, and clear of what's taken. Returns its index if it's long enough.
-    fn street(&mut self, start: I64Vec2, dir: I64Vec2, length: i64, mut top: i64) -> Option<usize> {
+    // `CUT`, and clear of what's taken, branching off `from`. Returns its index if it's long
+    // enough.
+    fn street(
+        &mut self,
+        start: I64Vec2,
+        dir: I64Vec2,
+        length: i64,
+        mut top: i64,
+        from: Option<(usize, i64)>,
+    ) -> Option<usize> {
         let mut street = Street {
             start,
             dir,
             tops: Vec::new(),
+            from,
         };
         let across = street.across();
         for along in 0..length {
@@ -514,7 +659,7 @@ impl Layout<'_> {
         let Some(entrance) = entrance else {
             // a lamp, standing right by the street
             let placed = self.fit(piece, rotation, rect.0, PIECE_RISE)?;
-            self.add(placed);
+            self.add(placed, None);
             return Some(along + frontage);
         };
         let offset = entrance - street.start;
@@ -546,7 +691,7 @@ impl Layout<'_> {
                 (at, floor + rise.round() as i64)
             })
             .collect();
-        self.add(placed);
+        self.add(placed, Some((index, at)));
         self.taken.push(way_rect);
         self.pave(rows, 1, out.x != 0);
         Some(along + frontage)
@@ -612,6 +757,7 @@ pub(super) fn lay_out(
         seed,
         middle,
         pieces: Vec::new(),
+        doors: Vec::new(),
         paths: Vec::new(),
         streets: Vec::new(),
         taken: Vec::new(),
@@ -620,7 +766,7 @@ pub(super) fn lay_out(
     let rotation = (draws.next() % 4) as u8;
     let footprint = PIECES[well].template.footprint(rotation);
     let well = layout.fit(well, rotation, middle - footprint / 2, WELL_RISE)?;
-    layout.add(well);
+    layout.add(well, None);
 
     // streets out from the middle of each side of the well, longest along its main way, and
     // some branching off those
@@ -643,7 +789,7 @@ pub(super) fn lay_out(
             (_, 1) => I64Vec2::new(mid.x, max.y + 1),
             _ => I64Vec2::new(mid.x, min.y - 1),
         };
-        let street = layout.street(start, dir, length, well.min.y);
+        let street = layout.street(start, dir, length, well.min.y, None);
         if let Some(street) = street.filter(|_| main) {
             mains.push(street);
         }
@@ -662,7 +808,7 @@ pub(super) fn lay_out(
             street.tops[at as usize],
         );
         let length = draws.range(BRANCH);
-        layout.street(start, out, length, top);
+        layout.street(start, out, length, top, Some((index, at)));
     }
     if layout.streets.len() < 2 {
         return None;
@@ -751,6 +897,8 @@ pub(super) fn lay_out(
         style,
         pieces: layout.pieces,
         paths: layout.paths,
+        streets: layout.streets,
+        doors: layout.doors,
         min,
         max,
     })
@@ -1071,5 +1219,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_a_way_goes_out_of_one_door_along_the_streets_and_in_at_another_a_step_at_a_time() {
+        let (_, all) = villages(3);
+        for village in &all {
+            let doors: Vec<usize> = (1..village.pieces.len())
+                .filter(|&p| village.doors[p].is_some())
+                .collect();
+            for &from in &doors {
+                for &to in &doors {
+                    let start = village.entrance(from).unwrap() - placed_front(village, from);
+                    let end = village.entrance(to).unwrap() - placed_front(village, to);
+                    let way = village.way(start, to, end);
+                    assert_eq!(Some(&end), way.last());
+                    // each cell near enough the last for a creature to find its way between
+                    let mut at = start;
+                    for &next in &way {
+                        assert!(
+                            (next - at).xz().abs().max_element() <= WAY_STEP + 2,
+                            "{at} to {next}"
+                        );
+                        at = next;
+                    }
+                    if from != to {
+                        // out by its own door and in by the other's
+                        assert!(way.contains(&village.entrance(from).unwrap()));
+                        assert!(way.contains(&village.entrance(to).unwrap()));
+                    }
+                }
+            }
+            // and from inside one, to the well's
+            let well = village.well();
+            let middle = well.min + (well.footprint() / 2).extend(0).xzy();
+            let way = village.way(village.entrance(doors[0]).unwrap(), 0, middle);
+            assert_eq!(Some(&middle), way.last());
+        }
+    }
+
+    // A step into piece `piece` from its entrance, inside its door.
+    fn placed_front(village: &Village, piece: usize) -> I64Vec3 {
+        let out = front(village.pieces[piece].rotation);
+        I64Vec3::new(out.x, 0, out.y)
     }
 }

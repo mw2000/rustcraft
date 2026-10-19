@@ -18,7 +18,9 @@
 //! hanging from a ceiling) are replicated too, a creature taken away for anything but dying is
 //! marked `Vanishing` the frame before, and missiles are replicated as they're thrown. A
 //! client's told of the blows its player takes as `Struck`, and players' armour is replicated
-//! with what they hold (M3.3).
+//! with what they hold (M3.3). Villagers are replicated with their `Villager`, its style and
+//! seed, and a player trading with one is sent its offers as `TradeOffers` and makes them with
+//! `Trade` (M3.4).
 
 use std::time::Duration;
 
@@ -36,7 +38,9 @@ use crate::chunks::chunk::{ChunkCoordinate, CELLS, CHUNK_SIZE};
 use crate::chunks::lod::CellEdits;
 use crate::containers::Container;
 use crate::crafting::Recipe;
-use crate::creatures::{Condition, Creature, CreaturePose, Flinches, Missile, Stance, Vanishing};
+use crate::creatures::{
+    Condition, Creature, CreaturePose, Flinches, Missile, Stance, Vanishing, Villager,
+};
 use crate::game_mode::GameMode;
 use crate::inventory::{Click, Inventory};
 use crate::items::Item;
@@ -48,13 +52,14 @@ use crate::server::creatures::Whereabouts;
 use crate::server::drops::DroppedItem;
 use crate::server::{HeldItem, Worn};
 use crate::survival::{Bruise, Vitals};
+use crate::trading::Offer;
 
 /// The port a world is hosted on unless another's asked for.
 pub const DEFAULT_PORT: u16 = 25600;
 
 /// The version of what's sent, raised whenever a change to a message would mislead an older
 /// game. A client joins only a server with the same one and the same game version.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// How often a client tells the server where its player is, and the server tells the others
 /// where the host's is: about as often as reaching and keeping chunks near them needs, and
@@ -133,6 +138,11 @@ impl Plugin for ProtocolPlugin {
             .add_visibility_filter::<Whereabouts>()
             .add_mapped_client_message::<HitCreature>(Channel::Ordered)
             .add_mapped_client_message::<UseCreature>(Channel::Ordered)
+            // villagers, and their trades with the player trading with them, in order, as each
+            // trade's made after the offers it was chosen from (M3.4)
+            .replicate::<Villager>()
+            .add_mapped_client_message::<Trade>(Channel::Ordered)
+            .add_server_message::<TradeOffers>(Channel::Ordered)
             // unreliable, as a swing missed is soon followed by another
             .add_client_message::<Swing>(Channel::Unreliable)
             .add_mapped_server_message::<PlayerSwung>(Channel::Unreliable)
@@ -563,6 +573,21 @@ pub struct UseCreature {
     #[entities]
     pub creature: Entity,
 }
+
+/// A player making the trade `offer`, by its place among those the villager `villager` offers,
+/// once, as clicking it does. The server checks they're trading with it and have what it takes.
+#[derive(Message, MapEntities, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Trade {
+    #[entities]
+    pub villager: Entity,
+    pub offer: u8,
+}
+
+/// The trades the villager a player's trading with offers them, each with how many more times
+/// it'll make it, as they change, or none once trading's over. A player trades with one at a
+/// time, the one they last right-clicked.
+#[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TradeOffers(pub Option<Vec<(Offer, u8)>>);
 
 // `ClientId` has no serde of its own. A client is its entity on the server, or the server itself
 // when it plays too, which goes as no entity.

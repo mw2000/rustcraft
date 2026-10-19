@@ -71,7 +71,8 @@ def cabin():
     railed and its lean-to roof carrying on the main roof's slope, with logs stacked by the
     door."""
     b = Piece(7, 15, 9)
-    b.ground("grass")
+    # the yard is the world's own ground, snow or grass as the taiga has it
+    b.ground(None)
     x0, x1, z0, z1 = 0, 6, 1, 5
     eaves = F + 4
     lodge_walls(b, x0, x1, z0, z1, F + 1, eaves, posts_z=(3,))
@@ -113,7 +114,6 @@ def cabin():
     b.hang(3, eaves - 1, 3)
     b.bracket_lamp(3, F + 2, z0 - 1, "north")
     b.ground("path", (3, 8), (3, 8))
-    b.verge(where=lambda x, z: z in (0, 8))
     b.mark("entrance", 3, F, 8)
     b.write_piece(
         "lodge_cabin", "house", STYLES, "stone_bricks",
@@ -127,7 +127,8 @@ def house():
     gable over the porch boarded and crowned with horns, a stone chimney up its east side and a
     woodpile along its west."""
     b = Piece(9, 17, 11)
-    b.ground("grass")
+    # the yard is the world's own ground, snow or grass as the taiga has it
+    b.ground(None)
     x0, x1, z0, z1 = 1, 7, 1, 7
     eaves = F + 5
     lodge_walls(b, x0, x1, z0, z1, F + 1, eaves, posts_z=(4,), posts_x=(4,))
@@ -185,7 +186,6 @@ def house():
     b.hang(4, eaves - 1, 4)
     b.bracket_lamp(4, F + 2, z0 - 1, "north")
     b.ground("path", (4, 10), (4, 10))
-    b.verge(where=lambda x, z: z in (0, 10) or x == 8)
     b.mark("entrance", 4, F, 10)
     b.write_piece(
         "lodge_house", "house", STYLES, "stone_bricks",
@@ -199,7 +199,8 @@ def homestead():
     meeting in a valley, a porch with a lean-to roof in the angle, and logs stacked against the
     wing."""
     b = Piece(11, 17, 12)
-    b.ground("grass")
+    # the yard is the world's own ground, snow or grass as the taiga has it
+    b.ground(None)
     mx0, mx1, mz0, mz1 = 0, 10, 1, 5
     wx0, wx1, wz0, wz1 = 5, 9, 5, 9
     eaves = F + 4
@@ -268,7 +269,6 @@ def homestead():
     b.ground("path", (2, 8), (2, 11))
     b.set(0, F, 9, FENCE)
     b.set(0, F + 1, 9, "lantern")
-    b.verge(where=lambda x, z: z >= 8 or z == 0)
     b.mark("entrance", 2, F, 11)
     b.write_piece(
         "lodge_homestead", "house", STYLES, "stone_bricks",
@@ -283,7 +283,8 @@ def hall():
     front, crowned with horns; inside a long hearth of embers between tables and benches, a
     fireplace and the high seat at the back, lit by lanterns from the tie beams."""
     b = Piece(13, 22, 13)
-    b.ground("grass")
+    # the yard is the world's own ground, snow or grass as the taiga has it
+    b.ground(None)
     x0, x1, z0, z1 = 2, 10, 1, 9
     eaves = F + 6
     lodge_walls(b, x0, x1, z0, z1, F + 2, eaves, posts_x=(6,), posts_z=(3, 5, 7))
@@ -353,7 +354,6 @@ def hall():
         b.bracket_lamp(0 + 1, F + 2, z, "west")
         b.bracket_lamp(x1 + 1, F + 2, z, "east")
     b.ground("path", (6, 12), (6, 12))
-    b.verge(where=lambda x, z: z == 12 or x in (0, 1, 11, 12))
     b.mark("entrance", 6, F, 12)
     b.write_piece(
         "lodge_hall", "hall", STYLES, "stone_bricks",
@@ -367,7 +367,8 @@ def smithy():
     side to a lean-to on log posts where the anvil and the quenching trough stand, coal and ore
     heaped by the wall and a woodpile behind."""
     b = Piece(10, 15, 10)
-    b.ground("grass")
+    # the yard is the world's own ground, snow or grass as the taiga has it
+    b.ground(None)
     b.ground("path*3|gravel|cobblestone*2", (0, 1), (9, 7))
     b.ground("path*4|gravel", (3, 8), (6, 9))
     # the forge: stone walls three high on three sides, open to the lean-to on the east
@@ -427,7 +428,6 @@ def smithy():
     b.set(9, F + 1, 8, "lantern")
     b.set(0, F, 8, FENCE)
     b.set(0, F + 1, 8, "lantern")
-    b.verge(where=lambda x, z: z >= 7)
     b.mark("entrance", 4, F, 9)
     b.write_piece(
         "lodge_smithy", "smithy", STYLES, "stone_bricks",

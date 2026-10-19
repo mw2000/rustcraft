@@ -33,7 +33,7 @@ use crate::inventory::Hotbar;
 use crate::inventory::Inventory;
 use crate::player::name::PlayerName;
 use crate::player::{Player, PlayerLook, PlayerOwner};
-use crate::server::creatures::{saved, Dormant, Health, Life};
+use crate::server::creatures::{saved, Dormant, Health, Life, Settled, Townsfolk};
 use crate::server::Operators;
 use crate::survival::{SpawnBed, Vitals};
 use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
@@ -491,8 +491,10 @@ struct Savable<'w, 's> {
             &'static Transform,
             &'static Health,
             &'static Life,
+            Option<&'static Townsfolk>,
         ),
     >,
+    settled: Option<Res<'w, Settled>>,
     players: Query<
         'w,
         's,
@@ -516,6 +518,11 @@ impl Savable<'_, '_> {
         let mut file = WorldFile::new(self.world.seed(), self.clock.0);
         file.ops = self.operators.names().to_vec();
         file.new_player_mode = save.new_player_mode;
+        file.settled = self
+            .settled
+            .iter()
+            .flat_map(|settled| settled.0.iter().map(|&(x, z)| [x, z]))
+            .collect();
         file.player = save.host.clone();
         for (body, player, look, mode, hotbar, inventory, owner, name, vitals, bed) in &self.players
         {
@@ -533,7 +540,9 @@ impl Savable<'_, '_> {
             .creatures
             .iter()
             .filter(|(creature, ..)| !creature.0.properties().despawns)
-            .map(|(creature, body, health, life)| saved(creature, body, health, life));
+            .map(|(creature, body, health, life, townsfolk)| {
+                saved(creature, body, health, life, townsfolk)
+            });
         let asleep = self
             .dormant
             .iter()

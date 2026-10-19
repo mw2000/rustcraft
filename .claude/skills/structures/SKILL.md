@@ -174,9 +174,11 @@ The village layout codes against this contract, so every piece keeps it:
 
 - **Front to the south** (+z, the last row of every layer); the layout turns each piece to face
   its street, which lies beyond that edge. The well may be turned any way.
-- **Layer `floor - 1` is the ground's surface**, every cell of it given (floors, plinths, path,
-  `grass` in timber and lodge gardens, `path` and sand in adobe yards), so no raw ground shows
-  where the footprint was cut or filled; layer `floor` is the first air over it. Most pieces
+- **Layer `floor - 1` is the ground's surface** (floors, plinths, path, `grass` in timber
+  gardens, `path` and sand in adobe yards), so little raw ground shows where the footprint was
+  cut or filled; layer `floor` is the first air over it. The lodges' yards, and the farm's and
+  pen's round them, are left as the world has them (`.`), so they're snow in snowy taiga and
+  grass elsewhere rather than green squares on the snow. Most pieces
   have `floor = 1`; the timber and lodge wells sink their shafts with `floor = 3`.
 - **The last row is an apron**, walkable and level with the street at layer `floor - 1`, at
   least at the entrance, so the street's spur meets it.

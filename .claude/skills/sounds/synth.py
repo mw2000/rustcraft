@@ -513,6 +513,32 @@ def cluck(rng):
     return level(trim(np.concatenate(out)), -21)
 
 
+def murmur(rng):
+    """A villager's murmur (M3.4): two or three soft syllables of a voice, each a hum through closed lips opening
+    out to a vowel, as "hm-mm" or "mm-ah", the last rising like a question or falling away. The game pitches it
+    for each calling."""
+    out = []
+    count = rng.integers(2, 4)
+    pitch = rng.uniform(150, 190)
+    rises = rng.random() < 0.5
+    vowels = [((700, 6, 1.0), (1150, 7, 0.5), (2600, 9, 0.12)), ((450, 6, 1.0), (1900, 8, 0.4), (2600, 9, 0.15)),
+              ((350, 5, 1.0), (850, 6, 0.4), (2300, 9, 0.1))]
+    for i in range(count):
+        d = rng.uniform(0.14, 0.24) * (1.4 if i == count - 1 else 1.0)
+        n = samples(d)
+        t = times(n) / d
+        last = i == count - 1
+        glide = (0.25 * t if rises else -0.2 * t) if last else rng.uniform(-0.06, 0.06) * t
+        f0 = pitch * rng.uniform(0.95, 1.08) * (1 + glide) * (1 + 0.012 * np.sin(2 * np.pi * 5.5 * times(n)))
+        buzz = voiced(f0, 30)
+        closed = lowpass(buzz, 300)
+        opened = formants(buzz, vowels[rng.integers(len(vowels))])
+        mouth = np.clip(t * 3 - 0.4, 0, 1) * rng.uniform(0.4, 1.0)
+        out.append((closed * (1 - mouth) + opened * mouth * 0.6) * envelope(n, 0.03, d / 2.5, hold=d * 0.35))
+        out.append(np.zeros(samples(rng.uniform(0.04, 0.09))))
+    return level(trim(np.concatenate(out)), -21)
+
+
 # --- hostile creatures (M3.3) -------------------------------------------------------------------
 
 
@@ -862,7 +888,7 @@ def catalogue():
             out[f"step/{surface}_{v + 1}"] = (lambda rng, s=surface: step(s, rng), 100 * s + v)
             out[f"break/{surface}_{v + 1}"] = (lambda rng, s=surface: break_(s, rng), 1000 + 100 * s + v)
     for name, make in (("swim", swim), ("splash", splash), ("pickup", pickup), ("eat", eat), ("hurt", hurt), ("bleat", bleat),
-                       ("moo", moo), ("oink", oink), ("cluck", cluck)):
+                       ("moo", moo), ("oink", oink), ("cluck", cluck), ("murmur", murmur)):
         for v in range(VARIATIONS):
             out[f"{name}_{v + 1}"] = (make, 5000 + v)
     for name, make in (("death", death), ("chest_open", chest_open), ("chest_close", chest_close), ("click", click)):

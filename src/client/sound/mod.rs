@@ -180,6 +180,22 @@ impl SoundKind {
             Self::Call(CreatureKind::Chicken) => takes("cluck".into(), 0.5, (0.9, 1.15)),
             // a startled squawk
             Self::Yelp(CreatureKind::Chicken) => takes("cluck".into(), 0.8, (1.4, 1.7)),
+            // villagers murmur, each calling in a voice of its own, and cry out higher
+            Self::Call(kind) | Self::Yelp(kind) if kind.properties().calling.is_some() => {
+                let voice = match kind {
+                    CreatureKind::Smith => 0.8,
+                    CreatureKind::Lamplighter => 0.9,
+                    CreatureKind::Trader => 1.05,
+                    CreatureKind::Shepherd => 1.2,
+                    _ => 1.0,
+                };
+                let (volume, high) = match self {
+                    Self::Yelp(_) => (0.75, 1.35),
+                    _ => (0.55, 1.0),
+                };
+                let pitch = voice * high;
+                takes("murmur".into(), volume, (pitch * 0.95, pitch * 1.05))
+            }
             // an animal strikes at nothing, and dies with a lower, slower call
             Self::Strike(kind) if kind.properties().attack.is_none() => Self::Yelp(kind).sound(),
             Self::Perish(kind) if kind.properties().attack.is_none() => {

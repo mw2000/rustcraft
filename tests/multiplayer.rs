@@ -2013,3 +2013,88 @@ fn test_a_host_leaving_its_world_sees_everyone_off_and_saves_them() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn test_a_joiner_trades_with_a_villager_and_is_refused_without_payment() {
+    use rustcraft::creatures::{Settler, Villager};
+    use rustcraft::protocol::{Trade, TradeOffers};
+    use rustcraft::server::creatures::townsperson;
+    use rustcraft::trading::Stock;
+
+    let dir = temp_dir("trading");
+    let (mut server, mut client) = server_and_client(&dir, None);
+    server.insert_resource(SpawnRate(None));
+    update_until(&mut server, &mut client, |_, client| joined(client));
+    let guest = guests_player(&mut server);
+    let feet = server.world().get::<Transform>(guest).unwrap().translation;
+    // a smith beside the guest, from a village it'll never find, so it stands where it is
+    let calling = CreatureKind::Smith.properties().calling.as_ref().unwrap();
+    let villager = Villager { style: 1, seed: 7 };
+    let here = (feet + Vec3::X * 1.5).floor().as_i64vec3();
+    let settler = Settler {
+        villager,
+        village: bevy::math::I64Vec2::new(1 << 40, 0),
+        home: here,
+        work: here,
+        well: here,
+        stock: Stock::of(calling, villager.seed, 0),
+    };
+    let smith = SavedCreature {
+        settler: Some(settler),
+        ..SavedCreature::grown(CreatureKind::Smith, feet + Vec3::X * 1.5)
+    };
+    server
+        .world_mut()
+        .spawn((creature(smith, 0.0), townsperson(settler)));
+    update_until(&mut server, &mut client, |_, client| {
+        let mut shown = client.world_mut().query::<&Villager>();
+        shown.iter(client.world()).next() == Some(&villager)
+    });
+    let (shown, _) = creatures_shown(&mut client)[0];
+    // right-clicked, its trades are sent to the guest alone
+    let mut offers = MessageCursor::<TradeOffers>::default();
+    client
+        .world_mut()
+        .write_message(UseCreature { creature: shown });
+    let sent = update_until_sent(&mut server, &mut client, &mut offers, |_| true);
+    let expected = settler.stock.offers(calling);
+    assert_eq!(Some(expected.to_vec()), sent.0);
+    // a trade it can't pay for changes nothing, and one it can is made
+    let (offer, left) = expected[0];
+    let trade = Trade {
+        villager: shown,
+        offer: 0,
+    };
+    client.world_mut().write_message(trade);
+    for _ in 0..20 {
+        client.update();
+        server.update();
+    }
+    assert_eq!(
+        0,
+        server
+            .world()
+            .get::<Inventory>(guest)
+            .unwrap()
+            .count(offer.gives.0)
+    );
+    let (price, count) = offer.takes;
+    server
+        .world_mut()
+        .get_mut::<Inventory>(guest)
+        .unwrap()
+        .add(ItemStack::new(price, count));
+    client.world_mut().write_message(trade);
+    let sent = update_until_sent(&mut server, &mut client, &mut offers, |_| true);
+    assert_eq!(Some(left - 1), sent.0.map(|offers| offers[0].1));
+    update_until(&mut server, &mut client, |_, client| {
+        let player = local_player(client);
+        client
+            .world()
+            .get::<Inventory>(player)
+            .unwrap()
+            .count(offer.gives.0)
+            > 0
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+}

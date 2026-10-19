@@ -74,6 +74,7 @@ impl Plugin for ServerPlugin {
             .init_resource::<creatures::Dormant>()
             .init_resource::<creatures::SpawnRate>()
             .init_resource::<creatures::Spawners>()
+            .init_resource::<creatures::Settled>()
             .add_observer(players::welcome)
             .add_observer(survival::start_living)
             .add_observer(players::see_off)
@@ -94,12 +95,14 @@ impl Plugin for ServerPlugin {
                     (drops::fall, drops::merge, drops::pick_up).chain(),
                     (
                         creatures::wake,
+                        creatures::settle,
                         creatures::build_spawners,
                         creatures::spawn,
                         creatures::take_paths,
                         creatures::grow,
                         creatures::think,
                         creatures::move_creatures,
+                        creatures::use_doors,
                         creatures::fight,
                         creatures::fly_missiles,
                         creatures::breed,
@@ -144,7 +147,11 @@ impl Plugin for ServerPlugin {
                     commands::run_commands,
                     chat::receive_chat,
                     (clock::wind_clock, clock::sync_clock).chain(),
-                    (creatures::receive_hits, creatures::receive_uses),
+                    (
+                        creatures::receive_hits,
+                        creatures::receive_uses,
+                        (creatures::open_trades, creatures::make_trades).chain(),
+                    ),
                     players::relay_swings,
                 )
                     .after(ClientSystems::Send)
@@ -204,6 +211,7 @@ impl Plugin for ServerPlugin {
                     structures::send_selections,
                     players::hold_items,
                     containers::send_containers,
+                    creatures::send_offers,
                 )
                     .after(edits::receive_edits)
                     .after(inventory::receive_inventory_requests)
@@ -317,6 +325,8 @@ pub fn open_world(
     commands.insert_resource(containers);
     commands.insert_resource(crops);
     commands.insert_resource(creatures::Dormant::of(save.take_creatures()));
+    let settled = saved.settled.iter().map(|&[x, z]| (x, z));
+    commands.insert_resource(creatures::Settled(settled.collect()));
     commands.insert_resource(Operators::new(saved.ops));
     commands.insert_resource(save);
 }
@@ -361,4 +371,5 @@ fn close_world(
     commands.insert_resource(Operators::default());
     commands.insert_resource(creatures::Dormant::default());
     commands.insert_resource(creatures::Spawners::default());
+    commands.insert_resource(creatures::Settled::default());
 }

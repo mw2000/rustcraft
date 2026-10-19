@@ -13,7 +13,7 @@ use crate::collision::{boxes_at, looked_at, Hit};
 use crate::containers::Container;
 use crate::controls::{Action, Bindings, Controls};
 use crate::crafting::Station;
-use crate::creatures::{Condition, Creature};
+use crate::creatures::{Condition, Creature, Villager};
 use crate::farming::tilled;
 use crate::game_mode::GameMode;
 use crate::inventory::furnace::ContainerView;
@@ -242,7 +242,7 @@ fn outline_target(world: Res<World>, target: Res<Target>, mut gizmos: Gizmos<Out
 // server told when it starts, and it breaks once it's been held as long as it takes with the
 // tool in the selected slot, which the server checks. On a creature, it hits it, no sooner after
 // the last hit than what's held swings again, as the server would refuse it, and right click
-// uses what's held on it, shearing or feeding it.
+// uses what's held on it, shearing or feeding it, unless it's a villager, which it trades with.
 #[allow(clippy::too_many_arguments)]
 fn break_target(
     world: Res<World>,
@@ -250,6 +250,7 @@ fn break_target(
     creature: Res<TargetCreature>,
     mut hits: MessageWriter<HitCreature>,
     mut uses: MessageWriter<UseCreature>,
+    villagers: Query<(), With<Villager>>,
     controls: Controls,
     time: Res<Time>,
     player: Query<(&GameMode, &Hotbar, &Inventory), With<LocalPlayer>>,
@@ -266,7 +267,8 @@ fn break_target(
             *ready_at = now + held.map_or(HAND_COOLDOWN, Item::cooldown);
             hits.write(HitCreature { creature });
         }
-        if controls.just_pressed(Action::Place) {
+        // villagers are traded with instead (`inventory::trade`)
+        if controls.just_pressed(Action::Place) && !villagers.contains(creature) {
             uses.write(UseCreature { creature });
         }
     }

@@ -30,7 +30,8 @@ def farm():
     inside the fence, a scarecrow, a heap of straw and a barrel at the back, and gateposts with
     lanterns either side of the opening to the street."""
     b = Piece(13, 6, 11)
-    b.ground("grass")
+    # round the field, the world's own ground, snow or grass, as farms stand in either
+    b.ground(None)
     x0, x1, z0, z1 = 0, 12, 0, 9
     # the field: farmland either side of the channel down its middle, paths round it
     b.ground("farmland", (2, 1), (10, 7))
@@ -74,8 +75,6 @@ def farm():
     b.mark("work", 3, F, 4)
     b.mark("work", 9, F, 6)
     b.mark("work", 6, F, 8)
-    # grass outside the fence
-    b.verge(where=lambda x, z: z == 10)
     b.mark("entrance", 6, F, 10)
     b.write_piece(
         "farm", "farm", STYLES, "dirt",
@@ -88,7 +87,8 @@ def pen():
     hop, closed all round, a trough of water and straw under a lean-to at the back, and the
     herder's place outside by a barrel of feed."""
     b = Piece(9, 6, 9)
-    b.ground("grass")
+    # round the pen, the world's own ground, snow or grass, as pens stand in either
+    b.ground(None)
     x0, x1, z0, z1 = 0, 8, 0, 6
     b.ground("grass*5|path*2", (1, 1), (7, 5))
     for x in range(x0, x1 + 1):

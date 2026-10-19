@@ -34,6 +34,10 @@ pub struct WorldFile {
     /// before there was a choice.
     #[serde(default, skip_serializing_if = "GameMode::is_survival")]
     pub new_player_mode: GameMode,
+    /// The villages settled, by their cells on the villages' grid, whose villagers live on or
+    /// are gone (M3.4); older games ignore it, finding no villagers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settled: Vec<[i64; 2]>,
     /// The host's player, once they've played in it, the only one saved until M0.6.
     pub player: Option<PlayerState>,
 }
@@ -147,6 +151,7 @@ impl WorldFile {
             time_of_day,
             ops: Vec::new(),
             new_player_mode: GameMode::default(),
+            settled: Vec::new(),
             player: None,
         }
     }

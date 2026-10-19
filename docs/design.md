@@ -77,7 +77,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | The renderer's defaults, and the player's own settings over them, volumes too, from the Settings screen | `assets/settings.toml`, `src/settings.rs`, `src/preferences.rs`, `src/client/sound/volume.rs` |
-| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; sheep, cows, pigs and chickens, and four monsters out in the dark that hunt players, despawning unsaved (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs` |
+| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; sheep, cows, pigs and chickens, four monsters out in the dark that hunt players, despawning unsaved, and villagers of five callings who keep their day and trade (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs`, `src/trading.rs` |
 | Ambient life | Butterflies, fireflies with their glow, starling murmurations and skeins of geese, decoration on the client alone, by biome and time of day (§5.8) | `src/client/critters/` |
 | Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time from recordings and synthesis, rare music (§5.10) | `src/client/sound/`, `assets/sounds/` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
@@ -96,7 +96,7 @@ Blocks can be broken and placed, kept in an edit layer over the generated world 
 `src/client/`). Worlds are saved as their edits, containers, crops and the player (`src/save/`).
 
 Combat came with M3.3: swords and armour (§5.3), blows and critical hits (§5.5), and monsters
-(§5.8).
+(§5.8). Villages, villagers and trading came with M3.4 (§5.6, §5.8).
 
 ---
 
@@ -360,6 +360,11 @@ The world's state beyond the seed (INV-1).
     aren't as they were last written, removing a region's file once it has none. A kind the game
     doesn't know fails the load, as items do. Older games ignore the directory, so the format
     isn't raised; one that opens the world finds no creatures, and leaves the files as they are.
+    **Since M3.4** the file's format is 3, each creature followed by a villager's `Settler` if
+    it's one (its style and seed, its village's cell, where it stands at home, at work and at the
+    well, and today's trades); format 2 reads as no villagers. `world.toml` lists the villages
+    `settled` by their cells, written only once there's one, so they aren't settled again and the
+    dead stay dead; an older game ignores it, and a world it saves forgets it.
 
 ### 4.4 Multiplayer (decided: client/server with an integrated server, on `bevy_replicon`, D-1)
 
@@ -1903,11 +1908,16 @@ landmarks visible from far away (P1).
     it down to the ground where it's raised and air over it where it's cut in; paths aren't drawn
     as boxes, being flat. `Placements` remembers villages by cell (4096 of them), and `near`
     gives the pieces and paths overlapping what asks after the types'.
+  - **Ways:** a `Village` keeps its streets as a tree from the well and where each piece's way
+    meets its street, so `Village::way` gives the cells to walk through from anywhere in it to a
+    spot in a piece: out by the door it's in, along the streets (a cell every 8 blocks) up to
+    where the way down to the piece leaves, or by the well, and in by the piece's door, each
+    within A*'s reach of the last (§5.8).
   - **New blocks:** `path` (trodden earth, breaking to dirt), `plaster`, `adobe` with stairs and
     a slab, and `thatch` with stairs and a slab, tiles drawn by `draw.py`; plaster from 3 sand and
     a stone, adobe from 3 dirt and a wheat, thatch from 4 wheat, at a crafting table. Paths are
     made by nothing yet. The `village` loot table fills the chests of houses, halls and smithies
-    with food and a little metal.
+    with food, a few coins and a little metal.
   - **LODs:** pieces are drawn as structures are, by coverage near and as boxes far, so rooftops
     and towers show from afar; a path's surface is level 0's exactly and level 1's by coverage.
     The structure LOD tests now take village pieces too, and a test checks streets' surfaces at
@@ -1923,9 +1933,11 @@ landmarks visible from far away (P1).
     cells ruled out, 43 ms on one thread); a chunk or node near one then asks for its pieces as it
     asks for structures.
   - **Determinism:** the golden checksum is unchanged, as none of its samples is in a village.
+  - The lodges' yards, and the farm's and pen's round them, are the world's own ground, snow in
+    snowy taiga and grass elsewhere, rather than laid grass, which showed as green squares on
+    the snow.
   - **Later:** shovels treading paths, blending the cut and filled ground at a street's edges,
-    snow rather than grass in the lodges' yards in snowy taiga, villages growing, roads between
-    them, and lit windows.
+    villages growing, roads between them, and lit windows.
 
 **Style guide for structures (M2.4b on).** Every structure is reviewed in screenshots from
 several angles, near and far, before it lands. It should have:
@@ -2096,7 +2108,7 @@ from high places.
 - Passive animals (food, materials) and hostile mobs at night and in dark caves.
 - Needs an entity system on the server, pathfinding over voxels, simple models and animation, and
   replication (§4.4). This is the biggest single system in the plan, so it comes after the core.
-- Villagers come with villages.
+- Villagers come with villages (built M3.4, below).
 - **Built (M3.1):** the entity system and pathfinding, shown with sheep.
   - **Kinds are data (INV-6):** each a row of the `creatures!` table (`src/creatures/mod.rs`):
     its stable name, its width and height (the box collision and pathfinding take), health,
@@ -2431,6 +2443,79 @@ from high places.
   - **Later:** sounds (starlings' chatter, geese honking), more kinds (bees, moths round
     lanterns, fish, gulls by the sea), a spatial grid for bigger flocks.
 
+- **Built (M3.4): villagers and trading** (`src/creatures/mod.rs`, `src/server/creatures/villagers.rs`, `src/trading.rs`, `src/inventory/trade.rs`).
+  - **Kinds:** five rows of `creatures!`, one to each calling, `farmer`, `smith`, `trader`,
+    `shepherd` and `lamplighter`, 0.6 × 1.85, 20 health, walking 1.3 and running 3.4. Each is
+    robed to below the knee in its calling's colour (a green smock, charcoal, plum, undyed wool,
+    night blue) over boots, its sleeves over hands that show at the cuff and swing with them,
+    with a face under its hair and its calling's headgear: a broad straw hat, a leather apron and
+    sooty cap, a tall felt hat and a purse, a hood, and a hood with a lantern hung from the left
+    hand that glows in the dark (`Look::Lamp`). Belt, hem and collar, the hat's band and the
+    shepherd's hood are `Look::Trim`, drawn in their village's colours (`VILLAGE_COLOURS`:
+    madder red in timber country, saffron in adobe, woad blue in the lodges), a look for each
+    kind and style made once. A `calling` column gives the kind's workplace role and trades.
+    They never spawn by themselves and never despawn.
+  - **Settling:** the first time a player comes within 64 blocks of a village whose beds and
+    pens are on ground the server holds (`settle`, every 2 s), it spawns a villager by each
+    `bed` marker, giving each the calling of the workplaces in turn (a place at each workplace
+    before a second at any, so they don't stand on one spot), a `work` marker there and a
+    `gather` marker at the well, a seed from the world's seed and its bed, and its trades for
+    the day; and an animal by each pen's `animal` markers, a kind a pen. The village's cell
+    goes in `Settled`, saved in `world.toml`, so it's never settled again and a villager killed
+    stays dead. There's no breeding yet.
+  - **Their day** (`Behaviour::Routine`, `Doing::Keep(place)`): home by their bed from dusk until
+    just after dawn, at the well from about noon to 0.54 and again in the evening, and otherwise
+    at work, each a little earlier or later than the rest by its seed (`place_now`). Setting off,
+    a villager takes `Village::way` (§5.6) to its spot, walking it a cell at a time with A*
+    between them, giving a cell up after 15 s; there, it walks about within 2 blocks now and then
+    by day, only where a way gets it, and stands in its very spot at home, out of the doorway.
+    `Behaviour::Wary` runs from any monster within 10 blocks for 5 s, after which it finds its way
+    afresh from where it's got to; hit, it runs as animals do. A player trading with one has it
+    stop and face them (`Doing::Heed`).
+  - **Doors:** a walker that `opens_doors` finds its way through doors as if they were open; the
+    server opens each door in a villager's feet or head cell, or the next two of its way, both
+    halves, as edits clients are told of, and shuts those it's opened once it's through,
+    1.1 blocks from the door's middle and not going back through it (`use_doors`). A way is
+    found from the ground under a villager that's jumping, as one from mid-air would start with
+    a step up from nothing (any creature).
+  - **Trading** (INV-4): right-clicking a villager in survival opens the inventory screen at it
+    (the client's `talk`, which sends `UseCreature`) with its name and calling ("Merrick the
+    trader") and its three offers in the crafting list's place, each what it takes, what it gives
+    and how many more times it'll make it today, dimmed where what's carried won't pay or it's
+    sold out. The server keeps `Trading` on the player while the villager's in reach, sends
+    `TradeOffers` as they change and none once it's over, which closes the screen, and makes a
+    `Trade` only if they're trading with that villager, have its price and it has stock left,
+    dropping what doesn't fit. A villager's offers are three of its calling's five or six,
+    chosen from its seed and the day (`Stock`), each 1–6 times a day, restocked each morning.
+    A coin is the money: every calling buys something for coins (wheat, seeds, beef, coal, iron
+    ingots, wool, leather, torches) and sells for them: food, thatch, iron tools and armour,
+    shears, glass, wool, beds, light, and from traders gold, frost crystal and jade at 8 coins.
+    A villager looked at is named under the crosshair.
+  - **Sounds:** a murmur of two or three soft voiced syllables, opening from a hum to a vowel and
+    rising or falling at the end, synthesised by `synth.py` (`murmur`, four takes), pitched for
+    each calling and higher when hurt.
+  - **Saving:** as animals, asleep in `Dormant` while nobody's near, with their `Settler` (style,
+    seed, village, home, work and well, and the day's trades), in creatures format 3 (§4.3).
+  - **Lighting:** villagers are drawn with M-A2's `ModelMaterial`, lit as the land is where they
+    stand, so they're no longer black at night; a lamplighter's lantern glows.
+  - `PROTOCOL_VERSION` is 21: `Villager` is replicated, and `Trade` and `TradeOffers` are new.
+  - **Tests** (`server::creatures::tests::villagers`, on seed 3's nearest village generated as
+    the world has it): settled once, a villager by every bed, of the callings there, with its
+    pens' animals, and one killed staying dead; at work by day, through their doors, home by
+    their beds at night with every door shut again; running from a gloamer and back to their
+    day; trading taking the price and giving the goods, refusing without payment and when sold
+    out, restocking the next day and ending as the player walks off; sleeping and waking with
+    homes and trades; streets nine tenths lit. Also ways between every pair of doors (§5.6),
+    paths through doors only for walkers that open them, offers and stock (`trading`), saving
+    villagers and reading format 2, the host trading (`tests/headless.rs`) and a joiner trading
+    and being refused (`tests/multiplayer.rs`).
+  - **Cost:** a village's ten or so villagers ask for a way only as they set off, a few times a
+    day, and between its cells; their brains and doors are a few lookups a frame. Laying out the
+    ways is a walk of the village's street tree.
+  - **Later:** breeding and villages growing, villagers talking among themselves at the well,
+    lamplighters lighting the lamps at dusk, trades getting better as a player trades more,
+    giving them names over their heads, and villagers sheltering from storms (M3.5).
+
 ### 5.9 Distribution
 
 - Release builds for Windows, macOS and Linux, published on GitHub, that run without installing
@@ -2644,7 +2729,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
   (§5.8).
 - ☑ **M3.3 Hostile mobs and combat.** Four monsters of our own, spawners in dungeons, swords,
   armour and blows (§5.3, §5.5, §5.8).
-- ◐ **M3.4 Villages and villagers.** Villages built (§5.6); villagers and trading to come.
+- ☑ **M3.4 Villages and villagers.** Villages assembled from pieces in three styles (§5.6), villagers keeping their day, and trading (§5.8).
 - ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
 
 ### Upstream ports

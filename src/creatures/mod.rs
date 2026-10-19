@@ -8,13 +8,15 @@ pub mod path;
 
 use std::ops::{Range, RangeInclusive};
 
-use bevy::math::I64Vec3;
+use bevy::math::{I64Vec2, I64Vec3};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
+use crate::chunks::generate::structures::village::Role;
 use crate::collision::Aabb;
 use crate::items::Item;
+use crate::trading::{self, Calling};
 
 /// How big a young creature is beside a grown one.
 pub const YOUNG_SCALE: f32 = 0.5;
@@ -61,6 +63,8 @@ pub struct Properties {
     pub clings: bool,
     /// How often a dungeon's spawner is of its kind, by weight against the others', 0 for never.
     pub guards: u8,
+    /// What it does in its village, and trades, if it's a villager (M3.4).
+    pub calling: Option<Calling>,
 }
 
 /// How a kind fights: how hard and how far it hits, how long it winds up a blow, which is how
@@ -131,6 +135,11 @@ pub enum Look {
     Eye,
     /// An eye that glows in the dark, as a monster's do, and blinks.
     Glow,
+    /// Trimmings in the colours of the village a villager's from, which take the place of the
+    /// part's own (`VILLAGE_COLOURS`).
+    Trim,
+    /// A light carried, drawn as bright as it is whatever the light, as a lamplighter's lantern.
+    Lamp,
 }
 
 /// Where a kind appears: in which biomes, by name, the base terrain's being `base`, or all of
@@ -177,6 +186,10 @@ pub enum Behaviour {
     Ambush,
     /// Runs from bright light, and from a player holding something that gives it.
     ShunLight,
+    /// Runs from monsters near it.
+    Wary,
+    /// Keeps a villager's day: at work, meeting the others at the well, and home at night.
+    Routine,
 }
 
 // Declares `CreatureKind`, with a variant for each row, and each row's stable name and
@@ -591,6 +604,170 @@ const ANY_GROUND: &[BlockType] = &[
     BlockType::Sandstone,
 ];
 
+/// The colours villagers' trimmings take in each style of village, by its place in
+/// `VILLAGES.styles`: madder red in the timbered country, saffron in the adobe, woad blue in the
+/// lodges.
+pub const VILLAGE_COLOURS: [[f32; 3]; 3] = [[0.6, 0.2, 0.17], [0.86, 0.6, 0.18], [0.2, 0.34, 0.56]];
+
+// Trimmings, which a villager wears in its village's colours, the part's own colour standing for
+// the first style's.
+const fn trim(part: Part) -> Part {
+    Part {
+        look: Look::Trim,
+        colour: VILLAGE_COLOURS[0],
+        ..part
+    }
+}
+
+const SKIN: [f32; 3] = [0.84, 0.66, 0.52];
+const BOOTS: [f32; 3] = [0.27, 0.19, 0.13];
+const NOSE: [f32; 3] = [0.76, 0.56, 0.44];
+const HAIR: [f32; 3] = [0.36, 0.26, 0.18];
+
+// A villager: robed to below the knee in `robe`, belted, hemmed and collared in its village's
+// colours, sleeves to the wrist and boots under the hem, a face under its hair, and `extra`,
+// what its calling wears and carries, `M` parts in all.
+const fn villager<const N: usize, const M: usize>(robe: [f32; 3], extra: [Part; N]) -> [Part; M] {
+    assert!(M == COMMON + N);
+    let [left, right] = eyes(0.085, 1.56, -0.185, 0.06);
+    let common = [
+        leg([0.16, 0.38, 0.18], -0.11, 0.0, BOOTS, 1.0),
+        leg([0.16, 0.38, 0.18], 0.11, 0.0, BOOTS, -1.0),
+        part([0.5, 0.52, 0.34], [0.0, 0.62, 0.0], robe),
+        trim(part([0.52, 0.07, 0.36], [0.0, 0.38, 0.0], robe)),
+        part([0.46, 0.5, 0.28], [0.0, 1.09, 0.0], robe),
+        trim(part([0.48, 0.07, 0.3], [0.0, 0.87, 0.0], robe)),
+        trim(part([0.4, 0.07, 0.3], [0.0, 1.31, 0.0], robe)),
+        // each sleeve over a hand as long, which only shows at the cuff, so the two swing as one
+        arm([0.14, 0.56, 0.16], -0.3, 1.32, 0.0, robe),
+        arm([0.14, 0.56, 0.16], 0.3, 1.32, 0.0, robe),
+        arm([0.11, 0.66, 0.12], -0.3, 1.32, 0.0, SKIN),
+        arm([0.11, 0.66, 0.12], 0.3, 1.32, 0.0, SKIN),
+        head([0.36, 0.38, 0.36], [0.0, 1.53, 0.0], SKIN),
+        head([0.38, 0.1, 0.38], [0.0, 1.69, 0.01], HAIR),
+        head([0.38, 0.24, 0.1], [0.0, 1.58, 0.15], HAIR),
+        head([0.07, 0.09, 0.06], [0.0, 1.5, -0.2], NOSE),
+        left,
+        right,
+    ];
+    let mut parts = [common[0]; M];
+    let mut i = 0;
+    while i < M {
+        parts[i] = if i < COMMON {
+            common[i]
+        } else {
+            extra[i - COMMON]
+        };
+        i += 1;
+    }
+    parts
+}
+
+// The parts every villager has.
+const COMMON: usize = 17;
+
+const STRAW: [f32; 3] = [0.85, 0.72, 0.42];
+const APRON: [f32; 3] = [0.4, 0.27, 0.16];
+const SOOT: [f32; 3] = [0.2, 0.19, 0.19];
+const FELT: [f32; 3] = [0.17, 0.15, 0.17];
+const LANTERN_GLOW: [f32; 3] = [1.0, 0.82, 0.42];
+
+// A farmer in a green smock under a broad straw hat.
+const FARMER: &[Part] = &villager::<3, 20>(
+    [0.4, 0.48, 0.26],
+    [
+        head([0.64, 0.05, 0.64], [0.0, 1.74, 0.0], STRAW),
+        head([0.38, 0.12, 0.38], [0.0, 1.82, 0.0], STRAW),
+        trim(head([0.39, 0.04, 0.39], [0.0, 1.78, 0.0], STRAW)),
+    ],
+);
+
+// A smith in charcoal, a leather apron over it and a sooty cap.
+const SMITH: &[Part] = &villager::<3, 20>(
+    [0.3, 0.29, 0.29],
+    [
+        part([0.4, 0.74, 0.04], [0.0, 0.92, -0.18], APRON),
+        head([0.4, 0.09, 0.4], [0.0, 1.74, 0.0], SOOT),
+        head([0.28, 0.1, 0.05], [0.0, 1.39, -0.19], HAIR),
+    ],
+);
+
+// A trader in plum, under a tall felt hat banded in the village's colours, a purse at the belt.
+const TRADER: &[Part] = &villager::<4, 21>(
+    [0.4, 0.22, 0.4],
+    [
+        head([0.5, 0.04, 0.5], [0.0, 1.74, 0.0], FELT),
+        head([0.32, 0.26, 0.32], [0.0, 1.89, 0.0], FELT),
+        trim(head([0.33, 0.05, 0.33], [0.0, 1.79, 0.0], FELT)),
+        part([0.12, 0.12, 0.06], [0.16, 0.78, -0.19], APRON),
+    ],
+);
+
+// A shepherd in undyed wool, under a hood in the village's colours open at the face.
+const SHEPHERD: &[Part] = &villager::<4, 21>(
+    [0.8, 0.76, 0.64],
+    [
+        trim(head([0.44, 0.08, 0.44], [0.0, 1.76, 0.02], SKIN)),
+        trim(head([0.44, 0.42, 0.06], [0.0, 1.55, 0.21], SKIN)),
+        trim(head([0.04, 0.4, 0.4], [-0.2, 1.55, 0.02], SKIN)),
+        trim(head([0.04, 0.4, 0.4], [0.2, 1.55, 0.02], SKIN)),
+    ],
+);
+
+// A lamplighter in night blue, hooded, a lantern in its left hand hung under the cuff, so it
+// swings with the arm and glows in the dark.
+const LAMPLIGHTER: &[Part] = &villager::<4, 21>(
+    [0.19, 0.21, 0.34],
+    [
+        head([0.44, 0.08, 0.44], [0.0, 1.76, 0.02], [0.19, 0.21, 0.34]),
+        head([0.44, 0.42, 0.06], [0.0, 1.55, 0.21], [0.19, 0.21, 0.34]),
+        Part {
+            look: Look::Lamp,
+            ..arm([0.1, 0.92, 0.1], -0.3, 1.32, 0.0, LANTERN_GLOW)
+        },
+        arm([0.13, 0.04, 0.13], -0.3, 0.44, 0.0, SOOT),
+    ],
+);
+
+// What a villager does: runs when it's hit, and from monsters, and otherwise keeps its day.
+const VILLAGER: &[Behaviour] = &[
+    Behaviour::Flee,
+    Behaviour::Wary,
+    Behaviour::Routine,
+    Behaviour::Wander,
+];
+
+// A villager's row, of the calling that works at `works_at` and trades `trades`, as `model`.
+const fn villager_kind(
+    model: &'static [Part],
+    works_at: Role,
+    trades: &'static [trading::Offer],
+) -> Properties {
+    Properties {
+        width: 0.6,
+        height: 1.85,
+        health: 20,
+        walk_speed: 1.3,
+        run_speed: 3.4,
+        model,
+        neck: Vec3::from_array([0.0, 1.34, 0.0]),
+        grazes: false,
+        drops: &[],
+        fleece: None,
+        food: &[],
+        spawns: None,
+        behaviours: VILLAGER,
+        avoids_water: true,
+        flutters: false,
+        attack: None,
+        despawns: false,
+        fades_by_day: false,
+        clings: false,
+        guards: 0,
+        calling: Some(Calling { works_at, trades }),
+    }
+}
+
 // Animals living on the grass, out by day, which give meat (§5.5a) that cooks in a furnace:
 // sheep and cows in open country, pigs in the woods, and chickens nearly everywhere, but none
 // in deserts or on glaciers.
@@ -628,6 +805,7 @@ creatures! {
             fades_by_day: false,
             clings: false,
             guards: 0,
+            calling: None,
         },
     },
     // Leather and feathers are for later: armour, books, arrows.
@@ -664,6 +842,7 @@ creatures! {
             fades_by_day: false,
             clings: false,
             guards: 0,
+            calling: None,
         },
     },
     // There are no carrots yet, so pigs root for apples in the woods, and take wheat as cows do.
@@ -700,6 +879,7 @@ creatures! {
             fades_by_day: false,
             clings: false,
             guards: 0,
+            calling: None,
         },
     },
     Chicken {
@@ -735,6 +915,7 @@ creatures! {
             fades_by_day: false,
             clings: false,
             guards: 0,
+            calling: None,
         },
     },
     // Monsters (M3.3), out in the dark: none of them drops meat, they despawn once nobody's
@@ -783,6 +964,7 @@ creatures! {
             fades_by_day: true,
             clings: false,
             guards: 0,
+            calling: None,
         },
     },
     // Hangs from cave ceilings in the dark and drops on whoever walks under it, but runs from
@@ -830,6 +1012,7 @@ creatures! {
             fades_by_day: false,
             clings: true,
             guards: 2,
+            calling: None,
         },
     },
     // Keeps its distance, out in the open at night and in the caves, and throws stones in an
@@ -880,6 +1063,7 @@ creatures! {
             fades_by_day: false,
             clings: false,
             guards: 2,
+            calling: None,
         },
     },
     // Guards dungeons and the deep caves: slow and tough, and hits very hard, but raises its
@@ -927,7 +1111,18 @@ creatures! {
             fades_by_day: false,
             clings: false,
             guards: 1,
+            calling: None,
         },
+    },
+    // Villagers (M3.4), one kind to each calling, who live in villages and nowhere else: each
+    // has a home and a workplace there, keeps its day between them, and trades.
+    Farmer { name: "farmer", villager_kind(FARMER, Role::Farm, trading::FARMER) },
+    Smith { name: "smith", villager_kind(SMITH, Role::Smithy, trading::SMITH) },
+    Trader { name: "trader", villager_kind(TRADER, Role::Hall, trading::TRADER) },
+    Shepherd { name: "shepherd", villager_kind(SHEPHERD, Role::Pen, trading::SHEPHERD) },
+    Lamplighter {
+        name: "lamplighter",
+        villager_kind(LAMPLIGHTER, Role::Tower, trading::LAMPLIGHTER),
     },
 }
 
@@ -1006,8 +1201,8 @@ pub struct Condition {
 }
 
 /// A creature as it's saved, while nobody's near it (§4.3): its kind, where its feet are, its
-/// health, and how many seconds it has left to grow up and for its fleece to grow back, 0 for
-/// one grown or unshorn.
+/// health, how many seconds it has left to grow up and for its fleece to grow back, 0 for one
+/// grown or unshorn, and a villager's life in its village.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SavedCreature {
     pub kind: CreatureKind,
@@ -1015,6 +1210,7 @@ pub struct SavedCreature {
     pub health: u8,
     pub grows_up_in: f32,
     pub regrows_in: f32,
+    pub settler: Option<Settler>,
 }
 
 impl SavedCreature {
@@ -1026,8 +1222,45 @@ impl SavedCreature {
             health: kind.properties().health,
             grows_up_in: 0.0,
             regrows_in: 0.0,
+            settler: None,
         }
     }
+}
+
+/// A villager, beyond its kind: the style of village it's from, which its trimmings are drawn
+/// in, and its seed, which its name and trades come from. Replicated, as clients draw and name
+/// it.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Villager {
+    pub style: u8,
+    pub seed: u64,
+}
+
+impl Villager {
+    /// Its name, chosen from its seed.
+    pub fn name(&self) -> &'static str {
+        NAMES[(self.seed % NAMES.len() as u64) as usize]
+    }
+}
+
+// Villagers' names, of our own country.
+const NAMES: [&str; 40] = [
+    "Aldith", "Ansel", "Bram", "Brisa", "Cael", "Corin", "Delphine", "Dunstan", "Edda", "Emrys",
+    "Fenna", "Ferris", "Gideon", "Gwen", "Hale", "Hesper", "Ilse", "Isolde", "Jessamy", "Jory",
+    "Kester", "Kit", "Linnet", "Lowen", "Maren", "Merrick", "Nell", "Nyssa", "Orrin", "Oswin",
+    "Perrin", "Piran", "Quenby", "Rowan", "Sorrel", "Tamsin", "Ulric", "Wenna", "Wystan", "Yarrow",
+];
+
+/// Where a villager lives and works, as it's saved: the village it's from, by its cell, where it
+/// stands at home by its bed, at its work and at the well, and what it's traded today.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Settler {
+    pub villager: Villager,
+    pub village: I64Vec2,
+    pub home: I64Vec3,
+    pub work: I64Vec3,
+    pub well: I64Vec3,
+    pub stock: trading::Stock,
 }
 
 /// How a creature stands, as clients draw it: winding up a blow, which it's about to land, and

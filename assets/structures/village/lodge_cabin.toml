@@ -9,66 +9,66 @@ styles = ["lodge"]
 size = [7, 15, 9]
 floor = 1
 foundation = "stone_bricks"
-palette = { A = "stone_brick_slab", B = "stone_bricks*3|cobblestone*3|mossy_cobblestone|mossy_stone_bricks|cracked_stone_bricks", a = "dark_planks*2/planks", b = "barrel[facing=up]", c = "crafting_table", d = "dark_planks", e = "bed", f = "door[facing=south,hinge=left]", g = "glass_pane", h = "grass", i = "log", j = "log[axis=x]", k = "dark_planks_slab", l = "dark_planks_stairs[facing=north]*14|snow", m = "log[axis=x]*3|air", n = "dark_planks_stairs[facing=south,half=top]", o = "door[facing=south,half=top,hinge=left]", p = "dark_planks_slab[half=top]", q = "log[axis=z]", r = "dark_planks_fence", s = "dark_planks_stairs[facing=south]*14|snow", t = "lantern[hanging=true]", u = "furnace[facing=east]", v = "path", w = "planks", x = "planks_stairs[facing=north]", y = "short_grass*4|tall_grass*2|poppy|dandelion|air*6", z = "snow/air" }
+palette = { a = "dark_planks*2/planks", b = "barrel[facing=up]", c = "crafting_table", d = "dark_planks", e = "bed", f = "door[facing=south,hinge=left]", g = "glass_pane", h = "log", i = "log[axis=x]", j = "log[axis=x]*3|air", k = "dark_planks_slab", l = "dark_planks_stairs[facing=north]*14|snow", m = "log[axis=z]", n = "dark_planks_stairs[facing=south,half=top]", o = "door[facing=south,half=top,hinge=left]", p = "dark_planks_slab[half=top]", q = "path", r = "dark_planks_fence", s = "dark_planks_stairs[facing=south]*14|snow", t = "lantern[hanging=true]", u = "furnace[facing=east]", v = "planks", w = "planks_stairs[facing=north]", x = "snow/air", y = "stone_brick_slab", z = "stone_bricks*3|cobblestone*3|mossy_cobblestone|mossy_stone_bricks|cracked_stone_bricks" }
 markers = { bed = [[4, 2, 2]], entrance = [[3, 1, 8]], loot = [[5, 2, 4]] }
 # bottom to top, each layer's rows running +z down the page and +x across
 layers = [
   # 0
   '''
-hhhhhhh
-BBBBBBB
-BBBBBBB
-BBBBBBB
-BBBBBBB
-BBBBBBB
-hhhhhhh
-hhhhhhh
-hhhvhhh
+.......
+zzzzzzz
+zzzzzzz
+zzzzzzz
+zzzzzzz
+zzzzzzz
+.......
+.......
+...q...
 ''',
   # 1
   '''
-yyyyyyy
-BBBBBBB
-BwwwwwB
-BwwwwwB
-BwwwwwB
-BBBBBBB
-wwwwjjw
-wwwxwww
-yyy.yyy
+.......
+zzzzzzz
+zvvvvvz
+zvvvvvz
+zvvvvvz
+zzzzzzz
+vvvviiv
+vvvwvvv
+.......
 ''',
   # 2
   '''
 .......
-BBBBBBB
-Bc---eB
-Bu----B
-Bb--r-B
-BBBfBBB
-....mm.
-irr.rri
+zzzzzzz
+zc---ez
+zu----z
+zb--r-z
+zzzfzzz
+....jj.
+hrr.rrh
 .......
 ''',
   # 3
   '''
 ...t...
-iaagaai
-B-----g
-B-----i
-B---p-g
-igaoagi
+haagaah
+z-----g
+z-----h
+z---p-g
+hgaoagh
 .......
-i.....i
+h.....h
 .......
 ''',
   # 4
   '''
 ...n...
-iaajaai
-B-----q
-B--t--i
-B-----q
-ijaaaji
+haaiaah
+z-----m
+z--t--h
+z-----m
+hiaaaih
 .t.....
 lllllll
 .......
@@ -76,11 +76,11 @@ lllllll
   # 5
   '''
 sssssss
-ajjjjja
-B-----a
-Bjjjjji
-B-----a
-ajjjjja
+aiiiiia
+z-----a
+ziiiiih
+z-----a
+aiiiiia
 lllllll
 .......
 .......
@@ -89,9 +89,9 @@ lllllll
   '''
 .......
 ddddddd
-B.....a
-B.....i
-B.....a
+z.....a
+z.....h
+z.....a
 ddddddd
 .......
 .......
@@ -101,9 +101,9 @@ ddddddd
   '''
 .......
 sssssss
-B.....a
-B.....g
-B.....a
+z.....a
+z.....g
+z.....a
 lllllll
 .......
 .......
@@ -113,9 +113,9 @@ lllllll
   '''
 .......
 .......
-Bdddddd
-B.....i
-Bdddddd
+zdddddd
+z.....h
+zdddddd
 .......
 .......
 .......
@@ -125,9 +125,9 @@ Bdddddd
   '''
 .......
 .......
-Bssssss
-B.....i
-Bllllll
+zssssss
+z.....h
+zllllll
 .......
 .......
 .......
@@ -137,9 +137,9 @@ Bllllll
   '''
 .......
 .......
-B.....r
-Bdddddd
-B.....r
+z.....r
+zdddddd
+z.....r
 .......
 .......
 .......
@@ -150,7 +150,7 @@ B.....r
 .......
 .......
 ......r
-Bkkkkkk
+zkkkkkk
 ......r
 .......
 .......
@@ -162,7 +162,7 @@ Bkkkkkk
 .......
 .......
 .......
-Bzzzzzz
+zxxxxxx
 .......
 .......
 .......
@@ -174,7 +174,7 @@ Bzzzzzz
 .......
 .......
 .......
-B......
+z......
 .......
 .......
 .......
@@ -186,7 +186,7 @@ B......
 .......
 .......
 .......
-A......
+y......
 .......
 .......
 .......

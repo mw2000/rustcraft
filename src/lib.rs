@@ -55,4 +55,5 @@ pub mod sky_dome;
 pub mod survival;
 #[cfg(feature = "client")]
 pub mod tonemap;
+pub mod trading;
 pub mod world;

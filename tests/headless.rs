@@ -272,3 +272,56 @@ fn test_a_new_survival_player_arrives_unhurt() {
     );
     finish(app, &dir);
 }
+
+#[test]
+fn test_the_host_trades_with_a_villager() {
+    use rustcraft::creatures::{CreatureKind, SavedCreature, Settler, Villager};
+    use rustcraft::protocol::{TradeOffers, UseCreature};
+    use rustcraft::server::creatures::{creature, townsperson, Trading};
+    use rustcraft::trading::Stock;
+
+    let dir = temp_dir("host-trading");
+    let mut app = server(&dir);
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        50,
+    )));
+    let player = hosts_player(&mut app);
+    let feet = app.world().get::<Transform>(player).unwrap().translation;
+    // with the ground round them loaded, which creatures wait for
+    update_until(&mut app, |world| {
+        world.is_chunk_generated(ChunkCoordinate::containing(feet.floor().as_i64vec3()))
+    });
+    let calling = CreatureKind::Trader.properties().calling.as_ref().unwrap();
+    let villager = Villager { style: 0, seed: 3 };
+    let here = feet.floor().as_i64vec3();
+    let settler = Settler {
+        villager,
+        village: bevy::math::I64Vec2::new(1 << 40, 0),
+        home: here,
+        work: here,
+        well: here,
+        stock: Stock::of(calling, villager.seed, 0),
+    };
+    let saved = SavedCreature {
+        settler: Some(settler),
+        ..SavedCreature::grown(CreatureKind::Trader, feet + Vec3::X * 1.5)
+    };
+    let trader = app
+        .world_mut()
+        .spawn((creature(saved, 0.0), townsperson(settler)))
+        .id();
+    // the host's own client asks as a joiner's would, and is sent the trades
+    app.world_mut()
+        .write_message(UseCreature { creature: trader });
+    app.update();
+    assert!(app.world().get::<Trading>(player).is_some());
+    let mut sent = Vec::new();
+    // which reach the host's own client the frame after
+    for _ in 0..3 {
+        app.update();
+        let mut offers = app.world_mut().resource_mut::<Messages<TradeOffers>>();
+        sent.extend(offers.drain());
+    }
+    assert_eq!(1, sent.len(), "{sent:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

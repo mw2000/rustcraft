@@ -9,19 +9,19 @@ styles = ["timber", "lodge"]
 size = [9, 5, 9]
 floor = 1
 foundation = "dirt"
-palette = { a = "barrel[facing=up]|air", b = "barrel[facing=up]", c = "cobblestone*4|mossy_cobblestone*2|stone*1", d = "dark_planks_slab", g = "grass", h = "thatch|air", l = "lantern", n = "planks_fence/dark_planks_fence", p = "path*3|grass", r = "grass*5|path*2", t = "thatch", w = "water" }
+palette = { a = "barrel[facing=up]|air", b = "barrel[facing=up]", c = "cobblestone*4|mossy_cobblestone*2|stone*1", d = "dark_planks_slab", g = "grass*5|path*2", h = "thatch|air", l = "lantern", n = "planks_fence/dark_planks_fence", p = "path*3|grass", t = "thatch", w = "water" }
 markers = { animal = [[3, 1, 3], [4, 1, 2], [5, 1, 4], [6, 1, 4]], entrance = [[4, 1, 8]], work = [[3, 1, 7]] }
 # bottom to top, each layer's rows running +z down the page and +x across
 layers = [
   # 0
   '''
-ggggggggg
-grrrrrrrg
-grrrrrrrg
-grrrrrrrg
-grrrrrrrg
-grrrrrrrg
-ggggggggg
+.........
+.ggggggg.
+.ggggggg.
+.ggggggg.
+.ggggggg.
+.ggggggg.
+.........
 ppppppppp
 ppppppppp
 ''',

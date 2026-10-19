@@ -429,6 +429,26 @@ for material, colours in [("leather", LEATHER), ("iron", MATERIALS["iron"]), ("b
         SPRITES[f"{material}_{kind}"] = piece(shape, colours)
 
 
+def coin():
+    """A round coin of bronze with a square hole through its middle, its rim raised and a mark stamped either
+    side of the hole, the villages' money."""
+    y, x = np.mgrid[:16, :16]
+    r = np.hypot(y - 7.5, x - 7.5)
+    shape = (r < 6.2) & ~((abs(y - 7.5) < 1.5) & (abs(x - 7.5) < 1.5))
+    out = np.zeros((16, 16, 4))
+    lit(shape, COIN, out)
+    face = shape & (r < 4.6) & ~((abs(y - 7.5) < 2.5) & (abs(x - 7.5) < 2.5))
+    out[face, :3] = COIN[1] * 0.92  # the face, sunk inside the rim
+    for my, mx in [(4, 7), (4, 8), (11, 7), (11, 8), (7, 4), (8, 4), (7, 11), (8, 11)]:
+        out[my, mx, :3] = COIN[2]  # the stamped marks
+    outline(out)
+    return out
+
+
+COIN = np.array([(120, 74, 34), (176, 118, 52), (226, 178, 96)], float)
+SPRITES["coin"] = coin
+
+
 def table_order():
     """The names in the `items!` table, which the tiles must follow."""
     import re

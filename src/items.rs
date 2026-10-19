@@ -299,6 +299,8 @@ items! {
     BrightSteelChestplate { name: "bright_steel_chestplate", armour(Chestplate, BRIGHT_STEEL) },
     BrightSteelLeggings { name: "bright_steel_leggings", armour(Leggings, BRIGHT_STEEL) },
     BrightSteelBoots { name: "bright_steel_boots", armour(Boots, BRIGHT_STEEL) },
+    // Villages' money (M3.4), which only trading with villagers gives and takes (`trading`).
+    Coin { name: "coin" },
 }
 
 impl Item {
@@ -749,7 +751,7 @@ mod tests {
     fn test_only_the_tables_items_have_sprites_in_order() {
         assert_eq!(None, Item::Block(BlockType::Stone).sprite());
         assert_eq!(Some(0), Item::Stick.sprite());
-        assert_eq!(Some(Item::sprites() - 1), Item::BrightSteelBoots.sprite());
+        assert_eq!(Some(Item::sprites() - 1), Item::Coin.sprite());
     }
 
     #[test]

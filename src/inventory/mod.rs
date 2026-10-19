@@ -12,6 +12,8 @@ pub mod icons;
 pub mod recipes;
 #[cfg(feature = "client")]
 pub mod screen;
+#[cfg(feature = "client")]
+pub mod trade;
 
 use std::ops::Range;
 

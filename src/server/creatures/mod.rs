@@ -10,6 +10,7 @@ mod spawning;
 mod tending;
 #[cfg(test)]
 mod tests;
+mod villagers;
 
 pub(super) use hunting::{despawn, fight, fly_missiles, vanish};
 pub use hunting::{Fight, DESPAWN_DISTANCE};
@@ -17,6 +18,8 @@ pub(super) use spawning::{build_spawners, spawn};
 pub use spawning::{SpawnRate, Spawners};
 pub use tending::Life;
 pub(super) use tending::{breed, grow, receive_uses};
+pub(super) use villagers::{make_trades, open_trades, send_offers, settle, use_doors};
+pub use villagers::{place_now, townsperson, Place, Settled, Townsfolk, Trading};
 
 use std::collections::VecDeque;
 use std::f32::consts::TAU;
@@ -140,6 +143,10 @@ pub enum Doing {
     Cling,
     /// Going to another of its kind in love, to breed.
     Mate(Entity),
+    /// Keeping a villager's day, at or on its way to a place in it.
+    Keep(Place),
+    /// Standing to talk to a player trading with it, facing them.
+    Heed(Entity),
 }
 
 /// The way a creature's walking: the cells still to go through, where it's going, the way
@@ -150,6 +157,8 @@ pub struct Route {
     goal: Option<I64Vec3>,
     planning: Option<Task<Option<Path>>>,
     planned_at: f32,
+    // whether the way's only taken if it gets there, rather than as near as it can
+    exact: bool,
     // how near it's been to the next cell lately, and when it last got nearer
     best: f32,
     progressed_at: f32,
@@ -191,16 +200,25 @@ impl Route {
     }
 
     // Starts finding a way from `from` to within `near` of `goal` for `walker`, on the compute
-    // pool, from a copy of the chunks round it.
+    // pool, from a copy of the chunks round it. One in the air, jumping, finds its way from the
+    // ground under it, as a way from where it is would start with a step up from nothing.
     fn plan(
         &mut self,
         world: &World,
-        from: I64Vec3,
+        mut from: I64Vec3,
         goal: I64Vec3,
         near: i64,
         walker: Walker,
         now: f32,
     ) {
+        for _ in 0..DROP {
+            let under = world.get(from - I64Vec3::Y).kind;
+            if under.is_solid() || under == BlockType::Water {
+                break;
+            }
+            from -= I64Vec3::Y;
+        }
+        self.exact = false;
         let mut blocks = Blocks::around(world, from, PATH_LIMITS.reach + 1);
         self.goal = Some(goal);
         self.planned_at = now;
@@ -299,12 +317,16 @@ fn chunk_of(at: Vec3) -> ChunkCoordinate {
 
 fn walker(kind: CreatureKind) -> Walker {
     let properties = kind.properties();
-    Walker::sized(
-        properties.width,
-        properties.height,
-        DROP,
-        !properties.avoids_water,
-    )
+    Walker {
+        // villagers open doors as they come to them
+        opens_doors: properties.calling.is_some(),
+        ..Walker::sized(
+            properties.width,
+            properties.height,
+            DROP,
+            !properties.avoids_water,
+        )
+    }
 }
 
 // The cell a body's feet are in.
@@ -345,7 +367,10 @@ pub(super) fn wake(
                         && world.is_chunk_generated(chunk_of(creature.position));
                     if wakes {
                         let yaw = chance.0.random_range(0.0..TAU);
-                        commands.spawn(self::creature(*creature, yaw));
+                        let mut woken = commands.spawn(self::creature(*creature, yaw));
+                        if let Some(settler) = creature.settler {
+                            woken.insert(townsperson(settler));
+                        }
                     }
                     !wakes
                 });
@@ -357,16 +382,25 @@ pub(super) fn wake(
     }
 }
 
+type Sleeping<'a> = (
+    Entity,
+    &'a Creature,
+    &'a Transform,
+    &'a Health,
+    &'a Life,
+    Option<&'a Townsfolk>,
+);
+
 /// Puts to sleep the creatures far from every player, or whose ground is no longer loaded, to
 /// be saved and woken when someone comes near again, or despawns them if they're monsters.
 pub(super) fn sleep(
     world: Res<World>,
     mut dormant: ResMut<Dormant>,
     players: Query<&Transform, With<Player>>,
-    creatures: Query<(Entity, &Creature, &Transform, &Health, &Life)>,
+    creatures: Query<Sleeping>,
     mut commands: Commands,
 ) {
-    for (entity, creature, body, health, life) in &creatures {
+    for (entity, creature, body, health, life, townsfolk) in &creatures {
         let at = body.translation;
         let near = players
             .iter()
@@ -375,20 +409,27 @@ pub(super) fn sleep(
             continue;
         }
         if !creature.0.properties().despawns {
-            dormant.keep(saved(creature, body, health, life));
+            dormant.keep(saved(creature, body, health, life, townsfolk));
         }
         commands.entity(entity).despawn();
     }
 }
 
-/// A creature as it's saved.
-pub fn saved(creature: &Creature, body: &Transform, health: &Health, life: &Life) -> SavedCreature {
+/// A creature as it's saved, with a villager's life in its village.
+pub fn saved(
+    creature: &Creature,
+    body: &Transform,
+    health: &Health,
+    life: &Life,
+    townsfolk: Option<&Townsfolk>,
+) -> SavedCreature {
     SavedCreature {
         kind: creature.0,
         position: body.translation,
         health: health.points,
         grows_up_in: life.grows_up_in,
         regrows_in: life.regrows_in,
+        settler: townsfolk.map(|townsfolk| townsfolk.0),
     }
 }
 
@@ -414,18 +455,29 @@ type Thinking<'a> = (
     &'a mut Route,
     &'a mut Fight,
     &'a mut Stance,
+    Option<&'a Townsfolk>,
+    Option<&'a mut villagers::Errand>,
 );
 
 /// Each creature's brain choosing what to do, the first of its kind's behaviours that has
 /// something to do, and asking for a way to go if it needs one.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn think(
     time: Res<Time>,
+    clock: Res<crate::clock::TimeOfDay>,
     world: Res<World>,
     players: Players,
+    trading: Query<(Entity, &Trading)>,
     mut chance: ResMut<Chance>,
     mut creatures: Query<Thinking>,
 ) {
     let now = time.elapsed_secs();
+    // monsters, which villagers run from, and villagers players are trading with
+    let monsters: Vec<Vec3> = creatures
+        .iter()
+        .filter(|(_, creature, ..)| creature.0.properties().attack.is_some())
+        .map(|(_, _, body, ..)| body.translation)
+        .collect();
     // those looking for a mate, which there are seldom any of
     let lovers: Vec<_> = creatures
         .iter()
@@ -440,7 +492,18 @@ pub(super) fn think(
             _ => None,
         })
         .collect();
-    for (entity, creature, body, life, mut mind, mut route, mut fight, mut stance) in &mut creatures
+    for (
+        entity,
+        creature,
+        body,
+        life,
+        mut mind,
+        mut route,
+        mut fight,
+        mut stance,
+        townsfolk,
+        mut errand,
+    ) in &mut creatures
     {
         let at = body.translation;
         let kind = creature.0;
@@ -450,7 +513,8 @@ pub(super) fn think(
             fight.looks_at = now + hunting::LOOK_INTERVAL;
         }
         let mut doing = Doing::Idle;
-        for behaviour in properties.behaviours {
+        let heeding = trading.iter().find(|(_, t)| t.villager == entity);
+        for behaviour in properties.behaviours.iter().filter(|_| heeding.is_none()) {
             let chosen = match *behaviour {
                 Behaviour::Flee => match mind.doing {
                     Doing::Flee { from } if now < mind.until => Some(Doing::Flee { from }),
@@ -542,6 +606,16 @@ pub(super) fn think(
                     fight.glare.map(|from| Doing::Flee { from })
                 }
                 Behaviour::ShunLight => None,
+                Behaviour::Wary => match mind.doing {
+                    Doing::Flee { .. } => None,
+                    _ => monsters
+                        .iter()
+                        .filter(|monster| monster.distance(at) <= villagers::WARY_DISTANCE)
+                        .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+                        .map(|&from| Doing::Flee { from }),
+                },
+                Behaviour::Routine => townsfolk
+                    .map(|townsfolk| Doing::Keep(place_now(townsfolk.0.villager.seed, clock.0))),
                 Behaviour::Wander => Some(match mind.doing {
                     Doing::Wander if route.is_going() => Doing::Wander,
                     Doing::Idle if now < mind.until => Doing::Idle,
@@ -554,10 +628,21 @@ pub(super) fn think(
                 break;
             }
         }
+        if let Some((player, _)) = heeding {
+            doing = Doing::Heed(player);
+        }
         if doing != mind.doing {
             route.stop();
-            if doing == Doing::Idle {
-                mind.until = now + chance.0.random_range(IDLE);
+            match doing {
+                Doing::Idle => mind.until = now + chance.0.random_range(IDLE),
+                Doing::Flee { .. } => mind.until = now + FLEE_SECONDS,
+                // finding its way afresh from wherever it's got to
+                Doing::Keep(_) => {
+                    if let Some(errand) = errand.as_deref_mut() {
+                        villagers::set_off_again(errand);
+                    }
+                }
+                _ => {}
             }
             mind.doing = doing;
         }
@@ -615,7 +700,24 @@ pub(super) fn think(
                     route.stop();
                 }
             }
-            Doing::Cling => {}
+            Doing::Cling | Doing::Heed(_) => {}
+            Doing::Keep(place) => {
+                if let (Some(townsfolk), Some(errand)) = (townsfolk, errand.as_deref_mut()) {
+                    villagers::keep(
+                        &world,
+                        townsfolk,
+                        errand,
+                        place,
+                        from,
+                        walker,
+                        now,
+                        ready,
+                        &mut route,
+                        &mut mind,
+                        &mut chance,
+                    );
+                }
+            }
             // to beside it
             Doing::Mate(mate) => {
                 if let Some(&(.., there)) = lovers.iter().find(|lover| lover.0 == mate) {
@@ -638,6 +740,7 @@ pub(super) fn take_paths(time: Res<Time>, mut creatures: Query<&mut Route>) {
         route.planning = None;
         route.best = f32::INFINITY;
         route.progressed_at = time.elapsed_secs();
+        let path = path.filter(|path| path.arrives || !route.exact);
         route.cells = path.map(|path| path.cells.into()).unwrap_or_default();
     }
 }
@@ -763,9 +866,13 @@ pub(super) fn move_creatures(
         // facing the way it's going, or the player it follows or hunts when it's caught them
         // up, or a monster its prey as it winds up
         let facing = match mind.doing {
-            Doing::Follow(player) | Doing::Hunt(player) if wanted == Vec3::ZERO => players
-                .get(player)
-                .map_or(Vec3::ZERO, |player| player.translation - at),
+            Doing::Follow(player) | Doing::Hunt(player) | Doing::Heed(player)
+                if wanted == Vec3::ZERO =>
+            {
+                players
+                    .get(player)
+                    .map_or(Vec3::ZERO, |player| player.translation - at)
+            }
             _ => wanted,
         };
         if facing.xz() != Vec2::ZERO {

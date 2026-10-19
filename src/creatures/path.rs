@@ -24,13 +24,15 @@ const DOWN: u32 = 2;
 const WATER: u32 = 20;
 
 /// What a path must fit: a body so many cells across (an odd number, round its middle) and so
-/// many tall, how far it'll drop down in one go, and whether it'll swim.
+/// many tall, how far it'll drop down in one go, whether it'll swim, and whether it opens doors,
+/// as villagers do, so it can go through them shut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Walker {
     pub across: i64,
     pub tall: i64,
     pub drop: i64,
     pub swims: bool,
+    pub opens_doors: bool,
 }
 
 impl Walker {
@@ -41,6 +43,7 @@ impl Walker {
             tall: height.ceil() as i64,
             drop,
             swims,
+            opens_doors: false,
         }
     }
 }
@@ -146,13 +149,16 @@ struct Cells<'a, F> {
 }
 
 impl<F: FnMut(I64Vec3) -> Option<BlockType>> Cells<'_, F> {
-    // Whether its body fits with its feet in `cell`: nothing solid, or unknown, in the way.
+    // Whether its body fits with its feet in `cell`: nothing solid, or unknown, in the way, but
+    // doors for one that opens them.
     fn fits(&mut self, cell: I64Vec3) -> bool {
         let half = self.walker.across / 2;
+        let doors = self.walker.opens_doors;
         (0..self.walker.tall).all(|y| {
             (-half..=half).all(|x| {
                 (-half..=half).all(|z| {
-                    (self.block)(cell + I64Vec3::new(x, y, z)).is_some_and(|b| !b.is_solid())
+                    (self.block)(cell + I64Vec3::new(x, y, z))
+                        .is_some_and(|b| !b.is_solid() || (doors && b == BlockType::Door))
                 })
             })
         })
@@ -290,6 +296,7 @@ mod tests {
         tall: 2,
         drop: 3,
         swims: false,
+        opens_doors: false,
     };
     const LIMITS: Limits = Limits {
         cells: 2000,
@@ -453,6 +460,28 @@ mod tests {
         };
         let path = find_path(from, to, 0, swimmer, LIMITS, field(channel)).unwrap();
         assert!(path.arrives);
+    }
+
+    #[test]
+    fn test_goes_through_a_door_only_if_it_opens_doors() {
+        // a wall across x 5 with a door in it, two blocks tall
+        let wall = |at: I64Vec3| {
+            (at.x == 5 && (1..=3).contains(&at.y)).then_some(match (at.z, at.y) {
+                (0, 1 | 2) => BlockType::Door,
+                _ => BlockType::Stone,
+            })
+        };
+        let walled = |at: I64Vec3| (at.z.abs() > 6).then_some(BlockType::Stone).or(wall(at));
+        let (from, to) = (I64Vec3::new(0, 1, 0), I64Vec3::new(10, 1, 0));
+        let shut = find_path(from, to, 0, SHEEP, LIMITS, field(walled)).unwrap();
+        assert!(!shut.arrives);
+        let villager = Walker {
+            opens_doors: true,
+            ..SHEEP
+        };
+        let path = find_path(from, to, 0, villager, LIMITS, field(walled)).unwrap();
+        assert!(path.arrives && path.cells.contains(&I64Vec3::new(5, 1, 0)));
+        walk(&path.cells, from);
     }
 
     #[test]
