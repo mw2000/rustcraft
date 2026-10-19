@@ -13,7 +13,7 @@ use crate::collision::{boxes_at, looked_at, looked_at_source, Hit};
 use crate::containers::Container;
 use crate::controls::{Action, Bindings, Controls};
 use crate::crafting::Station;
-use crate::creatures::{Condition, Creature, Villager};
+use crate::creatures::{Condition, Creature, Stance, Villager};
 use crate::farming::tilled;
 use crate::game_mode::GameMode;
 use crate::inventory::furnace::ContainerView;
@@ -207,17 +207,19 @@ fn target_block(
     mut creature: ResMut<TargetCreature>,
     player: Query<(&Transform, &PlayerLook), With<LocalPlayer>>,
     seen: Query<(&SeenCreature, &Transform)>,
-    creatures: Query<(&Creature, &Condition)>,
+    creatures: Query<(&Creature, &Condition, Option<&Stance>)>,
 ) {
     let (feet, look) = player.single().expect("player does not exist");
     let block = looked_at(&world, feet.translation, *look);
     let eye = feet.translation + Vec3::Y * EYE_HEIGHT;
     let block_distance = block.map_or(REACH, |hit| eye.distance(hit.point));
+    // one lying buried is under the ground, out of reach
     let seen = seen.iter().filter_map(|(seen, body)| {
         creatures
             .get(seen.0)
             .ok()
-            .map(|(creature, condition)| (seen, body, creature.0.body(condition.young)))
+            .filter(|(.., stance)| !stance.is_some_and(|stance| stance.buried))
+            .map(|(creature, condition, _)| (seen, body, creature.0.body(condition.young)))
     });
     creature.0 = creature_hit(eye, look.forward(), block_distance, seen).map(|(hit, _)| hit);
     target.0 = block.filter(|_| creature.0.is_none());

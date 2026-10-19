@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block::BlockType;
 use crate::chunks::generate::structures::village::Role;
+use crate::chunks::generate::WATER_LEVEL;
 use crate::collision::Aabb;
 use crate::items::Item;
 use crate::trading::{self, Calling};
@@ -86,6 +87,41 @@ pub struct Attack {
     pub throws: Option<Throw>,
     /// What's said of someone it kills, after their name.
     pub slays: &'static str,
+    /// How it finds its prey: by sight, or by the din they make.
+    pub senses: Sense,
+    /// How long it draws off after each blow, in seconds, before coming back, or 0 if it stays.
+    pub withdraws: f32,
+    /// What its blows do beyond hurting.
+    pub harm: Harm,
+}
+
+/// How a monster finds its prey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sense {
+    /// By sight: a player it can see within its `sight`.
+    Sight,
+    /// By sound, being blind: a player making enough din to be heard where it is, within its
+    /// `sight`, or near enough to touch, and blocks being broken or placed near it.
+    Sound,
+}
+
+/// What a blow does beyond the hurt of it (M4.10): how long it slows a player to half their
+/// pace, in seconds, how much of their food bar it chills away, and how many points of venom it
+/// leaves in them, which hurt a point a second down to half a heart and never kill.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Harm {
+    pub slows: f32,
+    pub chills: u8,
+    pub venom: u8,
+}
+
+impl Harm {
+    /// A blow that only hurts.
+    pub const NONE: Harm = Harm {
+        slows: 0.0,
+        chills: 0,
+        venom: 0,
+    };
 }
 
 /// How a kind that throws things keeps its distance: further than the range's start and nearer
@@ -143,21 +179,45 @@ pub enum Look {
 }
 
 /// Where a kind appears: in which biomes, by name, the base terrain's being `base`, or all of
-/// them if none are named, on which blocks, or under them if it hangs from ceilings, out under
-/// the sky or not, by day or by night, only in the dark or not, only below a height or not, in
-/// groups of how many, and how many there can be round a player before no more come.
+/// them if none are named, on which blocks, or under them if it hangs from ceilings, or buried
+/// in them, out under the sky, under ground or either, by day or by night, only in the dark or
+/// not, in which band of heights, in groups of how many, and how many there can be round a
+/// player before no more come.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spawns {
     pub biomes: &'static [&'static str],
     pub on: &'static [BlockType],
     pub ceiling: bool,
-    pub under_sky: bool,
+    /// Lying buried in the ground it appears on, until someone comes near (`Behaviour::Ambush`).
+    pub buried: bool,
+    pub sky: Sky,
     pub by: Daytime,
     /// Only where no block gives light, and where it's under the sky, only at night.
     pub dark: bool,
-    pub below: Option<i64>,
+    /// The heights its feet can be at, by absolute height (sea level 448): the deeper the band,
+    /// the worse what's in it.
+    pub heights: Range<i64>,
     pub group: RangeInclusive<u8>,
     pub cap: usize,
+}
+
+/// Every height there is, for a kind that appears at any.
+pub const ANY_HEIGHT: Range<i64> = i64::MIN..i64::MAX;
+/// The shore: feet a few blocks either side of sea level, where the beaches are.
+pub const SHORE: Range<i64> = WATER_LEVEL - 3..WATER_LEVEL + 4;
+/// The depth bands monsters keep to, by absolute height, the deeper the worse: the deep caves
+/// from 48 under the sea, where barrow brutes come, and the deepest from 200, where listeners
+/// do. They stand for M4.4's deep layer until it lands, and can be pointed at it then.
+pub const DEEP: Range<i64> = i64::MIN..WATER_LEVEL - 48;
+pub const DEEPEST: Range<i64> = i64::MIN..200;
+
+/// Whether a kind appears out under the open sky, on the highest ground of a column, under
+/// ground in the caves, or either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sky {
+    Open,
+    Under,
+    Either,
 }
 
 /// When a kind appears.
@@ -182,7 +242,8 @@ pub enum Behaviour {
     /// Goes after a player it sees, and attacks them as its kind's `Attack` says: up to them to
     /// hit them, or keeping its distance to throw at them.
     Hunt,
-    /// Hangs from the ceiling, if it's still there, until a player comes under it.
+    /// Hangs from the ceiling, or lies buried, if it still does, until a player comes under it
+    /// or near. One that throws throws from where it hangs.
     Ambush,
     /// Runs from bright light, and from a player holding something that gives it.
     ShunLight,
@@ -561,6 +622,217 @@ const BARROW_BRUTE: &[Part] = &{
     ]
 };
 
+const LINEN: [f32; 3] = [0.88, 0.8, 0.62];
+const LINEN_DARK: [f32; 3] = [0.68, 0.58, 0.42];
+const DRIED: [f32; 3] = [0.3, 0.21, 0.15];
+const TURQUOISE_GLOW: [f32; 3] = [0.4, 1.0, 0.9];
+
+// Tall and gaunt, bound head to foot in sand-pale strips of linen banded darker, stooped, with
+// long arms and a strip come loose behind, dried skin showing at the ribs, and a wrapped head
+// with a dark slit for eyes that glow turquoise. It lies under the sand till someone's near.
+const DUNEWIGHT: &[Part] = &{
+    let [left, right] = glowing(0.07, 1.8, -0.3, 0.06, TURQUOISE_GLOW);
+    [
+        leg([0.18, 0.8, 0.2], -0.13, 0.0, LINEN_DARK, 1.0),
+        leg([0.18, 0.8, 0.2], 0.13, 0.0, LINEN_DARK, -1.0),
+        part([0.44, 0.3, 0.3], [0.0, 0.92, 0.0], LINEN_DARK),
+        part([0.5, 0.56, 0.32], [0.0, 1.32, -0.04], LINEN),
+        part([0.52, 0.06, 0.34], [0.0, 1.14, -0.04], LINEN_DARK),
+        part([0.52, 0.06, 0.34], [0.0, 1.48, -0.04], LINEN_DARK),
+        part([0.3, 0.1, 0.02], [0.0, 1.3, -0.21], DRIED),
+        on(
+            Joint::Tail,
+            part([0.08, 0.5, 0.04], [0.12, 1.2, 0.18], LINEN),
+        ),
+        arm([0.14, 0.8, 0.14], -0.33, 1.58, -0.04, LINEN),
+        arm([0.14, 0.8, 0.14], 0.33, 1.58, -0.04, LINEN),
+        head([0.34, 0.36, 0.34], [0.0, 1.78, -0.1], LINEN),
+        head([0.36, 0.06, 0.36], [0.0, 1.9, -0.1], LINEN_DARK),
+        head([0.26, 0.07, 0.02], [0.0, 1.8, -0.28], DRIED),
+        left,
+        right,
+    ]
+};
+
+const SHROUD: [f32; 3] = [0.72, 0.82, 0.9];
+const SHROUD_DARK: [f32; 3] = [0.45, 0.56, 0.7];
+const HOOD_VOID: [f32; 3] = [0.06, 0.08, 0.13];
+const FROST: [f32; 3] = [0.92, 0.96, 1.0];
+const ICE_GLOW: [f32; 3] = [0.62, 0.94, 1.0];
+
+// A hooded shroud of icy blue that floats a hand over the snow on no legs, its hem in tatters
+// that sway, thin frost-white arms out of its sleeves, icicles on its shoulders, and in the
+// dark of its hood two eyes that glow pale cyan.
+const RIMEWRAITH: &[Part] = &{
+    let [left, right] = glowing(0.07, 1.8, -0.25, 0.06, ICE_GLOW);
+    [
+        part([0.5, 0.6, 0.44], [0.0, 0.85, 0.0], SHROUD_DARK),
+        part([0.56, 0.5, 0.42], [0.0, 1.38, 0.0], SHROUD),
+        on(
+            Joint::Tail,
+            part([0.12, 0.4, 0.1], [-0.15, 0.4, 0.06], SHROUD_DARK),
+        ),
+        on(
+            Joint::Tail,
+            part([0.12, 0.32, 0.1], [0.14, 0.44, -0.08], SHROUD),
+        ),
+        on(
+            Joint::Tail,
+            part([0.1, 0.36, 0.1], [0.02, 0.42, 0.16], SHROUD_DARK),
+        ),
+        part([0.08, 0.22, 0.08], [-0.24, 1.72, 0.06], FROST),
+        part([0.08, 0.16, 0.08], [0.25, 1.69, -0.02], FROST),
+        // each sleeve over an arm longer than it, swinging as one
+        arm([0.17, 0.4, 0.17], -0.35, 1.6, -0.02, SHROUD),
+        arm([0.17, 0.4, 0.17], 0.35, 1.6, -0.02, SHROUD),
+        arm([0.08, 0.82, 0.08], -0.35, 1.6, -0.02, FROST),
+        arm([0.08, 0.82, 0.08], 0.35, 1.6, -0.02, FROST),
+        head([0.42, 0.4, 0.42], [0.0, 1.82, -0.02], SHROUD),
+        head([0.28, 0.26, 0.02], [0.0, 1.78, -0.235], HOOD_VOID),
+        left,
+        right,
+    ]
+};
+
+const CANOPY_GREEN: [f32; 3] = [0.2, 0.32, 0.14];
+const OCHRE: [f32; 3] = [0.74, 0.56, 0.16];
+const VENOM_SAC: [f32; 3] = [0.66, 0.2, 0.12];
+const CANOPY_LEGS: [f32; 3] = [0.13, 0.17, 0.1];
+const FANGS: [f32; 3] = [0.92, 0.88, 0.62];
+const VENOM_GLOW: [f32; 3] = [0.86, 1.0, 0.3];
+
+// Long and banded leaf green and ochre on six long thin legs, a swollen abdomen with a red sac
+// on its back, a spine down its thorax, and a head with two pale fangs, two big eyes and two
+// small ones glowing yellow-green. It hangs upside down under the canopy and spits venom.
+const CANOPY_SPITTER: &[Part] = &{
+    let [a, b] = glowing(0.07, 0.45, -0.56, 0.06, VENOM_GLOW);
+    let [c, d] = glowing(0.12, 0.39, -0.56, 0.035, VENOM_GLOW);
+    let leg = [0.06, 0.38, 0.06];
+    [
+        leg_coloured(leg, -0.37, -0.25, 1.0),
+        leg_coloured(leg, 0.37, -0.25, -1.0),
+        leg_coloured(leg, -0.37, 0.05, -1.0),
+        leg_coloured(leg, 0.37, 0.05, 1.0),
+        leg_coloured(leg, -0.37, 0.35, 1.0),
+        leg_coloured(leg, 0.37, 0.35, -1.0),
+        part([0.4, 0.2, 0.36], [0.0, 0.4, -0.15], CANOPY_GREEN),
+        part([0.05, 0.12, 0.05], [0.0, 0.55, -0.18], OCHRE),
+        part([0.5, 0.3, 0.5], [0.0, 0.46, 0.32], OCHRE),
+        part([0.52, 0.32, 0.08], [0.0, 0.46, 0.22], CANOPY_GREEN),
+        part([0.52, 0.32, 0.08], [0.0, 0.46, 0.44], CANOPY_GREEN),
+        part([0.3, 0.05, 0.3], [0.0, 0.63, 0.33], VENOM_SAC),
+        head([0.3, 0.2, 0.22], [0.0, 0.4, -0.44], CANOPY_GREEN),
+        head([0.05, 0.14, 0.05], [-0.07, 0.27, -0.52], FANGS),
+        head([0.05, 0.14, 0.05], [0.07, 0.27, -0.52], FANGS),
+        a,
+        b,
+        c,
+        d,
+    ]
+};
+
+// One of a canopy spitter's legs, in its colour.
+const fn leg_coloured(size: [f32; 3], x: f32, z: f32, swing: f32) -> Part {
+    leg(size, x, z, CANOPY_LEGS, swing)
+}
+
+const ASHEN: [f32; 3] = [0.68, 0.64, 0.6];
+const ASHEN_DARK: [f32; 3] = [0.46, 0.42, 0.4];
+const EAR_GLOW: [f32; 3] = [0.6, 0.32, 0.28];
+const MAW: [f32; 3] = [0.14, 0.07, 0.09];
+const TEETH: [f32; 3] = [0.92, 0.9, 0.8];
+const MILK: [f32; 3] = [0.84, 0.82, 0.78];
+
+// Hunched over and pale as ash, ribs showing, long arms hanging to its shins, and a low head
+// thrust forward between two great fans of ears wider than its shoulders, which glow a warm
+// pink as if lit through, a lipless mouth of teeth, and eyes grown over milky white: it's
+// blind, and hunts by what it hears.
+const LISTENER: &[Part] = &{
+    // an ear, a fan widening out and up from the side of the head, and the thin skin of its
+    // lower part, which glows
+    const fn ear(x: f32) -> Part {
+        head([0.3, 0.36, 0.06], [x, 1.56, -0.38], ASHEN_DARK)
+    }
+    const fn ear_tip(x: f32) -> Part {
+        head([0.2, 0.26, 0.06], [x, 1.8, -0.38], ASHEN_DARK)
+    }
+    const fn membrane(x: f32) -> Part {
+        Part {
+            look: Look::Glow,
+            ..head([0.22, 0.26, 0.02], [x, 1.55, -0.42], EAR_GLOW)
+        }
+    }
+    const fn milky(x: f32) -> Part {
+        Part {
+            colour: MILK,
+            ..eye([0.05, 0.04, 0.02], [x, 1.56, -0.61])
+        }
+    }
+    [
+        leg([0.16, 0.75, 0.16], -0.18, 0.08, ASHEN_DARK, 1.0),
+        leg([0.16, 0.75, 0.16], 0.18, 0.08, ASHEN_DARK, -1.0),
+        part([0.4, 0.2, 0.28], [0.0, 0.82, 0.08], ASHEN_DARK),
+        part([0.5, 0.5, 0.34], [0.0, 1.12, -0.04], ASHEN),
+        part([0.52, 0.04, 0.36], [0.0, 1.04, -0.04], ASHEN_DARK),
+        part([0.52, 0.04, 0.36], [0.0, 1.16, -0.04], ASHEN_DARK),
+        part([0.7, 0.2, 0.42], [0.0, 1.42, -0.12], ASHEN),
+        arm([0.12, 1.2, 0.12], -0.42, 1.48, -0.14, ASHEN),
+        arm([0.12, 1.2, 0.12], 0.42, 1.48, -0.14, ASHEN),
+        head([0.34, 0.3, 0.36], [0.0, 1.5, -0.42], ASHEN),
+        ear(-0.32),
+        ear(0.32),
+        ear_tip(-0.5),
+        ear_tip(0.5),
+        membrane(-0.32),
+        membrane(0.32),
+        head([0.22, 0.05, 0.02], [0.0, 1.42, -0.61], MAW),
+        head([0.2, 0.02, 0.02], [0.0, 1.45, -0.615], TEETH),
+        milky(-0.08),
+        milky(0.08),
+    ]
+};
+
+const SODDEN: [f32; 3] = [0.2, 0.36, 0.35];
+const SODDEN_DARK: [f32; 3] = [0.13, 0.24, 0.25];
+const KELP: [f32; 3] = [0.34, 0.36, 0.12];
+const BARNACLE: [f32; 3] = [0.8, 0.77, 0.66];
+const LURE_GLOW: [f32; 3] = [1.0, 0.94, 0.56];
+
+// Bloated and waterlogged, sodden teal on thick legs, hunched, with kelp hanging from its back
+// and over a shoulder, barnacles, long arms to drag with, a wide low head with a slack jaw, and
+// a lure on a stalk from its brow that glows, as a deep-sea fish's does.
+const DROWNER: &[Part] = &{
+    let [left, right] = eyes(0.12, 1.66, -0.375, 0.05);
+    [
+        leg([0.2, 0.6, 0.22], -0.16, 0.04, SODDEN_DARK, 1.0),
+        leg([0.2, 0.6, 0.22], 0.16, 0.04, SODDEN_DARK, -1.0),
+        part([0.62, 0.62, 0.5], [0.0, 0.95, 0.02], SODDEN),
+        part([0.56, 0.36, 0.44], [0.0, 1.38, 0.06], SODDEN_DARK),
+        part([0.12, 0.08, 0.1], [0.22, 1.54, 0.18], BARNACLE),
+        part([0.1, 0.08, 0.04], [-0.18, 1.1, -0.24], BARNACLE),
+        part([0.1, 0.04, 0.5], [0.2, 1.58, 0.02], KELP),
+        on(
+            Joint::Tail,
+            part([0.08, 0.6, 0.04], [-0.14, 1.0, 0.3], KELP),
+        ),
+        on(
+            Joint::Tail,
+            part([0.06, 0.5, 0.04], [0.18, 1.05, 0.3], KELP),
+        ),
+        arm([0.16, 1.0, 0.16], -0.38, 1.5, -0.02, SODDEN),
+        arm([0.16, 1.0, 0.16], 0.38, 1.5, -0.02, SODDEN),
+        head([0.44, 0.32, 0.38], [0.0, 1.62, -0.18], SODDEN),
+        head([0.4, 0.1, 0.3], [0.0, 1.42, -0.22], SODDEN_DARK),
+        head([0.04, 0.04, 0.24], [0.0, 1.8, -0.42], SODDEN_DARK),
+        Part {
+            look: Look::Glow,
+            ..head([0.1, 0.1, 0.1], [0.0, 1.76, -0.58], LURE_GLOW)
+        },
+        left,
+        right,
+    ]
+};
+
 // What a farm animal does: runs when it's hit, breeds once it's fed, follows its food, and
 // otherwise wanders.
 const ANIMAL: &[Behaviour] = &[
@@ -578,6 +850,22 @@ const LURKING: &[Behaviour] = &[
     Behaviour::Ambush,
     Behaviour::Hunt,
     Behaviour::Wander,
+];
+// A dunewight lies buried till someone's near, and a canopy spitter hangs and spits till
+// someone's under it. A rimewraith draws off after each blow (`Flee`) and comes back.
+const AMBUSHING: &[Behaviour] = &[Behaviour::Ambush, Behaviour::Hunt, Behaviour::Wander];
+const SKIRMISHING: &[Behaviour] = &[Behaviour::Flee, Behaviour::Hunt, Behaviour::Wander];
+
+// Where gloamers hunt: the grass and woods, but neither the deserts nor the snows, which have
+// monsters of their own.
+const GRASS_COUNTRY: &[&str] = &[
+    "base",
+    "foothills",
+    "forest",
+    "jungle",
+    "savanna",
+    "taiga",
+    "volcano",
 ];
 
 // The ground monsters come out on, under the sky and in the caves.
@@ -790,10 +1078,11 @@ creatures! {
                 biomes: &["base", "foothills", "savanna", "taiga"],
                 on: &[BlockType::Grass],
                 ceiling: false,
-                under_sky: true,
+                buried: false,
+                sky: Sky::Open,
                 by: Daytime::Day,
                 dark: false,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 2..=4,
                 cap: 8,
             }),
@@ -827,10 +1116,11 @@ creatures! {
                 biomes: &["base", "foothills", "savanna", "forest"],
                 on: &[BlockType::Grass],
                 ceiling: false,
-                under_sky: true,
+                buried: false,
+                sky: Sky::Open,
                 by: Daytime::Day,
                 dark: false,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 2..=4,
                 cap: 6,
             }),
@@ -864,10 +1154,11 @@ creatures! {
                 biomes: &["forest", "jungle", "taiga"],
                 on: &[BlockType::Grass],
                 ceiling: false,
-                under_sky: true,
+                buried: false,
+                sky: Sky::Open,
                 by: Daytime::Day,
                 dark: false,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 1..=3,
                 cap: 6,
             }),
@@ -900,10 +1191,11 @@ creatures! {
                 biomes: &["base", "forest", "foothills", "jungle", "savanna", "taiga"],
                 on: &[BlockType::Grass],
                 ceiling: false,
-                under_sky: true,
+                buried: false,
+                sky: Sky::Open,
                 by: Daytime::Day,
                 dark: false,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 2..=4,
                 cap: 6,
             }),
@@ -936,13 +1228,14 @@ creatures! {
             fleece: None,
             food: &[],
             spawns: Some(Spawns {
-                biomes: &[],
+                biomes: GRASS_COUNTRY,
                 on: OPEN_GROUND,
                 ceiling: false,
-                under_sky: true,
+                buried: false,
+                sky: Sky::Open,
                 by: Daytime::Night,
                 dark: true,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 1..=2,
                 cap: 3,
             }),
@@ -959,6 +1252,9 @@ creatures! {
                 lunge: 4.5,
                 throws: None,
                 slays: "was run down by a gloamer",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm::NONE,
             }),
             despawns: true,
             fades_by_day: true,
@@ -987,10 +1283,11 @@ creatures! {
                 biomes: &[],
                 on: CAVE_ROCK,
                 ceiling: true,
-                under_sky: false,
+                buried: false,
+                sky: Sky::Under,
                 by: Daytime::Always,
                 dark: true,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 1..=1,
                 cap: 3,
             }),
@@ -1007,6 +1304,9 @@ creatures! {
                 lunge: 0.0,
                 throws: None,
                 slays: "was ambushed by a lurker",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm::NONE,
             }),
             despawns: true,
             fades_by_day: false,
@@ -1035,10 +1335,11 @@ creatures! {
                 biomes: &[],
                 on: ANY_GROUND,
                 ceiling: false,
-                under_sky: false,
+                buried: false,
+                sky: Sky::Either,
                 by: Daytime::Always,
                 dark: true,
-                below: None,
+                heights: ANY_HEIGHT,
                 group: 1..=2,
                 cap: 2,
             }),
@@ -1058,6 +1359,9 @@ creatures! {
                     speed: 16.0,
                 }),
                 slays: "was brought down by a slinger's stone",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm::NONE,
             }),
             despawns: true,
             fades_by_day: false,
@@ -1086,10 +1390,11 @@ creatures! {
                 biomes: &[],
                 on: CAVE_ROCK,
                 ceiling: false,
-                under_sky: false,
+                buried: false,
+                sky: Sky::Under,
                 by: Daytime::Always,
                 dark: true,
-                below: Some(400),
+                heights: DEEP,
                 group: 1..=1,
                 cap: 1,
             }),
@@ -1106,11 +1411,288 @@ creatures! {
                 lunge: 0.0,
                 throws: None,
                 slays: "was crushed by a barrow brute",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm::NONE,
             }),
             despawns: true,
             fades_by_day: false,
             clings: false,
             guards: 1,
+            calling: None,
+        },
+    },
+    // Monsters by place (M4.10): each climate's night and the deep have their own. A dunewight
+    // lies under the desert's sand at night, rises as someone comes near, and slows them with
+    // its blows; it's slow itself, so it's best seen coming and walked round.
+    Dunewight {
+        name: "dunewight",
+        Properties {
+            width: 0.7,
+            height: 1.9,
+            health: 20,
+            walk_speed: 1.2,
+            run_speed: 3.0,
+            model: DUNEWIGHT,
+            neck: Vec3::from_array([0.0, 1.62, -0.1]),
+            grazes: false,
+            drops: &[(Item::Coin, 0..=3), (Item::Block(BlockType::Sand), 0..=2)],
+            fleece: None,
+            food: &[],
+            spawns: Some(Spawns {
+                biomes: &["desert"],
+                on: &[BlockType::Sand],
+                ceiling: false,
+                buried: true,
+                sky: Sky::Open,
+                by: Daytime::Night,
+                dark: true,
+                heights: ANY_HEIGHT,
+                group: 1..=3,
+                cap: 4,
+            }),
+            behaviours: AMBUSHING,
+            avoids_water: true,
+            flutters: false,
+            attack: Some(Attack {
+                damage: 4,
+                reach: 1.1,
+                wind_up: 0.5,
+                cooldown: 1.6,
+                knockback: 2.0,
+                sight: 16.0,
+                lunge: 0.0,
+                throws: None,
+                slays: "was wrapped up by a dunewight",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm {
+                    slows: 3.0,
+                    ..Harm::NONE
+                },
+            }),
+            despawns: true,
+            fades_by_day: true,
+            clings: false,
+            guards: 0,
+            calling: None,
+        },
+    },
+    // Drifts over the snows of glaciers, taiga and peaks at night, darting in to strike and
+    // drawing off again, and its touch chills away the food a player carries in them.
+    Rimewraith {
+        name: "rimewraith",
+        Properties {
+            width: 0.7,
+            height: 1.8,
+            health: 14,
+            walk_speed: 2.2,
+            run_speed: 4.4,
+            model: RIMEWRAITH,
+            neck: Vec3::from_array([0.0, 1.62, 0.0]),
+            grazes: false,
+            drops: &[(Item::FrostCrystal, 0..=1)],
+            fleece: None,
+            food: &[],
+            spawns: Some(Spawns {
+                biomes: &["glacier", "taiga", "summit"],
+                on: &[BlockType::Snow, BlockType::Ice],
+                ceiling: false,
+                buried: false,
+                sky: Sky::Open,
+                by: Daytime::Night,
+                dark: true,
+                heights: ANY_HEIGHT,
+                group: 1..=2,
+                cap: 3,
+            }),
+            behaviours: SKIRMISHING,
+            avoids_water: true,
+            flutters: true,
+            attack: Some(Attack {
+                damage: 3,
+                reach: 1.2,
+                wind_up: 0.35,
+                cooldown: 1.2,
+                knockback: 3.0,
+                sight: 20.0,
+                lunge: 0.0,
+                throws: None,
+                slays: "was chilled to the bone by a rimewraith",
+                senses: Sense::Sight,
+                withdraws: 2.5,
+                harm: Harm {
+                    chills: 3,
+                    ..Harm::NONE
+                },
+            }),
+            despawns: true,
+            fades_by_day: true,
+            clings: false,
+            guards: 0,
+            calling: None,
+        },
+    },
+    // Hangs under the jungle's canopy at night, spitting venom at whoever it sees below, and
+    // drops on anyone who walks right under it.
+    CanopySpitter {
+        name: "canopy_spitter",
+        Properties {
+            width: 0.8,
+            height: 0.5,
+            health: 12,
+            walk_speed: 1.6,
+            run_speed: 3.6,
+            model: CANOPY_SPITTER,
+            neck: Vec3::from_array([0.0, 0.4, -0.33]),
+            grazes: false,
+            drops: &[(Item::Jade, 0..=1), (Item::Block(BlockType::Vines), 0..=2)],
+            fleece: None,
+            food: &[],
+            spawns: Some(Spawns {
+                biomes: &["jungle"],
+                on: &[BlockType::Leaves],
+                ceiling: true,
+                buried: false,
+                sky: Sky::Either,
+                by: Daytime::Night,
+                dark: true,
+                heights: ANY_HEIGHT,
+                group: 1..=1,
+                cap: 3,
+            }),
+            behaviours: AMBUSHING,
+            avoids_water: true,
+            flutters: false,
+            attack: Some(Attack {
+                damage: 2,
+                reach: 0.0,
+                wind_up: 0.5,
+                cooldown: 2.2,
+                knockback: 1.5,
+                sight: 16.0,
+                lunge: 0.0,
+                throws: Some(Throw {
+                    keep: 3.0..12.0,
+                    speed: 14.0,
+                }),
+                slays: "was poisoned by a canopy spitter",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm {
+                    venom: 3,
+                    ..Harm::NONE
+                },
+            }),
+            despawns: true,
+            fades_by_day: false,
+            clings: true,
+            guards: 0,
+            calling: None,
+        },
+    },
+    // The deep caves' worst, below 200: blind, but it hears a player walking a dozen blocks
+    // off and running twice that, and breaking or placing blocks near it, and is quick and
+    // hits hard. Sneaking, or standing still, it loses them.
+    Listener {
+        name: "listener",
+        Properties {
+            width: 0.8,
+            height: 1.8,
+            health: 30,
+            walk_speed: 1.6,
+            run_speed: 5.0,
+            model: LISTENER,
+            neck: Vec3::from_array([0.0, 1.45, -0.3]),
+            grazes: false,
+            drops: &[(Item::Ember, 1..=2), (Item::IronIngot, 0..=2)],
+            fleece: None,
+            food: &[],
+            spawns: Some(Spawns {
+                biomes: &[],
+                on: CAVE_ROCK,
+                ceiling: false,
+                buried: false,
+                sky: Sky::Under,
+                by: Daytime::Always,
+                dark: true,
+                heights: DEEPEST,
+                group: 1..=1,
+                cap: 2,
+            }),
+            behaviours: MONSTER,
+            avoids_water: true,
+            flutters: false,
+            attack: Some(Attack {
+                damage: 7,
+                reach: 1.3,
+                wind_up: 0.4,
+                cooldown: 1.4,
+                knockback: 5.0,
+                sight: 24.0,
+                lunge: 0.0,
+                throws: None,
+                slays: "was heard by a listener",
+                senses: Sense::Sound,
+                withdraws: 0.0,
+                harm: Harm::NONE,
+            }),
+            despawns: true,
+            fades_by_day: false,
+            clings: false,
+            guards: 0,
+            calling: None,
+        },
+    },
+    // Comes up out of the sea onto the shore at night, a few blocks either side of its level,
+    // and swims after whoever it hunts. Its blows drag a player towards it, into the water.
+    Drowner {
+        name: "drowner",
+        Properties {
+            width: 0.7,
+            height: 1.7,
+            health: 18,
+            walk_speed: 1.5,
+            run_speed: 3.4,
+            model: DROWNER,
+            neck: Vec3::from_array([0.0, 1.5, -0.1]),
+            grazes: false,
+            drops: &[(Item::Coin, 0..=2)],
+            fleece: None,
+            food: &[],
+            spawns: Some(Spawns {
+                biomes: &[],
+                on: &[BlockType::Sand, BlockType::Gravel],
+                ceiling: false,
+                buried: false,
+                sky: Sky::Open,
+                by: Daytime::Night,
+                dark: true,
+                heights: SHORE,
+                group: 1..=2,
+                cap: 3,
+            }),
+            behaviours: MONSTER,
+            avoids_water: false,
+            flutters: false,
+            attack: Some(Attack {
+                damage: 4,
+                reach: 1.2,
+                wind_up: 0.45,
+                cooldown: 1.5,
+                knockback: -7.0,
+                sight: 16.0,
+                lunge: 0.0,
+                throws: None,
+                slays: "was dragged into the sea by a drowner",
+                senses: Sense::Sight,
+                withdraws: 0.0,
+                harm: Harm::NONE,
+            }),
+            despawns: true,
+            fades_by_day: true,
+            clings: false,
+            guards: 0,
             calling: None,
         },
     },
@@ -1263,12 +1845,14 @@ pub struct Settler {
     pub stock: trading::Stock,
 }
 
-/// How a creature stands, as clients draw it: winding up a blow, which it's about to land, and
-/// hanging from a ceiling, upside down.
+/// How a creature stands, as clients draw it: winding up a blow, which it's about to land,
+/// hanging from a ceiling, upside down, or buried.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stance {
     pub winding: bool,
     pub clinging: bool,
+    /// Lying buried in the ground, out of sight but for its top, until it rises (M4.10).
+    pub buried: bool,
 }
 
 /// On a creature about to be taken away for something other than dying, as a monster fading by
@@ -1280,13 +1864,15 @@ pub struct Vanishing;
 /// reads from afar.
 pub const MISSILE_GRAVITY: f32 = 20.0;
 
-/// Something thrown, a slinger's stone: where from and how fast. It flies under
-/// `MISSILE_GRAVITY` from where it's thrown, so clients draw it from that alone, and the server
-/// takes it away when it hits something.
+/// Something thrown, a slinger's stone or a canopy spitter's venom: where from, how fast, and
+/// what threw it, which clients draw it by. It flies under `MISSILE_GRAVITY` from where it's
+/// thrown, so clients draw it from that alone, and the server takes it away when it hits
+/// something.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Missile {
     pub from: Vec3,
     pub velocity: Vec3,
+    pub by: CreatureKind,
 }
 
 impl Missile {

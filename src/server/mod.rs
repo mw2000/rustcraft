@@ -102,6 +102,7 @@ impl Plugin for ServerPlugin {
                         creatures::build_spawners,
                         creatures::spawn,
                         creatures::take_paths,
+                        creatures::make_din,
                         creatures::grow,
                         creatures::think,
                         creatures::move_creatures,

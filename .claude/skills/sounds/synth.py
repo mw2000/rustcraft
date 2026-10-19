@@ -759,7 +759,276 @@ def barrow_brute_death(rng):
     return level(trim(x), -18)
 
 
-HOSTILES = ["gloamer", "lurker", "slinger", "barrow_brute"]
+# --- monsters by place (M4.10) -------------------------------------------------------------------
+
+
+def wheeze(n, rng, lo=600, hi=3500):
+    """Dry breath through cloth or a narrow throat: noise in a band, its loudness wavering."""
+    shake = 0.6 + 0.4 * np.sin(2 * np.pi * np.cumsum(rng.uniform(3, 6) * np.ones(n)) / SR)
+    return bandpass(coloured(n, rng, -1), lo, hi) * shake
+
+
+def dunewight_call(rng):
+    """A dunewight's call: a hollow, muffled moan through its wrappings, over a dry wheeze and a
+    trickle of sand."""
+    seconds = rng.uniform(1.3, 1.7)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(95, 120) * (1 + 0.15 * np.sin(np.pi * t)) * (1 + 0.02 * np.sin(2 * np.pi * 4 * times(n)))
+    moan = lowpass(formants(voiced(f0, 25), ((420, 4, 1.0), (800, 5, 0.4))), 1100)
+    breath = wheeze(n, rng, 500, 2500) * 0.35
+    sand = grains(n, rng, 120, 2500, 9000, length=(0.0008, 0.003)) * 0.25
+    x = (moan + breath) * envelope(n, 0.3, seconds / 3, hold=seconds * 0.4) + sand * np.clip(t * 2, 0, 1)
+    return level(trim(x), -20)
+
+
+def dunewight_hurt(rng):
+    """A dunewight hurt: a dry crackle of linen and old bones, and a short gasp."""
+    seconds = 0.4
+    n = samples(seconds)
+    crackle = grains(n, rng, 60, 1200, 6000, spread=0.15)
+    gasp = wheeze(n, rng, 800, 3500) * envelope(n, 0.01, 0.08, hold=0.05)
+    return level(trim(crackle + gasp * 0.8), -17)
+
+
+def dunewight_attack(rng):
+    """A dunewight reaching out: a rasping groan rising, and the swish of its wrappings."""
+    seconds = rng.uniform(0.6, 0.75)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(120, 145) * (1 + 0.35 * t)
+    rasp = lowpass(formants(growl(n, rng, f0, 30), ((500, 3, 1.0), (1100, 4, 0.5))), 1800)
+    swish = bandpass(rng.standard_normal(n), 900, 4000) * np.sin(np.pi * np.clip((t - 0.3) / 0.6, 0, 1)) ** 2
+    x = rasp * envelope(n, 0.12, seconds / 3, hold=seconds * 0.4) + swish * 0.5
+    return level(trim(x), -17)
+
+
+def dunewight_death(rng):
+    """A dunewight dying: a long dry sigh sinking away as it falls back into sand."""
+    seconds = 1.5
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(100, 115) * (1 - 0.4 * t)
+    sigh = lowpass(formants(voiced(f0, 20), ((400, 4, 1.0),)), 900) * np.clip(1.2 - t * 1.8, 0, 1)
+    sand = grains(n, rng, 500, 1500, 8000, length=(0.0008, 0.003), density=np.clip(t * 3 - 0.4, 0, 1) * (1.2 - t))
+    x = sigh + wheeze(n, rng, 400, 2000) * 0.3 * np.clip(1 - t, 0, 1) + sand * 0.6
+    return level(trim(x * envelope(n, 0.05, 0.5, hold=0.9)), -18)
+
+
+def ice(rng, count, seconds, lo=2500, hi=6000):
+    """Ice tinkling: high struck modes, each a little different, scattered over `seconds`."""
+    out = np.zeros(samples(seconds))
+    for _ in range(count):
+        f = rng.uniform(lo, hi)
+        m = modes(samples(0.12), rng, [f, f * 2.32, f * 3.7], [0.03, 0.02, 0.012], [1, 0.4, 0.2])
+        place(out, m * rng.uniform(0.3, 1.0), samples(rng.uniform(0, max(seconds - 0.12, 0.01))))
+    return out
+
+
+def whistle(n, rng, f):
+    """A breathy wavering whistle on the pitch `f`: a pure tone in a narrow band of noise, as
+    wind through a crack."""
+    tone = np.sin(2 * np.pi * np.cumsum(f) / SR)
+    air = resonator(rng.standard_normal(n), float(np.mean(f)), 18) * 0.5
+    return tone * 0.5 + air
+
+
+def rimewraith_call(rng):
+    """A rimewraith's call: a hollow wind's whistle wavering up and down, with ice tinkling."""
+    seconds = rng.uniform(1.4, 1.8)
+    n = samples(seconds)
+    t = times(n)
+    f = rng.uniform(700, 900) * (1 + 0.25 * np.sin(2 * np.pi * rng.uniform(0.6, 1.0) * t) + 0.03 * np.sin(2 * np.pi * 6 * t))
+    x = whistle(n, rng, f) * envelope(n, 0.35, seconds / 3, hold=seconds * 0.4)
+    x += bandpass(coloured(n, rng, -1), 300, 1500) * 0.15 * envelope(n, 0.3, seconds / 2, hold=seconds * 0.3)
+    x += ice(rng, 6, seconds) * 0.4
+    return level(trim(x), -21)
+
+
+def rimewraith_hurt(rng):
+    """A rimewraith hurt: a crack of ice and a thin shriek."""
+    seconds = 0.4
+    n = samples(seconds)
+    f = rng.uniform(1300, 1500) * (1 - 0.3 * times(n) / seconds)
+    shriek = whistle(n, rng, f) * envelope(n, 0.005, 0.1, hold=0.06)
+    crack = ice(rng, 8, 0.12, 3000, 7000)
+    x = shriek
+    place(x, crack, 0)
+    return level(trim(x), -17)
+
+
+def rimewraith_attack(rng):
+    """A rimewraith darting in: a rising icy shriek over a rush of cold air."""
+    seconds = rng.uniform(0.45, 0.55)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f = rng.uniform(600, 750) * (1 + 1.2 * t**1.5)
+    rush = bandpass(rng.standard_normal(n), 1200, 6000) * np.sin(np.pi * t) ** 2
+    x = whistle(n, rng, f) * envelope(n, 0.05, seconds / 3, hold=seconds * 0.5) + rush * 0.5
+    return level(trim(x), -17)
+
+
+def rimewraith_death(rng):
+    """A rimewraith dying: its whistle sinking away as it shatters into falling ice."""
+    seconds = 1.5
+    n = samples(seconds)
+    t = times(n) / seconds
+    f = rng.uniform(900, 1000) * (1 - 0.6 * t)
+    fall = whistle(n, rng, f) * np.clip(1.1 - t * 1.4, 0, 1)
+    x = fall + ice(rng, 40, seconds, 2000, 6500) * np.clip(t * 2.5 - 0.2, 0, 1) * 0.8
+    return level(trim(x * envelope(n, 0.05, 0.5, hold=0.9)), -18)
+
+
+def canopy_spitter_call(rng):
+    """A canopy spitter's call: a wet, lower chitter than a lurker's, under a soft hiss."""
+    out = []
+    for _ in range(rng.integers(2, 4)):
+        d = rng.uniform(0.2, 0.35)
+        run = clicks(d, rng, rng.uniform(22, 34), rng.uniform(1100, 1500))
+        hiss = bandpass(rng.standard_normal(samples(d)), 3000, 8000) * 0.08
+        out.append((run + hiss) * envelope(samples(d), 0.01, d / 2, hold=d / 3))
+        out.append(np.zeros(samples(rng.uniform(0.1, 0.2))))
+    return level(trim(np.concatenate(out)), -21)
+
+
+def canopy_spitter_hurt(rng):
+    """A canopy spitter hurt: a sharp spitting hiss, rising."""
+    seconds = 0.3
+    n = samples(seconds)
+    t = times(n) / seconds
+    hiss = bandpass(rng.standard_normal(n), 2000, 9000) * envelope(n, 0.004, 0.08, hold=0.08)
+    squeal = formants(voiced(rng.uniform(900, 1050) * (1 + 0.4 * t), 6), ((2400, 6, 1.0),)) * envelope(n, 0.01, 0.06, hold=0.05)
+    return level(trim(hiss + squeal * 0.6), -17)
+
+
+def canopy_spitter_attack(rng):
+    """A canopy spitter spitting: a hiss drawn in, swelling, and a wet pop as it lets fly."""
+    seconds = 0.6
+    n = samples(seconds)
+    t = times(n) / seconds
+    draw = bandpass(rng.standard_normal(n), 1500, 7000) * np.clip(t / 0.75, 0, 1) ** 2 * (t < 0.75)
+    pop = thump(samples(0.08), rng, rng.uniform(380, 460), 0.015, drop=0.6)
+    wet = np.concatenate([bubble(rng, rng.uniform(700, 1000), 0.012) for _ in range(3)])
+    x = draw * 0.6
+    place(x, pop * 1.2, samples(0.44))
+    place(x, wet * 0.6, samples(0.46))
+    return level(trim(x), -17)
+
+
+def canopy_spitter_death(rng):
+    """A canopy spitter dying: gurgling, its clicks slowing to nothing."""
+    seconds = 1.2
+    x = clicks(seconds, rng, 30, rng.uniform(1000, 1300), slowing=1.15)
+    gurgle = np.zeros_like(x)
+    for _ in range(14):
+        place(gurgle, bubble(rng, rng.uniform(250, 600), rng.uniform(0.015, 0.03)), samples(rng.uniform(0, 0.6)))
+    return level(trim((x + gurgle * 0.5) * envelope(len(x), 0.005, 0.45, hold=0.25)), -18)
+
+
+def listener_call(rng):
+    """A listener's call: slow, deep clicks in the throat, sounding out the dark, between them a
+    long wet inward breath."""
+    seconds = rng.uniform(1.4, 1.8)
+    out = np.zeros(samples(seconds))
+    at = 0.05
+    while at < seconds - 0.1:
+        knock = tick(rng, rng.uniform(550, 750), decay=0.01)
+        place(out, formants(knock, ((300, 5, 1.0), (900, 6, 0.5))) * rng.uniform(0.6, 1.0), samples(at))
+        at += rng.uniform(0.18, 0.32)
+    n = len(out)
+    breath = wheeze(n, rng, 300, 1800) * np.sin(np.pi * times(n) / seconds) ** 2 * 0.25
+    return level(trim(out + breath), -20)
+
+
+def listener_hurt(rng):
+    """A listener hurt: a ragged shriek, broad and harsh."""
+    seconds = 0.4
+    n = samples(seconds)
+    f0 = rng.uniform(500, 600) * (1 - 0.3 * times(n) / seconds)
+    shriek = formants(growl(n, rng, f0, 70), ((900, 3, 1.0), (2200, 4, 0.7), (3600, 6, 0.3)))
+    return level(trim(shriek * envelope(n, 0.006, 0.1, hold=0.08)), -16)
+
+
+def listener_attack(rng):
+    """A listener lunging: a scream opening from a hiss, rising, the clicks gone wild in it."""
+    seconds = rng.uniform(0.55, 0.65)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(260, 320) * (1 + 1.2 * t)
+    scream = formants(growl(n, rng, f0, 50), ((800, 3, 1.0), (1800, 4, 0.6), (3000, 6, 0.3))) * np.clip(t * 2.5, 0, 1)
+    hiss = bandpass(rng.standard_normal(n), 2500, 8000) * np.clip(1 - t * 2, 0, 1) * 0.5
+    x = (scream + hiss) * envelope(n, 0.02, seconds / 3, hold=seconds * 0.55)
+    x += clicks(seconds, rng, 40, 700) * 0.3
+    return level(trim(x), -16)
+
+
+def listener_death(rng):
+    """A listener dying: a long wail falling away into slower and slower clicks."""
+    seconds = 1.7
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(420, 480) * (1 - 0.6 * t)
+    wail = formants(voiced(f0, 20), ((700, 4, 1.0), (1700, 5, 0.4))) * np.clip(1.1 - t * 1.6, 0, 1)
+    tail = clicks(seconds, rng, 14, 650, slowing=1.2) * np.clip(t * 2 - 0.4, 0, 1)
+    return level(trim((wail + tail * 0.8) * envelope(n, 0.04, 0.6, hold=1.0)), -18)
+
+
+def gurgle(seconds, rng, count, lo=150, hi=500):
+    """Water bubbling in a throat: low bubbles scattered over `seconds`."""
+    out = np.zeros(samples(seconds))
+    for _ in range(count):
+        place(out, bubble(rng, rng.uniform(lo, hi), rng.uniform(0.02, 0.05)) * rng.uniform(0.4, 1.0), samples(rng.uniform(0, seconds * 0.9)))
+    return out
+
+
+def drowner_call(rng):
+    """A drowner's call: a low groan choked with water, bubbling through it."""
+    seconds = rng.uniform(1.2, 1.5)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(75, 90) * (1 + 0.1 * np.sin(np.pi * t))
+    wobble = 1 + 0.4 * np.sin(2 * np.pi * np.cumsum(rng.uniform(7, 11) * np.ones(n)) / SR)
+    groan = lowpass(formants(voiced(f0, 30) * wobble, ((300, 3, 1.0), (650, 4, 0.5))), 1200)
+    x = groan * envelope(n, 0.2, seconds / 3, hold=seconds * 0.45) + gurgle(seconds, rng, 25) * 0.5
+    return level(trim(x), -20)
+
+
+def drowner_hurt(rng):
+    """A drowner hurt: a choked, spluttering cough."""
+    seconds = 0.45
+    n = samples(seconds)
+    f0 = rng.uniform(130, 160) * np.ones(n)
+    cough = formants(growl(n, rng, f0, 45), ((400, 3, 1.0), (1000, 4, 0.5))) * envelope(n, 0.005, 0.07, hold=0.05)
+    x = cough + gurgle(seconds, rng, 10, 300, 900) * 0.6
+    return level(trim(x), -17)
+
+
+def drowner_attack(rng):
+    """A drowner grabbing: a gargling roar, water spraying from it."""
+    seconds = rng.uniform(0.6, 0.75)
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(95, 115) * (1 + 0.45 * np.sin(np.pi * t))
+    roar = formants(growl(n, rng, f0, 40), ((450, 2.5, 1.0), (950, 3, 0.6), (2100, 5, 0.25)))
+    spray = bandpass(rng.standard_normal(n), 2000, 7000) * np.sin(np.pi * t) ** 2 * 0.25
+    x = (roar + spray) * envelope(n, 0.08, seconds / 4, hold=seconds * 0.5) + gurgle(seconds, rng, 20) * 0.5
+    return level(trim(x), -17)
+
+
+def drowner_death(rng):
+    """A drowner dying: a groan sinking, the last of its breath bubbling away."""
+    seconds = 1.6
+    n = samples(seconds)
+    t = times(n) / seconds
+    f0 = rng.uniform(80, 90) * (1 - 0.45 * t)
+    groan = lowpass(formants(voiced(f0, 25), ((300, 3, 1.0), (600, 4, 0.4))), 1000) * np.clip(1.2 - t * 1.6, 0, 1)
+    x = groan + gurgle(seconds, rng, 45, 200, 700) * np.clip(t * 2, 0, 1) * 0.7
+    return level(trim(x * envelope(n, 0.05, 0.5, hold=1.0)), -18)
+
+
+# the order seeds them, so new kinds go on the end
+HOSTILES = ["gloamer", "lurker", "slinger", "barrow_brute", "dunewight", "rimewraith", "canopy_spitter", "listener",
+            "drowner"]
 
 
 # --- ambience loops ------------------------------------------------------------------------------

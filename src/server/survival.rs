@@ -22,7 +22,7 @@ use crate::block::shape::Use;
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::collision::boxes_at;
-use crate::creatures::CreatureKind;
+use crate::creatures::{CreatureKind, Harm};
 use crate::game_mode::GameMode;
 use crate::inventory::{Inventory, HOTBAR_SLOTS};
 use crate::player::name::PlayerName;
@@ -59,6 +59,8 @@ const HEAL_ABOVE: u8 = 17;
 const HEAL_INTERVAL: f32 = 4.0;
 const STARVE_INTERVAL: f32 = 4.0;
 const STARVING_HEALTH: u8 = 1;
+// How often a point of venom hurts, in seconds, down to `STARVING_HEALTH` as starving does.
+const VENOM_INTERVAL: f32 = 1.0;
 /// How long eating one takes, in seconds, holding right click.
 pub const EATING_SECONDS: f32 = 1.6;
 // Faster than this across the ground, in blocks a second over `SPRINT_WINDOW` seconds, a
@@ -103,7 +105,8 @@ pub(super) struct Combat {
 }
 
 /// A blow at a player by a creature (M3.3): how hard, from where, how hard it knocks them back,
-/// in blocks a second, and what struck it.
+/// in blocks a second (towards it if less than nothing), what struck it, and what else it does
+/// (M4.10).
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct Blow {
     pub player: Entity,
@@ -111,6 +114,7 @@ pub struct Blow {
     pub from: Vec3,
     pub knockback: f32,
     pub by: CreatureKind,
+    pub harm: Harm,
 }
 
 /// Where a player's body is, as far as falling and drowning go.
@@ -275,6 +279,9 @@ pub(super) struct Metabolism {
     starving: f32,
     // food used up towards the next point off the bar
     used: f32,
+    // points of venom still to hurt, and seconds towards the next
+    venom: u8,
+    poisoning: f32,
 }
 
 impl Metabolism {
@@ -287,6 +294,27 @@ impl Metabolism {
             healing: 0.0,
             starving: 0.0,
             used: 0.0,
+            venom: 0,
+            poisoning: 0.0,
+        }
+    }
+
+    /// Takes in `venom` more points of venom, which hurt as they go on top of any already in
+    /// them (M4.10).
+    pub(super) fn poison(&mut self, venom: u8) {
+        self.venom = self.venom.saturating_add(venom);
+    }
+
+    /// Lets `dt` seconds of the venom in them hurt: a point every `VENOM_INTERVAL`, until it's
+    /// spent, but never below half a heart, so venom alone never kills.
+    fn suffer(&mut self, vitals: &mut Vitals, dt: f32) {
+        self.poisoning = tick(self.poisoning, dt, self.venom > 0);
+        if self.poisoning >= VENOM_INTERVAL {
+            self.poisoning -= VENOM_INTERVAL;
+            self.venom -= 1;
+            if vitals.health > STARVING_HEALTH {
+                vitals.health -= 1;
+            }
         }
     }
 
@@ -352,6 +380,7 @@ impl Metabolism {
         if died.is_some() {
             return died;
         }
+        self.suffer(vitals, dt);
 
         self.used += FOOD_PER_SECOND * dt
             + SPRINTING_FOOD_PER_SECOND * moved.sprinted
@@ -519,6 +548,10 @@ pub(super) fn live(
                 Death::Slain(blow.by),
             ));
             inventory.wear_armour();
+            // what else it does goes through armour: a chill or venom isn't a bruise
+            now.food = now.food.saturating_sub(blow.harm.chills);
+            metabolism.poison(blow.harm.venom);
+            // a negative knockback drags them towards what struck, along the ground
             let away = (body.translation - blow.from).xz().normalize_or_zero() * blow.knockback;
             let lift = if blow.knockback > 0.0 {
                 KNOCK_LIFT
@@ -529,6 +562,7 @@ pub(super) fn live(
                 from: blow.from,
                 push: Vec3::new(away.x, lift, away.y),
                 count: bruise.count.wrapping_add(1),
+                slows: blow.harm.slows,
             };
         }
         let died = died
@@ -1157,12 +1191,18 @@ mod tests {
 
     // A creature's blow at the player from 3 blocks along -x.
     fn strike(app: &mut App, player: Entity, damage: u8) {
+        harm(app, player, damage, Harm::NONE);
+    }
+
+    // The same, doing `harm` besides.
+    fn harm(app: &mut App, player: Entity, damage: u8, harm: Harm) {
         app.world_mut().write_message(Blow {
             player,
             damage,
             from: FLOOR - Vec3::X * 3.0,
             knockback: 6.0,
             by: CreatureKind::Sheep,
+            harm,
         });
         app.update();
     }
@@ -1211,6 +1251,44 @@ mod tests {
         assert_eq!("Player was slain by a sheep", said[0].text);
         let mut dropped = app.world_mut().query::<&DroppedItem>();
         assert_eq!(1, dropped.iter(app.world()).count());
+    }
+
+    #[test]
+    fn test_harm_chills_through_armour_poisons_to_half_a_heart_slows_and_drags() {
+        let (mut app, player) = server();
+        inventory(&mut app, player).armour[1] = Some(ItemStack::new(Item::IronChestplate, 1));
+        let harmed = Harm {
+            slows: 3.0,
+            chills: 3,
+            venom: 4,
+        };
+        harm(&mut app, player, 2, harmed);
+        // the chill isn't a bruise, so armour keeps none of it
+        assert_eq!(MAX_FOOD - 3, vitals(&app, player).food);
+        let bruise = *app.world().get::<Bruise>(player).unwrap();
+        assert_eq!(3.0, bruise.slows);
+        // venom hurts a point a second, but no lower than half a heart, and is spent
+        app.world_mut().get_mut::<Vitals>(player).unwrap().health = 3;
+        run(&mut app, 1.1);
+        assert_eq!(2, vitals(&app, player).health);
+        run(&mut app, 4.0);
+        assert_eq!(1, vitals(&app, player).health);
+        assert!(!vitals(&app, player).is_dead());
+        assert_eq!(0, app.world().get::<Metabolism>(player).unwrap().venom);
+        // a blow knocking less than nothing drags them towards what struck, along the ground
+        app.world_mut().get_mut::<Vitals>(player).unwrap().health = 10;
+        app.world_mut().write_message(Blow {
+            player,
+            damage: 1,
+            from: FLOOR - Vec3::X * 3.0,
+            knockback: -7.0,
+            by: CreatureKind::Drowner,
+            harm: Harm::NONE,
+        });
+        app.update();
+        let bruise = *app.world().get::<Bruise>(player).unwrap();
+        assert!(bruise.push.x < -6.0 && bruise.push.y == 0.0, "{bruise:?}");
+        assert_eq!(0.0, bruise.slows);
     }
 
     #[test]

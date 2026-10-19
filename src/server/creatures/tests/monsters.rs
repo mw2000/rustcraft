@@ -521,7 +521,11 @@ fn test_a_throw_aims_its_arc_to_land_where_its_aimed_and_lines_of_sight_stop_at_
     let to = Vec3::new(9.0, 1.5, 4.0);
     let velocity = aim(from, to, 16.0).unwrap();
     assert!((velocity.length() - 16.0).abs() < 1e-3);
-    let missile = Missile { from, velocity };
+    let missile = Missile {
+        from,
+        velocity,
+        by: CreatureKind::Slinger,
+    };
     let t = (to - from).xz().length() / velocity.xz().length();
     assert!(missile.at(t).distance(to) < 1e-3, "{}", missile.at(t));
     assert_eq!(None, aim(from, from + Vec3::X * 60.0, 16.0));

@@ -54,6 +54,7 @@ pub fn player_move(
         players.single_mut().expect("player does not exist");
     if bruise.is_changed() && !bruise.is_added() {
         player.knock(bruise.push);
+        player.slow(bruise.slows);
     }
     if controls.just_pressed(Action::Fly) && mode.can_fly() {
         player.movement = match player.movement {
@@ -97,6 +98,8 @@ fn move_input(controls: &Controls) -> MoveInput {
         rise: -axis(Action::Jump, Action::Descend),
         jump: controls.pressed(Action::Jump),
         sprint: controls.pressed(Action::Sprint),
+        // the fly-down key does nothing else on foot
+        sneak: controls.pressed(Action::Descend),
     }
 }
 

@@ -78,9 +78,20 @@ const WINDING: f32 = 8.0;
 const STRIKE_LUNGE: f32 = 0.35;
 const STRIKE_ARMS: f32 = 0.5;
 const STRIKE: f32 = 0.25;
-// How big a missile's drawn, in blocks, and its colour, a stone's.
+// How big a missile's drawn, in blocks, and its colour, a stone's; and a gob of venom spat,
+// which glows, so it's seen coming at night.
 const MISSILE: f32 = 0.2;
 const STONE: Color = Color::srgb(0.48, 0.47, 0.46);
+const SPIT: f32 = 0.14;
+const VENOM: Color = Color::srgb(0.7, 0.95, 0.2);
+// A creature rising from where it lay buried: how long it takes, in seconds, and how much of
+// it shows over the ground while it lies there, as a lump to be seen.
+const RISING: f32 = 0.8;
+const BURIED_SHOWS: f32 = 0.12;
+// How far a creature with no legs bobs as it drifts, in blocks, and how quickly, in radians a
+// second.
+const DRIFT_BOB: f32 = 0.07;
+const DRIFT_RATE: f32 = 2.2;
 
 /// A creature as this client sees it, drawn where its poses put it, on an entity of its own.
 /// Its look's pitch is always level.
@@ -246,6 +257,7 @@ struct CreatureLooks {
     heart: Handle<Mesh>,
     heart_colour: Handle<ModelMaterial>,
     missile: Handle<Mesh>,
+    venom: Handle<Mesh>,
     stone: Handle<ModelMaterial>,
 }
 
@@ -302,6 +314,8 @@ struct Model {
     wound: f32,
     winding: bool,
     struck: Option<f32>,
+    // how far it's risen from where it lay buried, from 0 to 1, once it's first been drawn
+    risen: Option<f32>,
     last: Vec3,
     // which way its body's shown facing, and its head turned from that, across and up
     yaw: Option<f32>,
@@ -431,6 +445,7 @@ fn make_looks(
         heart: meshes.add(coloured(heart, HEART)),
         heart_colour: glowing.0,
         missile: meshes.add(coloured(Cuboid::from_length(MISSILE).into(), STONE)),
+        venom: meshes.add(coloured(Cuboid::from_length(SPIT).into(), VENOM)),
         stone: lit.0,
     });
 }
@@ -496,6 +511,7 @@ fn draw_creature(
         wound: 0.0,
         winding: false,
         struck: None,
+        risen: None,
         last: Vec3::ZERO,
         yaw: None,
         look: Vec2::ZERO,
@@ -628,6 +644,20 @@ fn animate(
             // its back to the ceiling, its feet where its top would be
             body.rotation *= Quat::from_rotation_z(PI);
             body.translation.y += properties.height * body.scale.y;
+        }
+        // sunk in the ground but for a lump of its top while it lies buried, and rising out of
+        // it steadily once it's up
+        let buried = if stance.buried { 0.0 } else { 1.0 };
+        let risen = match model.risen {
+            Some(risen) if risen < buried => (risen + dt / RISING).min(buried),
+            _ => buried,
+        };
+        model.risen = Some(risen);
+        let sunk = properties.height * body.scale.y * (1.0 - BURIED_SHOWS);
+        body.translation.y -= sunk * (1.0 - risen);
+        // and one with no legs drifts, bobbing
+        if model.legs.is_empty() {
+            body.translation.y += DRIFT_BOB * (t * DRIFT_RATE + (seed % 64) as f32).sin();
         }
 
         let angle = stride.sin() * swing * SWING;
@@ -819,10 +849,16 @@ fn show_missiles(
     mut commands: Commands,
 ) {
     for (entity, missile) in &thrown {
+        let attack = missile.by.properties().attack.as_ref();
+        let (mesh, material) = if attack.is_some_and(|a| a.harm.venom > 0) {
+            (looks.venom.clone(), looks.heart_colour.clone())
+        } else {
+            (looks.missile.clone(), looks.stone.clone())
+        };
         commands.entity(entity).insert((
             Thrown::default(),
-            Mesh3d(looks.missile.clone()),
-            MeshMaterial3d(looks.stone.clone()),
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
             Transform::from_translation(missile.from),
         ));
     }

@@ -78,7 +78,7 @@ What already exists, as of the `combined-prs` branch (main + PRs #74, #75, #76):
 | Loot | Loot tables, rolled from the seed and position into chests the world generates the first time they're opened (§5.6) | `src/loot.rs`, `src/server/containers.rs` |
 | Farming | Hoes till farmland, seeds grow into wheat through eight stages on the server, catching up when their chunk loads, and wheat bakes into bread (§5.5a) | `src/farming.rs`, `src/server/farming.rs` |
 | Settings | The renderer's defaults, and the player's own settings over them, volumes too, from the Settings screen | `assets/settings.toml`, `src/settings.rs`, `src/preferences.rs`, `src/client/sound/volume.rs` |
-| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; sheep, cows, pigs and chickens, four monsters out in the dark that hunt players, despawning unsaved, and villagers of five callings who keep their day and trade (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs`, `src/trading.rs` |
+| Creatures | Kinds declared in a table, walking under gravity, finding their way by A* on the compute pool, spawning near players, hit, saved while nobody's near; sheep, cows, pigs and chickens, nine monsters out in the dark that hunt players, by climate and depth (M4.10), despawning unsaved, and villagers of five callings who keep their day and trade (§5.8) | `src/creatures/`, `src/server/creatures/`, `src/client/creatures.rs`, `src/trading.rs` |
 | Ambient life | Butterflies, fireflies with their glow, starling murmurations and skeins of geese, decoration on the client alone, by biome and time of day (§5.8) | `src/client/critters/` |
 | Sound | Footsteps by surface, breaking and placing, the player's own noises, others heard where they are, ambience by place and time from recordings and synthesis, rare music (§5.10) | `src/client/sound/`, `assets/sounds/` |
 | Tools | `bench`, `lod_sim` and `world_map` examples; `profile`, `block-textures`, `structures` and `sounds` skills | `examples/`, `.claude/skills/` |
@@ -2574,7 +2574,8 @@ from high places.
     joined client seeing a brute wind up and strike, taking the blow and feeling it, seeing one
     killed die and a gloamer at sunrise fade without dying (`tests/multiplayer.rs`).
   - **Later:** monsters swimming after players; more dungeons' kinds by structure. (Models are
-    now lit as the land where they stand is, by moonlight and torchlight too, §5.5.)
+    now lit as the land where they stand is, by moonlight and torchlight too, §5.5.) Biomes
+    and depth bands came with M4.10 (below).
 - **Built: ambient life** (ported from rornic/rustcraft #79 by Aymen Qader, `src/client/critters/`,
   `AmbientLifePlugin`). Not creatures: creatures are gameplay, owned by the server, replicated
   and hit; critters are decoration round the camera on each client alone. The server
@@ -2696,6 +2697,112 @@ from high places.
   - **Later:** breeding and villages growing, villagers talking among themselves at the well,
     lamplighters lighting the lamps at dusk, trades getting better as a player trades more,
     giving them names over their heads, and villagers sheltering from storms (M3.5).
+
+- **Built (M4.10): monsters by place** (`src/creatures/mod.rs`, `src/server/creatures/hunting.rs`,
+  `spawning.rs`). Each climate's night and each depth band has monsters of its own, so where
+  you are says what you'll meet, and the deeper you dig the worse it gets. Five new kinds of our
+  own (INV-8), each with its own shape, way of fighting and answer to it:
+
+  | Kind | Looks | Where | Health | Fights | Beaten by |
+  |---|---|---|---|---|---|
+  | **Dunewight** | Tall and gaunt, bound head to foot in sand-pale linen banded darker, stooped, long arms, a loose strip behind, a dark slit of a face with turquoise eyes | Buried in desert sand at night, 1–3, 4 round a player | 20 | Lies under the sand, only a lump of linen showing, till a player comes within 5; rises over 0.8 s, then shambles (1.2, running 3.0); 4 a blow after 0.5 s, every 2.1 s, which **slows** them to half pace for 3 s, and they can't sprint | Seeing the lumps and walking round them, or striking first: it's slow, and 5 wooden sword hits kill it. Waking three at once outlasts a wooden sword. Drops 0–3 coins (grave goods) and sand |
+  | **Rimewraith** | A hooded shroud of icy blue floating a hand over the snow on no legs, its tattered hem swaying, thin frost-white arms, icicles on its shoulders, cyan eyes in the dark of its hood | On snow and ice in glaciers, taiga and on peaks at night, 1–2, 3 round a player | 14 | Drifts (2.2, darting at 4.4, no fall hurts it), strikes for 3 after 0.35 s, which **chills** 3 off the food bar through any armour, then **draws off** for 2.5 s and comes back | Food to spare, and hitting it as it comes back in, when it's predictable: 4 wooden sword hits. Fades at sunrise. Drops 0–1 frost crystal |
+  | **Canopy spitter** | Long and banded leaf green and ochre on six long thin legs, a swollen abdomen with a red sac on its back, pale fangs, two big and two small yellow-green eyes | Hanging under the jungle's leaves at night, 1, 3 round a player | 12 | Hangs upside down and **spits venom from where it hangs** at anyone it sees 3–12 blocks off (14 blocks a second, after 0.5 s, every 2.7 s), 2 and 3 points of **venom**, a point a second that never takes them below half a heart; drops on whoever walks right under it, then keeps its distance and spits | Moving, as the gob's arc can be stepped out of and glows yellow-green so it's seen coming; keeping out from under the crowns at night; 3 wooden sword hits. Drops 0–1 jade and vines |
+  | **Listener** | Hunched and ash pale, ribs showing, long arms to its shins, a low head thrust forward between two great fans of ears that glow a dull pink, a lipless mouth of teeth and eyes grown over milky | In the dark caves below 200, 1, 2 round a player | 30 | **Blind: hunts by sound.** It hears a player's din (below), and blocks broken or placed within 16, and goes to where it last heard something at a run (5.0), finding anyone within 2.5 by touch; 7 a blow after 0.4 s, every 1.8 s | **Sneaking**, or standing still, so it loses you and searches where it heard you; or a stone sword and leather, as the numbers below show. Drops 1–2 embers and 0–2 iron |
+  | **Drowner** | Bloated and waterlogged, sodden teal with kelp hanging from its back and over a shoulder, barnacles, long arms, a slack-jawed head and a lure on a stalk from its brow that glows | On the sand and gravel of shores at night, feet 3 under to 3 over sea level, 1–2, 3 round a player | 18 | Swims after its prey (the first monster to), strikes for 4 after 0.45 s every 1.95 s, and its blows **drag** a player 7 blocks a second towards it, towards the water, where they swim slower | Fighting it from inland with the sea behind it, not in the shallows: 5 wooden sword hits. Fades at sunrise. Drops 0–2 coins |
+
+  - **Spawning by place:** `Spawns`' `biomes` (since M3.2) now places monsters too: gloamers
+    hunt the grass and woods (`GRASS_COUNTRY`: base, foothills, forest, jungle, savanna, taiga
+    and volcanoes) and no longer the deserts, glaciers and peaks, which have their own.
+    `below` became `heights`, a band of absolute heights its feet go in (`ANY_HEIGHT`, and in
+    one place, `DEEP` below 400, 48 under the sea, `DEEPEST` below 200, and `SHORE`, 3 either
+    side of sea level), so M4.4's deep layer can retune them where they're declared; and
+    `under_sky` became `sky`: `Open` (on a column's highest ground under the sky), `Under`
+    (only under ground) or `Either`. Brutes are now `Under` only, so never out on low open ground
+    at night. So the bands are: from the surface to 400, lurkers and slingers (5 round a
+    player); below 400 a barrow brute besides (6); below 200 two listeners besides (8), worse
+    for the listeners than the slingers they join. Spawning stays a biome sample of the column
+    tried and a scan of 32 blocks of it, as before.
+  - **New columns:** `Spawns::buried` (a kind lying in its ground, `Stance::buried`,
+    replicated); `Attack`'s `senses` (`Sight` or `Sound`), `withdraws` (seconds it draws off
+    after a blow) and `harm` (`Harm { slows, chills, venom }`, what a blow does beyond hurting,
+    carried by `Blow` and by missiles). `Missile` says what threw it, so clients draw venom as a
+    glowing gob and stones as stones.
+  - **Brains:** `Ambush` covers lying buried as well as hanging (`Doing::Cling`): a buried one
+    rises for a player in survival within 5 it can see, standing while it does
+    (`Fight::risen_at`), and can't be hit, nor targeted, while it's under; a hanging kind that
+    throws hunts and throws from where it hangs, and drops only on someone under it. `Hunt` for
+    a blind kind (`Sense::Sound`) hears instead of seeing (`hunting::hear`) and, losing its prey
+    or hearing a block change (read from the `BlockChanged` the server sends), `Doing::Seek`s
+    where it last heard something, at a run, giving up 2.5 blocks from it; a hit turns it on the
+    hitter and tells it where they are. A kind that `withdraws` flees its prey for that long
+    after each strike (`Flee` before `Hunt` in its row); a monster hit turns on whoever hit it
+    even if it can flee.
+  - **Din and sneaking:** `Din` on each player, kept by the server (`make_din`) from how fast
+    they move across the ground, smoothed (2% left after a second): heard nowhere below 2 blocks
+    a second, then 5 blocks further for each block a second over, so walking (4.3) is heard 11.5
+    blocks off, sprinting (5.6) 18, and never further than 24. **Sneaking** is the fly-down key
+    (Ctrl) held on foot, which did nothing there: 0.3 of walking pace (1.3), so silent, and no
+    sprinting. The Controls settings call it "Fly down, or sneak".
+  - **Effects of blows** (§5.5): slowing is the client's, as movement is (§4.4): `Bruise`
+    carries `slows`, the seconds of it, and `Player::slow` halves walking pace and stops
+    sprinting till they're up (longer of the two if slowed again). A chill takes food off the
+    bar at once and venom goes into `Metabolism`, a point a second down to half a heart, as
+    starving does, so venom never kills on its own; both go through armour, which only blunts
+    the blow. A negative knockback drags a player towards what struck, along the ground.
+  - **Balance** on paper (`test_the_new_monsters_numbers_are_fair_for_the_tiers` checks the
+    claims). A sword swings every 0.6 s for tier + 3; a monster strikes every wind-up and
+    cooldown (or wind-up and withdrawal). Hits to kill, and seconds from the first hit:
+
+    | Kind (health) | Wooden (4) | Stone (5) | Copper (6) | Iron (7) | Bright steel (8) | It kills an unarmoured player in |
+    |---|---|---|---|---|---|---|
+    | Dunewight (20) | 5, 2.4 s | 4, 1.8 s | 4, 1.8 s | 3, 1.2 s | 3, 1.2 s | 5 blows, 8.9 s |
+    | Rimewraith (14) | 4, 1.8 s | 3, 1.2 s | 3, 1.2 s | 2, 0.6 s | 2, 0.6 s | 7 blows, 17 s, and 21 food |
+    | Canopy spitter (12) | 3, 1.2 s | 3, 1.2 s | 2, 0.6 s | 2, 0.6 s | 2, 0.6 s | to half a heart in 4 spits, 8.5 s (venom) |
+    | Listener (30) | 8, 4.2 s | 6, 3.0 s | 5, 2.4 s | 5, 2.4 s | 4, 1.8 s | 3 blows, 4.0 s; through leather 4, 5.8 s; iron 7, 11 s |
+    | Drowner (18) | 5, 2.4 s | 4, 1.8 s | 3, 1.2 s | 3, 1.2 s | 3, 1.2 s | 5 blows, 8.3 s |
+
+    So each climate's monster is beaten one at a time with a wooden sword and nothing worn,
+    costing a blow or two, as a gloamer is; what makes them dangerous is what their blows do
+    (slowed among three dunewights you can't get away, a night of wraiths empties the food bar,
+    venom leaves you at half a heart for the next thing) rather than their damage. The listener
+    is the deep's answer to a player who's come down too early: a wooden sword and no armour
+    loses (4.2 s against 4.0), a stone sword and leather wins (3.0 against 5.8), and iron is no
+    contest; or sneak past. Its 7 is a third of a player's health, against a brute's 8 that
+    comes a second slower and can be stepped back from.
+  - **Sounds** (sounds skill, `synth.py`, four takes of each cry, levelled, checked by
+    `analyse.py`): a dunewight's muffled moan through its wrappings over a dry wheeze and
+    trickling sand, a rasping groan as it reaches, a dry sigh and sand pouring as it dies; a
+    rimewraith's wavering hollow whistle with ice tinkling, a rising icy shriek as it darts in,
+    shattering as it dies; a canopy spitter's wet, low chitter under a hiss, a hiss drawn in and
+    a wet pop as it spits, gurgling clicks slowing as it dies; a listener's slow deep throat
+    clicks sounding out the dark between wet breaths, a scream opening from a hiss as it lunges,
+    a falling wail into slowing clicks; a drowner's groan choked with bubbling water, a
+    gargling roar, a sinking gurgle.
+  - **Drawing:** a buried monster is drawn sunk into its ground but for 12% of its top, a lump
+    to be spotted, and rises out of it steadily over 0.8 s; a kind with no legs (the rimewraith)
+    bobs as it drifts. Venom flies as a small glowing yellow-green gob.
+  - **Protocol:** `Stance::buried`, `Missile::by` and `Bruise::slows` are new.
+    `PROTOCOL_VERSION` is 26. Saves are unchanged: monsters are never in them.
+  - **Cost:** nothing new per frame for kinds that aren't near: `make_din` is a subtraction and
+    a multiply a player; a blind monster's listening is a distance per player twice a second and
+    a scan of the frame's player edits; spawning by band is a range check.
+  - **Tests** (`server::creatures::tests::places`): each climate's monsters at night where they
+    belong, dunewights buried and none of them or rimewraiths elsewhere, rimewraiths only on
+    the taiga's columns, gloamers on sand in grassland but not in deserts, drowners on a beach at
+    sea level and not below it; canopy spitters hanging under jungle leaves; the bands
+    (shallow: no brutes or listeners; deep: brutes; deepest: listeners, and none of the
+    surface's); a dunewight buried out of reach till someone in survival comes near, standing
+    while it rises and then striking and slowing; a rimewraith drawing off after its blow and
+    coming back, chilling; a canopy spitter spitting venom from where it hangs, and dropping on
+    someone under it; a listener not hearing someone standing or sneaking, hearing them walk,
+    seeking where it last heard them and giving up, going to a block broken, and finding
+    someone still within touch; a drowner's blow dragging and its swimming; each new kind's
+    drops; and the duel numbers above. Also (`server::survival`) chill through armour, venom to
+    half a heart and spent, slowing and dragging carried on the bruise; (`player::physics`)
+    sneaking pace and slowing wearing off.
+  - **Later:** the mini-bosses (M4.12); the HUD showing being slowed, chilled or poisoned;
+    players drawn crouching as they sneak; spawners of the climates' kinds in their temples.
 
 ### 5.9 Distribution
 
@@ -2978,9 +3085,12 @@ monuments do that job here.
   donkeys carry a chest. Roads and bridges generated between villages and towns, so riding has
   somewhere to go. A horse loads the world faster than walking; the gaps that opened at the
   edge of the loaded area in fast flight are closed (U-82's follow-up).
-- ☐ **M4.10 Monsters by place.** Monsters by biome and depth (mummies in deserts, wraiths on
+- ◐ **M4.10 Monsters by place.** Monsters by biome and depth (mummies in deserts, wraiths on
   glaciers, things in the deep layer worse the further down), and mini-bosses guarding
-  monuments, each with a drop of its own (§5.8).
+  monuments, each with a drop of its own (§5.8). Built: the monsters, §5.8 (five new kinds,
+  each climate's night and the depth bands, the effects of blows, sneaking, the numbers), §5.5
+  (slowing, chill and venom), protocol 26. Left: the mini-bosses, with the monuments
+  they guard (M4.12), and pointing the depth bands at M4.4's deep layer once it lands.
 - ☐ **M4.11 Towns and bounties.** Towns bigger than villages: walls, a market, a smith, a forge,
   and a bounty board whose jobs (clear the ruin to the north, bring ten jade) send you
   exploring, rewarded in coin or goods (§5.6, §5.8).
@@ -3141,8 +3251,13 @@ they're found.
   in the worlds list (M-U1).
 
 **Creatures and combat**
-- ☐ Monsters swimming after players; `/summon lurker` hanging from a ceiling; slingers reaching
-  into a walled base with no roof (§5.8, M3.3).
+- ☐ Monsters swimming after players (only the drowner does); `/summon lurker` hanging from a
+  ceiling; slingers reaching into a walled base with no roof (§5.8, M3.3).
+- ☐ Monsters by place (M4.10): the HUD showing slowness, chill and venom; players drawn crouching
+  as they sneak, and sneaking keeping them from walking off edges; dunewight and canopy
+  spitter spawners in desert and jungle temples; glaciers and peaks are far towards the poles,
+  so only a test of the taiga shows rimewraiths spawning; the depth bands (`DEEP`, `DEEPEST`)
+  pointed at M4.4's deep layer (§5.8).
 - ☐ Creatures pushing each other and players apart; pathfinding through shaped blocks (stairs,
   slabs, fences) rather than whole cells (§5.8, M3.1, M2.4a).
 - ☐ Eggs, dyed wool, babies following their mothers, grazing that eats grass (§5.8, M3.2).

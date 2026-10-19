@@ -1,4 +1,5 @@
 mod monsters;
+mod places;
 mod villagers;
 
 use std::time::{Duration, Instant};
@@ -6,12 +7,12 @@ use std::time::{Duration, Instant};
 use bevy::math::I64Vec3;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use bevy_replicon::prelude::{ClientId, FromClient};
+use bevy_replicon::prelude::{ClientId, FromClient, ToClients};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use super::{
-    breed, creature, despawn, fight, fly_missiles, grow, move_creatures, receive_hits,
+    breed, creature, despawn, fight, fly_missiles, grow, make_din, move_creatures, receive_hits,
     receive_uses, sleep, spawn, take_paths, think, vanish, wake, Doing, Dormant, Health, Life,
     Mind, Route, SpawnRate, Spawners,
 };
@@ -24,7 +25,7 @@ use crate::edits::Edits;
 use crate::inventory::Inventory;
 use crate::items::{Item, ItemStack};
 use crate::player::{Player, PlayerOwner};
-use crate::protocol::{HitCreature, UseCreature};
+use crate::protocol::{BlockChanged, HitCreature, UseCreature};
 use crate::server::drops::{Chance, DroppedItem};
 use crate::server::survival::{Combat, Footing};
 use crate::server::{Blow, HeldItem};
@@ -46,7 +47,12 @@ fn app(surface: BlockType) -> App {
 
 // The same, round the chunk `centre`, at the origin's height.
 fn field(surface: BlockType, centre: I64Vec3) -> App {
-    let mut world = World::from_save(SEED, Edits::default(), 16);
+    field_of(SEED, surface, centre)
+}
+
+// The same, in the world of `seed`.
+fn field_of(seed: u32, surface: BlockType, centre: I64Vec3) -> App {
+    let mut world = World::from_save(seed, Edits::default(), 16);
     let size = CHUNK_SIZE as usize;
     let ground = ChunkData::from_cells((0..CELLS).map(|i| {
         if i % size == 0 {
@@ -78,12 +84,14 @@ fn field(surface: BlockType, centre: I64Vec3) -> App {
         .add_message::<FromClient<HitCreature>>()
         .add_message::<FromClient<UseCreature>>()
         .add_message::<Blow>()
+        .add_message::<ToClients<BlockChanged>>()
         .add_systems(
             Update,
             (
                 wake,
                 spawn,
                 take_paths,
+                make_din,
                 grow,
                 think,
                 move_creatures,
@@ -493,7 +501,7 @@ fn animals_appear_in(biome: &str) {
         let spawns = kind.properties().spawns.as_ref().unwrap();
         let count = kinds.iter().filter(|&&k| k == kind).count();
         // and no monsters, by day
-        let expected = if spawns.biomes.contains(&biome) {
+        let expected = if spawns.biomes.contains(&biome) && kind.properties().attack.is_none() {
             spawns.cap
         } else {
             0

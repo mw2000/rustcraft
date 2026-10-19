@@ -43,9 +43,13 @@ named `<name>_1.ogg` to `_4`; `src/client/sound/mod.rs` has the same count and t
   reverb by circular convolution and IIR filters run round the loop (`around`). Keep to these, or
   the loop clicks where it repeats.
 - **Creatures:** animals have a call each (`bleat`, `moo`, `oink`, `cluck`), pitched up in the game
-  when hurt. The hostile kinds (M3.3: `gloamer`, `lurker`, `slinger`, `barrow_brute`, `HOSTILES`)
-  have four cries each, `<kind>_call`, `_hurt`, `_attack` and `_death`, from functions of those
-  names, voiced through `formants`, with `clicks` for the lurker and `crumble` for the brute.
+  when hurt. The hostile kinds (`HOSTILES`: M3.3's `gloamer`, `lurker`, `slinger`,
+  `barrow_brute`, and M4.10's `dunewight`, `rimewraith`, `canopy_spitter`, `listener`,
+  `drowner`) have four cries each, `<kind>_call`, `_hurt`, `_attack` and `_death`, from
+  functions of those names, voiced through `formants`, with `clicks` for the lurker, spitter and
+  listener, `crumble` for the brute, `wheeze` and sand `grains` for the dunewight, `whistle`
+  and `ice` for the rimewraith and `gurgle` for the drowner. A new kind goes on the end of
+  `HOSTILES`, which seeds them in order, so the others' files stay as they are.
 - **Music:** pads under a few plucked or bell notes wandering a pentatonic scale, in a big room,
   about a minute each, played rarely (`src/client/sound/ambience.rs`).
 

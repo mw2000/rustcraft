@@ -1,16 +1,17 @@
-//! Monsters hunting players (M3.3): noticing them in sight, going after them and striking at
-//! them once they've wound up a blow, leaping at them, or throwing stones from afar, which fly
-//! under gravity until they hit something. And their going: despawned once nobody's near, and
-//! fading by day out under the sky.
+//! Monsters hunting players (M3.3): noticing them in sight, or by the din they make (M4.10),
+//! going after them and striking at them once they've wound up a blow, leaping at them, or
+//! throwing stones or spitting from afar, which fly under gravity until they hit something,
+//! and drawing off after a blow if their kind does. And their going: despawned once nobody's
+//! near, and fading by day out under the sky.
 
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 
-use super::{cell_of, view_cell, Body, Doing, Mind, Whereabouts};
+use super::{cell_of, view_cell, Body, Doing, Mind, Route, Whereabouts};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::clock::TimeOfDay;
 use crate::collision::Aabb;
-use crate::creatures::{Attack, Creature, CreatureKind, Missile, Stance, Vanishing};
+use crate::creatures::{Attack, Creature, CreatureKind, Harm, Missile, Sense, Stance, Vanishing};
 use crate::game_mode::GameMode;
 use crate::items::Item;
 use crate::player::{Player, BODY};
@@ -50,10 +51,33 @@ const SIGHT_STEP: f32 = 0.3;
 // player must be holding something that gives that much, in blocks.
 const BRIGHT: u8 = 8;
 const HELD_LIGHT: f32 = 6.0;
+/// How near a monster lying buried a player must come, in blocks, for it to rise, and how long
+/// it takes to, in seconds, before it can move or strike.
+pub(super) const RISE_NEAR: f32 = 5.0;
+pub(super) const RISING: f32 = 0.8;
+// The din a player makes, as far as it's heard in blocks: nothing below `QUIET_PACE` blocks a
+// second across, sneaking (1.3) or standing, and `DIN_PER_PACE` more for each block a second
+// over it, so walking (4.3) is heard 11.5 blocks off and sprinting (5.6) 18, and no further than
+// `LOUDEST`. How quickly the pace it's judged by follows their movement, as the fraction left
+// after a second, as poses come only 20 times a second.
+const QUIET_PACE: f32 = 2.0;
+const DIN_PER_PACE: f32 = 5.0;
+const LOUDEST: f32 = 24.0;
+const PACE_LEFT: f32 = 0.02;
+/// How near a blind monster finds a player however quiet they are, by touch and breath, and how
+/// far off it hears a block broken or placed, in blocks.
+pub(super) const TOUCH: f32 = 2.5;
+pub(super) const CLATTER: f32 = 16.0;
+// How near the place it heard something a blind monster gets before it gives up there.
+pub(super) const SEARCHED: f32 = 2.5;
+// Further than this in a frame, in blocks, a player's been put somewhere, which makes no din.
+const PUT: f32 = 8.0;
 
 /// How a monster's fight is going: when its wound-up blow lands, if it's winding one up, when it
-/// can wind up another, when it next looks about, whether it saw its prey then, and where the
-/// light it shuns was if it was too bright, all by the server's clock in seconds.
+/// can wind up another, when it next looks about, whether it saw (or heard) its prey then, where
+/// the light it shuns was if it was too bright, until when it's still rising from where it lay
+/// buried, and where a blind one last heard something it's going to, all by the server's clock
+/// in seconds.
 #[derive(Component, Debug, Default)]
 pub struct Fight {
     pub(super) strikes_at: Option<f32>,
@@ -61,15 +85,76 @@ pub struct Fight {
     pub(super) looks_at: f32,
     pub(super) sees: bool,
     pub(super) glare: Option<Vec3>,
+    pub(super) risen_at: f32,
+    pub(super) heard: Option<Vec3>,
 }
 
-/// A missile in flight: what threw it and when, and how hard it hits.
+/// The din a player makes moving about, as blind monsters hear it (M4.10): their pace across
+/// the ground lately, in blocks a second, from where they were last frame.
+#[derive(Component, Debug, Default)]
+pub struct Din {
+    last: Option<Vec3>,
+    pace: f32,
+}
+
+impl Din {
+    /// How far off, in blocks, it's heard.
+    pub fn reach(&self) -> f32 {
+        ((self.pace - QUIET_PACE) * DIN_PER_PACE).clamp(0.0, LOUDEST)
+    }
+}
+
+/// Follows the din each player makes as they move, giving each one that hasn't one yet.
+pub(in crate::server) fn make_din(
+    time: Res<Time>,
+    mut players: Query<(Entity, &Transform, Option<&mut Din>), With<Player>>,
+    mut commands: Commands,
+) {
+    let dt = time.delta_secs();
+    for (player, body, din) in &mut players {
+        let at = body.translation;
+        let Some(mut din) = din else {
+            commands.entity(player).insert(Din {
+                last: Some(at),
+                pace: 0.0,
+            });
+            continue;
+        };
+        let moved = din.last.map_or(0.0, |last| (at - last).xz().length());
+        din.last = Some(at);
+        if dt <= 0.0 || moved > PUT {
+            continue;
+        }
+        let keep = PACE_LEFT.powf(dt);
+        din.pace = din.pace * keep + moved / dt * (1.0 - keep);
+    }
+}
+
+/// The player a blind monster at `at` that hears as far as `sight` would go after, if any, and
+/// where they are: the nearest in survival and alive whose din reaches it, or near enough to
+/// touch.
+pub(super) fn hear<'a>(
+    at: Vec3,
+    sight: f32,
+    players: impl Iterator<Item = (Entity, Vec3, &'a Vitals, &'a GameMode, f32)>,
+) -> Option<(Entity, Vec3)> {
+    players
+        .filter(|&(_, feet, vitals, mode, din)| {
+            let distance = feet.distance(at);
+            is_prey(vitals, mode) && distance <= sight && distance <= din.max(TOUCH)
+        })
+        .min_by(|a, b| a.1.distance(at).total_cmp(&b.1.distance(at)))
+        .map(|(player, feet, ..)| (player, feet))
+}
+
+/// A missile in flight: what threw it and when, how hard it hits, and what else it does.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Flight {
     by: CreatureKind,
     thrown_at: f32,
     damage: u8,
     knockback: f32,
+    harm: Harm,
 }
 
 /// Whether nothing that keeps light out is on the straight line from `from` to `to`, so one
@@ -152,7 +237,8 @@ pub(super) fn keeps_after(at: Vec3, prey: Vec3, sight: f32) -> bool {
 type Fighting<'a> = (
     &'a Creature,
     &'a Transform,
-    &'a Mind,
+    &'a mut Mind,
+    &'a mut Route,
     &'a mut Fight,
     &'a mut Stance,
     &'a mut Body,
@@ -160,7 +246,8 @@ type Fighting<'a> = (
 
 /// Each monster going after a player fighting them: winding up a blow once they're in reach,
 /// or in range to throw at, and its cooldown's over, leaping at them first if its kind leaps,
-/// and landing it once it's wound up if they're still in reach, or throwing a stone at them.
+/// and landing it once it's wound up if they're still in reach (and in sight, unless it's
+/// blind), or throwing at them, then drawing off a while if its kind does.
 pub(in crate::server) fn fight(
     time: Res<Time>,
     world: Res<World>,
@@ -170,7 +257,7 @@ pub(in crate::server) fn fight(
     mut commands: Commands,
 ) {
     let now = time.elapsed_secs();
-    for (creature, body, mind, mut fight, mut stance, mut motion) in &mut creatures {
+    for (creature, body, mut mind, mut route, mut fight, mut stance, mut motion) in &mut creatures {
         let kind = creature.0;
         let Some(attack) = &kind.properties().attack else {
             continue;
@@ -194,8 +281,16 @@ pub(in crate::server) fn fight(
                 fight.ready_at = now + attack.cooldown;
                 stance.winding = false;
                 let eyes = eye(kind, at);
-                if !sees(&world, eyes, feet + Vec3::Y * CHEST) {
+                let blind = attack.senses == Sense::Sound;
+                if !blind && !sees(&world, eyes, feet + Vec3::Y * CHEST) {
                     continue;
+                }
+                if attack.withdraws > 0.0 {
+                    route.stop();
+                    *mind = Mind {
+                        doing: Doing::Flee { from: feet },
+                        until: now + attack.withdraws,
+                    };
                 }
                 match &attack.throws {
                     Some(throw) => {
@@ -211,13 +306,14 @@ pub(in crate::server) fn fight(
                             from: eyes,
                             knockback: attack.knockback,
                             by: kind,
+                            harm: attack.harm,
                         });
                     }
                     None => {}
                 }
             }
             Some(_) => {}
-            None if now >= fight.ready_at && fight.sees => {
+            None if now >= fight.ready_at.max(fight.risen_at) && fight.sees => {
                 let in_range = match &attack.throws {
                     Some(throw) => across <= throw.keep.end,
                     None => reach <= attack.reach,
@@ -250,12 +346,17 @@ fn missile(
     now: f32,
 ) -> impl Bundle {
     (
-        Missile { from, velocity },
+        Missile {
+            from,
+            velocity,
+            by: kind,
+        },
         Flight {
             by: kind,
             thrown_at: now,
             damage: attack.damage,
             knockback: attack.knockback,
+            harm: attack.harm,
         },
         Transform::from_translation(from),
         Whereabouts(view_cell(from)),
@@ -312,6 +413,7 @@ pub(in crate::server) fn fly_missiles(
                     from: at - missile.velocity.normalize_or_zero(),
                     knockback: flight.knockback,
                     by: flight.by,
+                    harm: flight.harm,
                 });
                 gone = true;
                 break;

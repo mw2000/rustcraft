@@ -12,8 +12,8 @@ mod tending;
 mod tests;
 mod villagers;
 
-pub(super) use hunting::{despawn, fight, fly_missiles, vanish};
-pub use hunting::{Fight, DESPAWN_DISTANCE};
+pub(super) use hunting::{despawn, fight, fly_missiles, make_din, vanish};
+pub use hunting::{Din, Fight, DESPAWN_DISTANCE};
 pub(super) use spawning::{build_spawners, spawn};
 pub use spawning::{SpawnRate, Spawners};
 pub use tending::Life;
@@ -40,14 +40,14 @@ use crate::chunks::chunk::ChunkCoordinate;
 use crate::collision::Aabb;
 use crate::creatures::path::{find_path, Blocks, Limits, Path, Walker};
 use crate::creatures::{
-    Behaviour, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature, Stance,
+    Behaviour, Creature, CreatureKind, CreaturePose, Flinches, SavedCreature, Sense, Stance,
 };
 use crate::game_mode::GameMode;
 use crate::inventory::{Hotbar, Inventory};
 use crate::items::{Item, ItemStack, HAND_COOLDOWN};
 use crate::player::physics::{walk, Momentum, GRAVITY, KNOCKBACK_LEFT, MAX_STEP};
 use crate::player::{Player, PlayerOwner, EYE_HEIGHT, REACH};
-use crate::protocol::HitCreature;
+use crate::protocol::{BlockChanged, HitCreature};
 use crate::save::region::Region;
 use crate::survival::{fall_damage, Vitals};
 use crate::world::World;
@@ -139,8 +139,10 @@ pub enum Doing {
     Follow(Entity),
     /// Going after a player to attack them, as a monster does.
     Hunt(Entity),
-    /// Hanging from the ceiling, waiting for someone to come under it.
+    /// Hanging from the ceiling, or lying buried, waiting for someone to come under it or near.
     Cling,
+    /// Going to where it heard something, as a blind monster does.
+    Seek(Vec3),
     /// Going to another of its kind in love, to breed.
     Mate(Entity),
     /// Keeping a villager's day, at or on its way to a place in it.
@@ -467,11 +469,21 @@ pub(super) fn think(
     clock: Res<crate::clock::TimeOfDay>,
     world: Res<World>,
     players: Players,
+    dins: Query<&Din>,
+    mut changes: MessageReader<ToClients<BlockChanged>>,
     trading: Query<(Entity, &Trading)>,
     mut chance: ResMut<Chance>,
     mut creatures: Query<Thinking>,
 ) {
     let now = time.elapsed_secs();
+    // blocks players have broken or placed this frame, which blind monsters hear, each once
+    // however many clients it's sent to
+    let mut clatter: Vec<Vec3> = changes
+        .read()
+        .filter(|change| change.message.by.is_some())
+        .map(|change| change.message.block.as_vec3() + Vec3::splat(0.5))
+        .collect();
+    clatter.dedup();
     // monsters, which villagers run from, and villagers players are trading with
     let monsters: Vec<Vec3> = creatures
         .iter()
@@ -542,6 +554,53 @@ pub(super) fn think(
                         distance(a.1).total_cmp(&distance(b.1))
                     })
                     .map(|(player, ..)| Doing::Follow(player)),
+                Behaviour::Hunt
+                    if properties
+                        .attack
+                        .as_ref()
+                        .is_some_and(|a| a.senses == Sense::Sound) =>
+                {
+                    let sight = properties.attack.as_ref().map_or(0.0, |a| a.sight);
+                    let kept = match mind.doing {
+                        Doing::Hunt(player) if !looking => players
+                            .get(player)
+                            .is_ok_and(|(_, _, _, vitals, mode)| hunting::is_prey(vitals, mode))
+                            .then_some(player),
+                        _ => None,
+                    };
+                    // listening now and then for someone moving, or near enough to touch, and
+                    // always for a block broken or placed near it
+                    if looking {
+                        let everyone = players.iter().map(|(player, body, _, vitals, mode)| {
+                            let din = dins.get(player).map_or(0.0, Din::reach);
+                            (player, body.translation, vitals, mode, din)
+                        });
+                        let heard = hunting::hear(at, sight, everyone);
+                        fight.sees = heard.is_some();
+                        if let Some((_, feet)) = heard {
+                            fight.heard = Some(feet);
+                        }
+                        heard.map(|(player, _)| Doing::Hunt(player))
+                    } else {
+                        kept.map(Doing::Hunt)
+                    }
+                    .or_else(|| {
+                        let noise = clatter
+                            .iter()
+                            .filter(|noise| noise.distance(at) <= hunting::CLATTER)
+                            .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
+                        if let Some(&noise) = noise {
+                            fight.heard = Some(noise);
+                        }
+                        // to where it last heard something, until it's there
+                        let place = fight.heard?;
+                        if (place - at).xz().length() <= hunting::SEARCHED {
+                            fight.heard = None;
+                            return None;
+                        }
+                        Some(Doing::Seek(place))
+                    })
+                }
                 Behaviour::Hunt => {
                     let sight = properties.attack.as_ref().map_or(0.0, |a| a.sight);
                     let prey = |player: Entity| {
@@ -588,10 +647,39 @@ pub(super) fn think(
                             && (feet - at).xz().length() <= hunting::AMBUSH
                             && hunting::sees(&world, at, feet + Vec3::Y * hunting::CHEST)
                     });
-                    Some(match under {
+                    let throws = properties
+                        .attack
+                        .as_ref()
+                        .is_some_and(|a| a.throws.is_some());
+                    match under {
                         Some((player, ..)) => {
                             stance.clinging = false;
                             fight.sees = true;
+                            Some(Doing::Hunt(player))
+                        }
+                        // one that throws hunts from where it hangs, and clings if it's no one
+                        // to throw at (below)
+                        None if throws => None,
+                        None => Some(Doing::Cling),
+                    }
+                }
+                Behaviour::Ambush if stance.buried => {
+                    let near = players.iter().find(|(_, body, _, vitals, mode)| {
+                        let feet = body.translation;
+                        looking
+                            && hunting::is_prey(vitals, mode)
+                            && feet.distance(at) <= hunting::RISE_NEAR
+                            && hunting::sees(
+                                &world,
+                                hunting::eye(kind, at),
+                                feet + Vec3::Y * hunting::CHEST,
+                            )
+                    });
+                    Some(match near {
+                        Some((player, ..)) => {
+                            stance.buried = false;
+                            fight.sees = true;
+                            fight.risen_at = now + hunting::RISING;
                             Doing::Hunt(player)
                         }
                         None => Doing::Cling,
@@ -616,6 +704,8 @@ pub(super) fn think(
                 },
                 Behaviour::Routine => townsfolk
                     .map(|townsfolk| Doing::Keep(place_now(townsfolk.0.villager.seed, &clock))),
+                // still hanging, with nothing else to do
+                Behaviour::Wander if stance.clinging => Some(Doing::Cling),
                 Behaviour::Wander => Some(match mind.doing {
                     Doing::Wander if route.is_going() => Doing::Wander,
                     Doing::Idle if now < mind.until => Doing::Idle,
@@ -686,6 +776,11 @@ pub(super) fn think(
                     route.chase(&world, from, goal, 1, walker, now, ready);
                     continue;
                 };
+                // throwing from where it hangs
+                if stance.clinging {
+                    route.stop();
+                    continue;
+                }
                 // between too near and too far to throw, and where it can see them
                 let across = (target.translation - at).xz();
                 if across.length() < throw.keep.start {
@@ -699,6 +794,9 @@ pub(super) fn think(
                 } else {
                     route.stop();
                 }
+            }
+            Doing::Seek(place) => {
+                route.chase(&world, from, cell_of(place), 1, walker, now, ready);
             }
             Doing::Cling | Doing::Heed(_) => {}
             Doing::Keep(place) => {
@@ -755,14 +853,16 @@ type Moving<'a> = (
     &'a mut Health,
     &'a Life,
     &'a Stance,
+    &'a Fight,
 );
 
 /// Walks each creature along its way under gravity, as players walk: towards the middle of
 /// its next cell, jumping up a block where the way climbs or it's walked into one, and kept
 /// afloat in water, or fluttering down if it flutters, then hurts it for any fall it's landed
-/// from, unless it flutters or clings. A monster runs once it's near its prey, and goes
-/// straight at them once its way's brought it close. Creatures whose ground isn't loaded, or
-/// that hang from a ceiling, wait where they are.
+/// from, unless it flutters or clings. A monster runs once it's near its prey, or to where it
+/// heard something, and goes straight at them once its way's brought it close. Creatures whose
+/// ground isn't loaded, or that hang from a ceiling or lie buried, wait where they are, and one
+/// rising from where it lay stands while it does.
 pub(super) fn move_creatures(
     time: Res<Time>,
     world: Res<World>,
@@ -778,11 +878,22 @@ pub(super) fn move_creatures(
             .is_chunk_generated(ChunkCoordinate::containing(at))
             .then(|| world.get(at))
     };
-    for (entity, creature, mut transform, mut body, mut route, mind, mut health, life, stance) in
-        &mut creatures
+    for (
+        entity,
+        creature,
+        mut transform,
+        mut body,
+        mut route,
+        mind,
+        mut health,
+        life,
+        stance,
+        fight,
+    ) in &mut creatures
     {
         let mut at = transform.translation;
-        if stance.clinging || block(at.floor().as_i64vec3() - I64Vec3::Y).is_none() {
+        let still = stance.clinging || stance.buried;
+        if still || block(at.floor().as_i64vec3() - I64Vec3::Y).is_none() {
             continue;
         }
         let properties = creature.0.properties();
@@ -791,7 +902,7 @@ pub(super) fn move_creatures(
             _ => None,
         };
         let speed = match (mind.doing, prey) {
-            (Doing::Flee { .. }, _) => properties.run_speed,
+            (Doing::Flee { .. } | Doing::Seek(_), _) => properties.run_speed,
             (_, Some(prey)) if prey.distance(at) <= hunting::RUNS_FROM => properties.run_speed,
             _ => properties.walk_speed,
         };
@@ -835,8 +946,8 @@ pub(super) fn move_creatures(
                 wanted = Vec3::new(direction.x, 0.0, direction.y);
             }
         }
-        // standing its ground as it winds up a blow, so the blow's seen coming
-        if stance.winding {
+        // standing its ground as it winds up a blow, so the blow's seen coming, or rises
+        if stance.winding || now < fight.risen_at {
             wanted = Vec3::ZERO;
         }
 
@@ -951,6 +1062,7 @@ type Hit<'a> = (
     &'a mut Route,
     &'a Life,
     &'a mut Stance,
+    &'a mut Fight,
 );
 
 type Hitting<'a> = (
@@ -999,9 +1111,12 @@ pub(super) fn receive_hits(
             mut route,
             life,
             mut stance,
+            mut fight,
         ) = hit;
         let reach = creature.0.body(!life.is_grown());
-        if vitals.is_dead()
+        // one lying buried is out of reach under the ground
+        if stance.buried
+            || vitals.is_dead()
             || !in_reach(player, body.translation, reach)
             || now < health.immune_until
             || now < combat.ready_at
@@ -1029,8 +1144,16 @@ pub(super) fn receive_hits(
         if motion.momentum.grounded {
             motion.momentum.velocity.y = KNOCKBACK_LIFT;
         }
+        // a monster turns on whoever hit it, which a blind one hears, and anything else runs
         let behaviours = creature.0.properties().behaviours;
-        if behaviours.contains(&Behaviour::Flee) {
+        if behaviours.contains(&Behaviour::Hunt) {
+            stance.clinging = false;
+            fight.heard = Some(player.translation);
+            if mind.doing != Doing::Hunt(hitter) {
+                route.stop();
+                mind.doing = Doing::Hunt(hitter);
+            }
+        } else if behaviours.contains(&Behaviour::Flee) {
             route.stop();
             *mind = Mind {
                 doing: Doing::Flee {
@@ -1038,12 +1161,6 @@ pub(super) fn receive_hits(
                 },
                 until: now + FLEE_SECONDS,
             };
-        } else if behaviours.contains(&Behaviour::Hunt) {
-            stance.clinging = false;
-            if mind.doing != Doing::Hunt(hitter) {
-                route.stop();
-                mind.doing = Doing::Hunt(hitter);
-            }
         }
         if health.points == 0 {
             die(

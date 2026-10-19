@@ -47,12 +47,14 @@ pub struct Asleep {
 }
 
 /// The last blow a player took (M3.3), for their game to feel: where it came from, how it
-/// knocks them, in blocks a second, and how many they've taken, which goes up with each.
+/// knocks them, in blocks a second, how many they've taken, which goes up with each, and how
+/// many seconds it slows them for (M4.10), as movement is their game's.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Bruise {
     pub from: Vec3,
     pub push: Vec3,
     pub count: u32,
+    pub slows: f32,
 }
 
 /// The bed a player last used, which they respawn on, or none for the world's spawn.

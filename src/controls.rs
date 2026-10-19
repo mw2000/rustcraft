@@ -58,7 +58,7 @@ actions! {
     Left, "left", "Step left", Key(KeyCode::KeyA);
     Right, "right", "Step right", Key(KeyCode::KeyD);
     Jump, "jump", "Jump, or fly up", Key(KeyCode::Space);
-    Descend, "descend", "Fly down", Key(KeyCode::ControlLeft);
+    Descend, "descend", "Fly down, or sneak", Key(KeyCode::ControlLeft);
     Sprint, "sprint", "Sprint", Key(KeyCode::ShiftLeft);
     Fly, "fly", "Fly or walk (creative)", Key(KeyCode::KeyF);
     Break, "break", "Break a block", Mouse(MouseButton::Left);

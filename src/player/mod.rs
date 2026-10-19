@@ -33,6 +33,8 @@ pub struct Player {
     momentum: physics::Momentum,
     // the push of the last blow, across, dying away
     knockback: Vec3,
+    // how many seconds more a blow's slowed it for (M4.10)
+    slowed: f32,
 }
 
 /// A player as `state` has them, to spawn: on the server, and on a client for its own player.
@@ -58,6 +60,18 @@ impl Player {
     pub fn stop(&mut self) {
         self.momentum.velocity = Vec3::ZERO;
         self.knockback = Vec3::ZERO;
+        self.slowed = 0.0;
+    }
+
+    /// Slows its walking to half its pace for `seconds`, or longer if it's slowed for longer
+    /// already, as a dunewight's blow does.
+    pub fn slow(&mut self, seconds: f32) {
+        self.slowed = self.slowed.max(seconds);
+    }
+
+    /// Whether it's walking slowed.
+    pub fn is_slowed(&self) -> bool {
+        self.slowed > 0.0
     }
 
     /// Knocks it back by a blow's `push`, in blocks a second: across, dying away as it walks,

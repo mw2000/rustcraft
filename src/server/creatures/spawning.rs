@@ -1,5 +1,6 @@
 //! Creatures appearing by themselves near players, where and when their kind's row says, in
-//! its biomes and the ground the server holds round them: out of a player's sight where it's
+//! its biomes and band of heights (M4.10), and the ground the server holds round them: out of a
+//! player's sight where it's
 //! cheap to tell, never too near, and only while there are fewer of the kind round them than its
 //! cap. Monsters come only in the dark, out in the night or in the caves, never where a torch or
 //! anything else gives light, and from the spawners of dungeons while someone's close, which are
@@ -20,7 +21,7 @@ use crate::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use crate::chunks::generate::structures::SPAWNER;
 use crate::clock::TimeOfDay;
 use crate::creatures::path::Walker;
-use crate::creatures::{Creature, CreatureKind, Daytime, SavedCreature, Spawns, Stance};
+use crate::creatures::{Creature, CreatureKind, Daytime, SavedCreature, Sky, Spawns, Stance};
 use crate::player::{Player, PlayerLook};
 use crate::protocol::BlockChanged;
 use crate::server::drops::Chance;
@@ -154,9 +155,10 @@ pub(in crate::server) fn spawn(
             for at in placed {
                 let yaw = rng.random_range(0.0..TAU);
                 let mut spawned = commands.spawn(creature(SavedCreature::grown(kind, at), yaw));
-                if spawns.ceiling {
+                if spawns.ceiling || spawns.buried {
                     spawned.insert(Stance {
-                        clinging: true,
+                        clinging: spawns.ceiling,
+                        buried: spawns.buried,
                         ..default()
                     });
                 }
@@ -304,8 +306,9 @@ fn has_room(world: &World, walker: Walker, feet: I64Vec3, up: i64) -> bool {
 /// Where a creature of `walker`'s size and `height` can appear in the column at `column`,
 /// within `SURFACE_RANGE` of `y`, as `spawns` allows: on one of its blocks, or hanging under
 /// one, with room for its body. One that must be under the sky only on the highest, and the
-/// rest in any of the places, chosen at random, in the dark if it must be (by `night` or out
-/// of the sky, and with no block giving light near it), and below its height. At its feet.
+/// rest in any of the places, chosen at random, under ground if it must be, in the dark if it
+/// must be (by `night` or out of the sky, and with no block giving light near it), and in its
+/// band of heights. At its feet.
 #[allow(clippy::too_many_arguments)]
 fn place(
     world: &World,
@@ -341,15 +344,20 @@ fn place(
                 places.push((feet, feet.as_vec3()));
             }
             // the highest solid block's the only one under the sky
-            if spawns.under_sky {
+            if spawns.sky == Sky::Open {
                 break;
             }
         }
     }
     let &(cell, feet) = places.choose(rng)?;
     let dark = || world.block_light(cell) == 0 && (night || world.is_under_ground(cell));
-    let suits = (!spawns.under_sky || !world.is_under_ground(cell))
-        && spawns.below.is_none_or(|below| cell.y < below)
+    let sky_suits = match spawns.sky {
+        Sky::Open => !world.is_under_ground(cell),
+        Sky::Under => world.is_under_ground(cell),
+        Sky::Either => true,
+    };
+    let suits = sky_suits
+        && spawns.heights.contains(&cell.y)
         && (!spawns.dark || dark())
         && world.is_chunk_generated(chunk_of(cell.as_vec3()));
     suits.then_some(feet + Vec3::new(0.5, 0.0, 0.5))

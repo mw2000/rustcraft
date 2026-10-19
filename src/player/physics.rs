@@ -12,6 +12,9 @@ const FLY_SPRINT_MULTIPLIER: f32 = 4.0;
 // Walking, blocks a second, and how much faster sprinting.
 const WALK_SPEED: f32 = 4.3;
 const WALK_SPRINT_MULTIPLIER: f32 = 1.3;
+// Sneaking, slow enough that a listener can't hear it (M4.10), and walking slowed by a blow.
+const SNEAK_MULTIPLIER: f32 = 0.3;
+const SLOWED_MULTIPLIER: f32 = 0.5;
 // Blocks a second squared, and the speed falling tops out at.
 pub const GRAVITY: f32 = 32.0;
 const TERMINAL_SPEED: f32 = 60.0;
@@ -46,6 +49,8 @@ pub struct MoveInput {
     /// Jumping, or swimming up, while walking.
     pub jump: bool,
     pub sprint: bool,
+    /// Creeping along, while walking, as the fly-down key does then.
+    pub sneak: bool,
 }
 
 /// Moves a player with its feet at `position` through `dt` seconds of `input`, facing `look`,
@@ -99,9 +104,16 @@ fn walk_player(
     dt: f32,
     block: impl Fn(I64Vec3) -> Option<Block>,
 ) -> Vec3 {
+    // sneaking is slow and quiet, and neither it nor being slowed lets a player sprint
     let mut speed = WALK_SPEED;
-    if input.sprint {
+    if input.sneak {
+        speed *= SNEAK_MULTIPLIER;
+    } else if input.sprint && player.slowed <= 0.0 {
         speed *= WALK_SPRINT_MULTIPLIER;
+    }
+    if player.slowed > 0.0 {
+        speed *= SLOWED_MULTIPLIER;
+        player.slowed = (player.slowed - dt).max(0.0);
     }
     // where the body faces, not the eyes, so looking down doesn't slow it
     let wanted = Quat::from_rotation_y(look.yaw) * input.across.normalize_or_zero() * speed;
@@ -249,6 +261,7 @@ mod tests {
         rise: 0.0,
         jump: false,
         sprint: false,
+        sneak: false,
     };
 
     // grass from y 0 down, a wall at x 3, and nothing generated past z 100
@@ -328,6 +341,34 @@ mod tests {
         );
         assert_eq!(0.0, landed.y);
         assert!(player.momentum.grounded);
+    }
+
+    #[test]
+    fn test_sneaking_creeps_and_a_slowing_blow_halves_the_pace_for_a_while() {
+        let start = Vec3::new(0.5, 0.0, 0.5);
+        let sneak = MoveInput {
+            sneak: true,
+            sprint: true,
+            ..AHEAD
+        };
+        let end = run(start, &mut walker(), PlayerLook::default(), sneak, 1.0);
+        assert!((end.z - start.z + WALK_SPEED * SNEAK_MULTIPLIER).abs() < 1e-3);
+        // slowed for 2 seconds, sprinting doesn't help, then it wears off
+        let mut player = walker();
+        player.slow(2.0);
+        player.slow(1.0);
+        let sprint = MoveInput {
+            sprint: true,
+            ..AHEAD
+        };
+        let end = run(start, &mut player, PlayerLook::default(), sprint, 2.0);
+        assert!((end.z - start.z + WALK_SPEED * SLOWED_MULTIPLIER * 2.0).abs() < 1e-2);
+        // a step more, as the frames' lengths needn't add up to it exactly
+        let end = run(end, &mut player, PlayerLook::default(), sprint, 0.1);
+        assert!(!player.is_slowed());
+        let after = run(end, &mut player, PlayerLook::default(), sprint, 1.0);
+        let pace = WALK_SPEED * WALK_SPRINT_MULTIPLIER;
+        assert!((after.z - end.z + pace).abs() < 1e-3, "{after}");
     }
 
     #[test]
