@@ -46,6 +46,7 @@ It's an open-ended hobby project, and it should be easy for anyone to download a
 
 ### Non-goals (decided)
 
+- Other dimensions. One world, made deep and varied enough to do that job (Phase 4).
 - A 1:1 Minecraft clone. Borrow what makes it fun (the loop, the feel, structures to discover), and
   make our own choices for the rest: our own blocks, recipes, progression and world.
 - Modding APIs, competitive anti-cheat, or massive servers. Design for a handful of friends.
@@ -1163,7 +1164,8 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 ### 5.3 Crafting and progression
 
 - Recipes are data (INV-6), and a recipe is a list of ingredients and an output, made at a
-  station: by hand, at a crafting table, and for smelting at a furnace (D-4).
+  station: by hand, at a crafting table, and for smelting at a furnace (D-4). M4.2 turns them
+  into patterns on a grid with a recipe book (D-11).
 - Tool tiers set what can be mined: a block mined without its tier drops nothing (§5.1, built in
   M1.2 to tier 4). Coal needs only a wooden pickaxe, rather than stone as first planned, as it's
   for torches, wanted on the first night. Proposed tiers, to rename and tune freely:
@@ -2751,6 +2753,82 @@ Done when: **the world feels inhabited, and night is dangerous.**
 - ☑ **M3.4 Villages and villagers.** Villages assembled from pieces in three styles (§5.6), villagers keeping their day, and trading (§5.8).
 - ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
 
+### Phase 4: adventure
+
+Done when: **you can cross a continent by boat and horse, go down through flooded caverns past
+falls of lava, forge steel and run a refinery, and a town's bounty sends you to a monument you
+can see from where you stand.**
+
+Planned 2026-10-19 from the first notes on playing: the screens felt clumsy beside Minecraft's,
+caves read as random holes, and there was too little to travel for or on. Phase 4 starts once
+M3.5 (U-84, U-80) is in. One world, no other dimensions: the depths, the regions and the
+monuments do that job here.
+
+- ☐ **M4.1 Screens and slots.** The inventory, chest, furnace, crafting and trading screens
+  redone in one visual language (bevelled slots, a furnace with its flame and arrow filling, a
+  trader's offers listed with their costs), and slots handled as Minecraft players expect: a
+  left drag shares the cursor's stack evenly over the slots it crosses and a right drag drops one
+  in each, a double click gathers every stack of an item onto the cursor, shift-click moves
+  between a container and the inventory, 1–9 over a slot swaps it with that hotbar slot, Q drops,
+  and tooltips give an item's name, durability and food. With it, an audit of the held item by
+  screenshot, every kind of item in first and third person, fixing how tools, blocks and food sit
+  in the hand (§5.2, M-A4).
+- ☐ **M4.2 Shaped crafting and the recipe book** (D-11). A 2×2 grid in the inventory and 3×3 at a
+  crafting table; recipes become patterns (shaped, or shapeless where order doesn't matter, like
+  dyes), and the recipe book beside the grid lists what can be made, dimming what can't, and
+  lays a recipe's ingredients into the grid when it's clicked, so no pattern needs learning.
+  Every recipe in §5.3 is redrawn as a pattern; smelting stays a furnace's input and fuel.
+- ☐ **M4.3 Flowing fluids.** Water and lava as source blocks and flowing levels, spreading on
+  server ticks and synced as edits (INV-4), lava slower and shorter; buckets to carry them. Lava
+  meeting water makes obsidian (from a lava source), cobblestone (from flowing lava) or stone
+  (lava flowing onto water). Volcanoes' magma becomes lava that runs down their flanks (M2.7),
+  and caves no longer need to keep away from the sea (§5.4). Generation still places still
+  water; fluids move only once something disturbs them, so the world isn't simulated at load.
+- ☐ **M4.4 Caves.** Underground rebuilt after Minecraft's Caves & Cliffs: cheese caverns, huge
+  and pillared; long winding spaghetti tunnels and thin noodle ones; aquifers, flooded caves and
+  underground lakes, each with its own water level; lava lakes near the bottom of the world;
+  ravines; and cave biomes, lush caves, dripstone caves and a deep, dark layer with the best ore
+  and the worst monsters. Big mouths and ravines drawn at mid-range LODs (P1, §5.4). Changes the
+  golden checksum (§8).
+- ☐ **M4.5 Cliffs and overhangs** (D-14, open). The surface from 3D density near the ground
+  rather than a height alone, for cliffs, overhangs and arches; LODs have to follow (INV-5).
+  The largest single change in the phase, so it goes after the caves, which don't need it.
+- ☐ **M4.6 Ores and alloys.** More to mine than the standard ladder, ideas from mods but our own
+  blocks (INV-8): tin, zinc and nickel; silver (extra harm to the undead); quartz, amethyst
+  geodes, sulphur and saltpetre (with coal, gunpowder: bombs and mining charges); and deep,
+  regional metals for the top tier, such as cobalt in the deep layer, mithril under great peaks
+  and adamant near volcanoes (P3). A forge, hotter than a furnace, makes alloys: bronze (copper
+  and tin) and brass (copper and zinc) between copper and iron, and steel (iron and coal) before
+  bright steel. The tier table in §5.3 is reworked to fit; bigger ore veins of copper and iron
+  deep down.
+- ☐ **M4.7 Oil and machines** (D-12). Oil as a dark, slow fluid in pockets deep under deserts and
+  seas, found by its seeps at the surface. A light tech tier on top of it, a handful of machines
+  rather than a logistics game: a pump to draw oil, a generator burning fuel for power, a
+  refinery making fuel, tar (for roads) and plastic, a powered furnace and a crusher that
+  doubles ore. How power travels (cables, shafts, or simply machines side by side) is settled in
+  the milestone, keeping it simple.
+- ☐ **M4.8 Boats.** Made from planks, placed on water, ridden much faster than swimming, carrying
+  one or two players; another player in yours rides along.
+- ☐ **M4.9 Horses and roads.** Wild horses on plains and savanna, tamed by riding till they stop
+  throwing you, ridden with a saddle (loot or a trader's), each with its own speed and jump;
+  donkeys carry a chest. Roads and bridges generated between villages and towns, so riding has
+  somewhere to go. Needs the full-detail holes at the edge in fast flight closed first (U-82's
+  follow-up), as a horse loads the world faster than walking.
+- ☐ **M4.10 Monsters by place.** Monsters by biome and depth (mummies in deserts, wraiths on
+  glaciers, things in the deep layer worse the further down), and mini-bosses guarding
+  monuments, each with a drop of its own (§5.8).
+- ☐ **M4.11 Towns and bounties.** Towns bigger than villages: walls, a market, a smith, a forge,
+  and a bounty board whose jobs (clear the ruin to the north, bring ten jade) send you
+  exploring, rewarded in coin or goods (§5.6, §5.8).
+- ☐ **M4.12 Monuments.** Big built places worth the journey, tall enough to see from far away
+  (P1): sunken temples, ruined castles, great towers, an ancient deep city in the deep layer,
+  and perhaps sky islands; each with its guardian (M4.10) and loot (§5.6).
+- ☐ **M4.13 Finding your way.** A compass, waypoints and named places on the map, and banners
+  that mark a base on it (§5.7, M2.9).
+- ☐ **Heroes (later, D-13 open).** NPC adventurers you meet in the world, perhaps companions that
+  travel and fight beside you, maybe driven by a language model. To be designed once the rest
+  of the phase shows what they should do.
+
 ### Upstream ports
 
 Changes merged upstream (rornic/rustcraft) since the fork, brought in one PR at a time, in this
@@ -3096,9 +3174,20 @@ they're found.
 
 ### Open
 
-None right now.
+- **D-13 Heroes.** NPC adventurers, perhaps companions driven by a language model; what they
+  do is to be decided once the rest of Phase 4 is in. Raised 2026-10-19.
+- **D-14 Cliffs and overhangs** (M4.5): whether to move the surface from a height to 3D density
+  near the ground. Worth it for the look, but it touches generation, LODs and the checksum
+  together. Leaning yes; confirm before starting M4.5. Raised 2026-10-19.
 
 ### Decided
+
+- **D-11 Crafting is a shaped grid with a recipe book** (M4.2), superseding D-4: a 2×2 grid by
+  hand and 3×3 at a table, recipes as patterns, and a recipe book that lays a recipe into the
+  grid for you, so the feel is Minecraft's and nothing needs learning. Decided 2026-10-19 after
+  the first play: the list felt unlike the game players know.
+- **D-12 Oil feeds a light tech tier** (M4.7): a handful of machines (pump, generator,
+  refinery, powered furnace, crusher), not a logistics game. Decided 2026-10-19.
 
 - **D-10 Other packs are inspiration, never material.** Minecraft resource packs the project
   admires (Patrix 32x, Fresh Animations, Enhanced Audio) are All Rights Reserved or forbid
@@ -3113,7 +3202,7 @@ None right now.
   push: a platform that ever disagrees fails there, and the join handshake refuses the mismatch
   rather than letting players see different worlds. Decided 2026-10-18.
 
-- **D-4 Crafting is ingredient lists at stations** (§5.3), not Minecraft's shaped grid: a recipe
+- **D-4 (superseded by D-11) Crafting is ingredient lists at stations** (§5.3), not Minecraft's shaped grid: a recipe
   is a list of items and counts making an output, by hand, at a crafting table, or smelted at a
   furnace (M1.6). It's simpler to read and to use, as a recipe shows everything it takes and
   needs no pattern learnt, and it's less of a copy. Decided 2026-10-18.
