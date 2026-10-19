@@ -119,7 +119,7 @@ impl Preset {
         let (render_distance, full_detail_distance, shadows, clouds) = match self {
             Preset::Low => (256, 8, false, false),
             Preset::Medium => (512, 12, true, true),
-            Preset::High => (1024, 16, true, true),
+            Preset::High => (1024, 24, true, true),
         };
         Video {
             render_distance,
@@ -491,6 +491,35 @@ mod tests {
                 ..low
             })
         );
+    }
+
+    #[test]
+    fn test_the_shipped_settings_are_the_high_preset_with_the_levels_where_they_were() {
+        let file = std::fs::read_to_string("assets/settings.toml").unwrap();
+        let shipped: Settings = toml::from_str(&file).unwrap();
+        let defaults = Preferences::defaults(&shipped.renderer);
+        assert_eq!(Some(Preset::High), Preset::of(defaults.video));
+        let layout = |preset: Preset| {
+            let video = preset.apply(defaults.video);
+            Preferences {
+                video,
+                ..defaults.clone()
+            }
+            .renderer(shipped.renderer)
+            .lod_layout()
+        };
+        // High draws full detail further, with its LOD levels as they were at 16
+        let high = layout(Preset::High);
+        assert_eq!(24.0, high.reach(0));
+        assert_eq!([32.0, 64.0, 128.0], [1, 2, 3].map(|l| high.reach(l)));
+        // and Low and Medium scale theirs from their own full detail, as they always have
+        for (preset, full_detail) in [(Preset::Low, 8.0), (Preset::Medium, 12.0)] {
+            let layout = layout(preset);
+            assert_eq!(
+                [full_detail, full_detail * 2.0],
+                [0, 1].map(|l| layout.reach(l))
+            );
+        }
     }
 
     #[test]

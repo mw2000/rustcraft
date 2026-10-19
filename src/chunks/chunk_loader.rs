@@ -645,16 +645,22 @@ mod tests {
 
     #[test]
     fn test_full_detail_chunks_are_within_full_detail_reach() {
-        let layout = LodLayout::new(32, 128, 2);
-        let reach = layout.full_detail_reach();
-        let anchor = ChunkCoordinate(I64Vec3::new(3, -2, 5));
-        let r = reach as i64 + 4;
-        for x in -r..=r {
-            for y in -r..=r {
-                for z in -r..=r {
-                    let c = ChunkCoordinate(anchor.0 + I64Vec3::new(x, y, z));
-                    if layout.full_detail(c, anchor) {
-                        assert!(chunk_distance(c, anchor) <= reach as f32);
+        // and with full detail past where the levels scale from, as the shipped settings have
+        // it, which the server's residency and the edits sent follow (`EditReach`)
+        for layout in [
+            LodLayout::new(32, 128, 2),
+            LodLayout::new(16, 128, 2).with_full_detail_distance(24),
+        ] {
+            let reach = layout.full_detail_reach();
+            let anchor = ChunkCoordinate(I64Vec3::new(3, -2, 5));
+            let r = reach as i64 + 4;
+            for x in -r..=r {
+                for y in -r..=r {
+                    for z in -r..=r {
+                        let c = ChunkCoordinate(anchor.0 + I64Vec3::new(x, y, z));
+                        if layout.full_detail(c, anchor) {
+                            assert!(chunk_distance(c, anchor) <= reach as f32);
+                        }
                     }
                 }
             }

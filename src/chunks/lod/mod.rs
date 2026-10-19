@@ -4,7 +4,7 @@ mod layout;
 
 pub use edits::{CellEdits, LodEdits, NodeEdits, EDITED_LEVELS};
 pub use key::LodKey;
-pub use layout::LodLayout;
+pub use layout::{LodLayout, LEVEL_ONE_MIN_RING};
 
 // Drawing them, which a dedicated server doesn't, though it generates chunks by `LodKey`.
 #[cfg(feature = "client")]

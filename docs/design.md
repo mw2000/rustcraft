@@ -600,7 +600,8 @@ The world's state beyond the seed (INV-1).
   - **Areas:** a welcomed client's entity gets a `SyncedArea`: its player's chunk, its reach,
     the chunks whose edits it's been sent, and those in reach it's still to be, nearest first.
     The client tells its reach as it's welcomed, `EditReach(full_detail_reach)`, 36 chunks with
-    the default settings (0, its own chunk, until then). As its player crosses into another
+    `RendererSettings::default`, 28 with the shipped full detail of 24 (U-82; 20 at the old 16),
+    as the server holds chunks round the player no further (0, its own chunk, until then). As its player crosses into another
     chunk, `follow_players` forgets sent chunks more than 4 chunks beyond its reach (so
     walking along the edge doesn't send the same ones again; keeping every one would keep
     sending far-off clients changes for chunks they no longer draw) and lines up the edited
@@ -1316,7 +1317,9 @@ Switched with `/gamemode`, which in multiplayer needs operator permission.
 - A chunk sealed off from the sky, with every column of it and the chunks beside it roofed, is
   only seen from in the caves, so it's meshed only near the camera: within 9 chunks from under
   ground, further than sight reaches along a cave, and 3 from the open. On the surface the caves
-  under the rest of the full-detail area cost nothing to draw.
+  under the rest of the full-detail area cost nothing to draw. The radii are their own, not the
+  full-detail distance's, so drawing full detail out to 24 chunks (U-82) meshes no more of them:
+  the wider area's caves cost only their generation.
 - Ores (`src/chunks/generate/ores.rs`) turn stone to coal, copper and iron in veins: lumpy
   clumps grown a block at a time from starts hashed from the seed on a grid of chunk-sized cells,
   each staying within 2 blocks of its start, so a chunk takes them from its own cell and the 26
@@ -1999,8 +2002,9 @@ The fallen tower is left for a later milestone, built from structure templates.
 
 Built (M2.9): M opens the map (`src/map/`), a `GameState` like the inventory's, which frees the
 cursor and stops the player but not the clock; M or Escape closes it. The client reveals 64-block
-tiles whose middles are within 256 blocks of the local player, the full detail distance at the
-default settings, so the map records where you've been rather than all you can see from there.
+tiles whose middles are within 256 blocks of the local player (`REVEAL_RADIUS`, the full detail
+distance before U-82 drew it to 384), so the map records where you've been rather than all you
+can see from there.
 The explored tiles are kept by the client, not the server: the map shows nothing the seed
 doesn't, which every client has (§4.4), so there's nothing for the server to guard (INV-4), and
 it needs no protocol or save format change. They're written as a sorted postcard list to
@@ -2586,8 +2590,14 @@ both sides built the same thing they're merged into one system keeping the best 
 - ☑ **U-78 Flora** (Aymen Qader): swaying grasses, ferns and flowers, as breakable plant blocks.
 - ☑ **U-79 Critters** (Aymen Qader): butterflies, fireflies lighting the ground, starlings, geese,
   as client-side ambient life (§5.8, §5.5).
-- ☐ **U-82 Perf** (Rory Nickolls): leaf faces meshed apart and drawn only near the camera; full
-  detail out to 24 chunks.
+- ☑ **U-82 Perf** (Rory Nickolls, `cd2377a`, `364764f`): leaf faces meshed apart and drawn only
+  near the camera, though they still cast every shadow they did (§5.7); full detail out to 24
+  chunks with the LOD levels where they were, the High preset's and the shipped default (M-U1).
+  In `lod_sim` on seed 7 at 80 blocks a second, the start area loads as before, a few full-detail
+  and 1.5× holes come and go at the edge in flight where there were almost none, the sim flies
+  about a quarter fewer frames (two runs each, 1,691 and 884 blocks against 1,397 and 1,972, on
+  a busy 16-core machine), takes 15% more CPU and 170 MB more memory (1.37 GB at peak against
+  1.2): generating 2.25 times the full-detail chunks, as upstream found.
 - ☐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
   shadows blurred so foliage stops flickering (`f785896`); level-2 trees drawn as leaf voxels
   (`9a94413`); the ground cross-fading between LOD levels (`84b6290`) (Rory Nickolls).
@@ -2722,7 +2732,12 @@ both sides built the same thing they're merged into one system keeping the best 
       tilt, the crosshair (cross, dot or none, new) and key bindings; render and full-detail
       distance redraw the terrain as Settings closes (`redraw_for_settings`), or wait for the
       next world on the title screen. There's no view bobbing to turn off. Presets set the
-      distances, shadows and clouds. The player's name is `Preferences::name`, or `RC_NAME` and
+      distances, shadows and clouds: Low 256 chunks out with 8 at full detail, Medium 512 and
+      12, High 1024 and 24 (16 before U-82), which is what `assets/settings.toml` ships. The
+      LOD levels scale from `lod_base_distance`, 16, or from full detail where that's nearer,
+      so Low and Medium draw their levels as they always have and High draws them where 16
+      did, only level 1's ring narrowing (`RendererSettings::lod_layout`). A player who saved
+      16 keeps it, shown as no preset. The player's name is `Preferences::name`, or `RC_NAME` and
       the login name when it's empty.
     - **Keys** (`src/controls.rs`): every action is a row of `actions!` with its name, label and
       default; `Bindings` holds a key or mouse button for each, saved by name, and `Controls`
@@ -2820,7 +2835,8 @@ For agents and contributors:
 - **Sounds:** new or changed sounds with the `sounds` skill.
 - **Upstream ports:** work from rornic/rustcraft is ported onto this fork's code, merged with what
   we have rather than beside it, its author kept on the commit: so far #77's ambience (Aymen
-  Qader), §5.10, #78's flora (Aymen Qader), §5.5a, and #79's critters (Aymen Qader): ambient
-  life and firefly light, §5.8 and §5.5.
+  Qader), §5.10, #78's flora (Aymen Qader), §5.5a, #79's critters (Aymen Qader): ambient
+  life and firefly light, §5.8 and §5.5, and #82's perf (Rory Nickolls): leaves' inner faces
+  drawn near only, §5.7, and full detail out to 24 chunks, M-U1.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.
