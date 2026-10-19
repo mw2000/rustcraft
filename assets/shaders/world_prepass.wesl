@@ -6,9 +6,9 @@ import bevy_pbr::{
     render::{mesh_functions, mesh_view_bindings::view, view_transformations::position_world_to_clip},
 };
 import bevy_render::globals::Globals;
-import super::block_texture::{block_alpha, material_fade};
+import super::block_texture::{block_alpha, block_alpha_at, material_fade};
 import super::dither::dither_threshold;
-import super::foliage::{is_cutout, is_glass, is_leaf, is_plant, leaf_holes_filled, swayed};
+import super::foliage::{has_holes, is_leaf, is_plant, leaf_holes_filled, swayed};
 import super::curvature::{curved, curved_last, eye};
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
@@ -58,6 +58,28 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
     return out;
 }
 
+// How far out, in blocks, the sun's shadow maps' texels start to outgrow a leaf texel: past it
+// the holes average away `SHADOW_BLUR_RATE` mips more for each doubling of distance, up to a
+// texel a tile. The rate is under one so the dappling gives way gradually. From upstream's fix
+// (f785896), by Rory Nickolls.
+const SHADOW_BLUR_START: f32 = 12.0;
+const SHADOW_BLUR_RATE: f32 = 0.75;
+const SHADOW_BLUR_LEVELS: f32 = 4.0;
+
+// The alpha a face casts with: cut-out holes finer than a shadow map's texels would flicker as
+// the sun moves, so leaves' far shadows go from dappled to solid as their holes blur. Plants,
+// glass and shapes keep their full detail: a plant's sprite is mostly air, and blurred it would
+// cast nothing, or a shape's bars and frames would fill in solid.
+fn shadow_alpha(in: prepass_io::VertexOutput) -> f32 {
+    var level = 0.0;
+@if(VIEW_PROJECTION_ORTHOGRAPHIC) {
+    if is_leaf(in.color.a) {
+        level = clamp(SHADOW_BLUR_RATE * log2(distance(in.world_position.xyz, eye()) / SHADOW_BLUR_START), 0.0, SHADOW_BLUR_LEVELS);
+    }
+}
+    return block_alpha_at(in.uv, in.color.a, level);
+}
+
 // Only leaves, plants, glass and shapes have holes, so only they pay for a texture sample.
 // Untextured LOD cells draw leaves solid, so cast solid shadows too.
 fn cut_holes(in: prepass_io::VertexOutput) {
@@ -84,8 +106,7 @@ fn cut_holes(in: prepass_io::VertexOutput) {
         return;
     }
 }
-    let holed = is_leaf(in.color.a) || is_glass(in.color.a) || is_plant(draws) || is_cutout(draws);
-    if holed && block_alpha(in.uv, in.color.a) < 0.5 {
+    if has_holes(in.color.a, draws) && shadow_alpha(in) < 0.5 {
         discard;
     }
 }

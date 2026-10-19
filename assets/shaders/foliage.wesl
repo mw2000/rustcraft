@@ -45,6 +45,13 @@ fn is_glass(vertex_alpha: f32) -> bool {
     return abs(vertex_alpha - f32(constants::GLASS_CELL)) < 0.5;
 }
 
+// Whether a block mesh's face has holes cut in it, from its atlas cell and how it draws: leaves,
+// glass, plants and shapes. Only these pay for a texture sample in the shadow pass, and the main
+// pass cuts them at full detail as it does, see `world.wesl`.
+fn has_holes(vertex_alpha: f32, draws: f32) -> bool {
+    return is_leaf(vertex_alpha) || is_glass(vertex_alpha) || is_plant(draws) || is_cutout(draws);
+}
+
 // Where a block mesh's vertex at `world` sways to by `time`, from its atlas cell, how its face
 // draws and its uv's v, which runs down a plant from its tip: leaves all over, plants bending
 // from their roots, which stay put, most at their tips. It depends on nothing but where the
