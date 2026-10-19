@@ -66,6 +66,19 @@ impl LodState<'_> {
         false
     }
 
+    // Whether a coarser node over `key` has its mesh, so draws there in its place. One still
+    // being meshed draws nothing yet, so what it's to replace or stand in for has to go on
+    // drawing until it lands.
+    fn has_ready_ancestor(&self, mut key: LodKey) -> bool {
+        while key.level < self.layout.max_level {
+            key = key.parent();
+            if (self.node_ready)(key) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn can_retire(&self, key: LodKey) -> bool {
         match self.selected_ancestor(key) {
             Some(ancestor) => (self.node_ready)(ancestor),
@@ -89,13 +102,13 @@ impl LodState<'_> {
     }
 
     pub fn node_visible(&self, key: LodKey) -> bool {
-        !self.selected.contains(&key) || !self.has_existing_ancestor(key)
+        !self.selected.contains(&key) || !self.has_ready_ancestor(key)
     }
 
     pub fn chunk_visible(&self, chunk: ChunkCoordinate) -> bool {
         let key = LodKey::containing(chunk, 0);
         if self.layout.full_detail(chunk, self.anchor) {
-            !self.has_existing_ancestor(key)
+            !self.has_ready_ancestor(key)
         } else {
             !self
                 .selected_ancestor(key)

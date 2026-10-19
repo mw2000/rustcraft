@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::Resource;
 use bevy::{
     asset::Handle,
+    camera::visibility::Visibility,
     ecs::hierarchy::ChildOf,
     ecs::{
         component::Component,
@@ -15,11 +16,13 @@ use bevy::{
     platform::collections::{HashMap, HashSet},
     tasks::futures,
     tasks::{AsyncComputeTaskPool, Task},
+    time::Time,
     transform::components::GlobalTransform,
 };
 
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
+    fade::{fade_out_and_despawn, Fade},
     generate::generator::{chunks_meshed_with, generate_chunk, generate_chunk_mesh, ChunkMeshes},
     group::{GroupedChunk, MeshedChunk},
     lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
@@ -417,7 +420,7 @@ pub fn load_chunks(
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn unload_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
@@ -425,6 +428,8 @@ pub fn unload_chunks(
     chunks_query: Query<(Entity, &Chunk), (Without<GenerateChunkData>, Without<GenerateChunkMesh>)>,
     lods: Res<LodLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
+    time: Res<Time>,
+    visibility: Query<(&Visibility, Option<&Fade>)>,
 ) {
     let loader = &mut *chunk_loader;
     let reach = (loader.render_distance + NEIGHBOR_DATA_PADDING) as f32;
@@ -451,8 +456,12 @@ pub fn unload_chunks(
             loader.waiting.remove(&key);
             loader.rebuilding.remove(&key);
             loader.revealing.remove(&key);
+            // the node covering it may still be fading in over it, see `chunk_covered`
             if let Some(group) = loader.groups.remove(&key) {
-                commands.entity(group).despawn();
+                let (visible, fading) = visibility
+                    .get(group)
+                    .map_or((false, None), |(v, fade)| (*v != Visibility::Hidden, fade));
+                fade_out_and_despawn(&mut commands, group, visible, fading, time.elapsed_secs());
             }
         }
     }

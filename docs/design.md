@@ -2812,8 +2812,8 @@ monuments do that job here.
 - ☐ **M4.9 Horses and roads.** Wild horses on plains and savanna, tamed by riding till they stop
   throwing you, ridden with a saddle (loot or a trader's), each with its own speed and jump;
   donkeys carry a chest. Roads and bridges generated between villages and towns, so riding has
-  somewhere to go. Needs the full-detail holes at the edge in fast flight closed first (U-82's
-  follow-up), as a horse loads the world faster than walking.
+  somewhere to go. A horse loads the world faster than walking; the gaps that opened at the
+  edge of the loaded area in fast flight are closed (U-82's follow-up).
 - ☐ **M4.10 Monsters by place.** Monsters by biome and depth (mummies in deserts, wraiths on
   glaciers, things in the deep layer worse the further down), and mini-bosses guarding
   monuments, each with a drop of its own (§5.8).
@@ -2848,8 +2848,33 @@ both sides built the same thing they're merged into one system keeping the best 
   about a quarter fewer frames (two runs each, 1,691 and 884 blocks against 1,397 and 1,972, on
   a busy 16-core machine), takes 15% more CPU and 170 MB more memory (1.37 GB at peak against
   1.2): generating 2.25 times the full-detail chunks, as upstream found.
-  - ☐ Follow-up: with full detail at 24, lod_sim shows a few full-detail holes coming and going
-    at the edge while flying fast, which 16 didn't; find and close them.
+  - ☑ Follow-up: with full detail at 24, lod_sim shows a few full-detail holes coming and going
+    at the edge while flying fast, which 16 didn't; find and close them. Done: first, `lod_sim`
+    had drawn nothing since M-A4, whose terrain looks for a `Camera3d` where the sim spawned a
+    plain `Camera`, so every report showed the start area unloaded. Fixed, it showed no holes in
+    flight on seeds 7 and 4 at 80 or 200 blocks a second, even held to 4 cores as a busy machine
+    would be, beyond the few columns at the start whose sampled surface chunk is empty (a quirk
+    of the sim's sampling, there before and after). What it did show was 70–130 columns a
+    report with part of their dither drawn by nothing, behind and beside the camera: a group of
+    chunks leaving the loaded area was despawned outright the moment the level-1 node replacing
+    it had its mesh (`chunk_covered`), while that node had only begun to dither in over it, so
+    the sky showed through the rest. `unload_chunks` now fades the group out with
+    `fade_out_and_despawn`, which lets one already fading out finish where it is rather than
+    starting again. And by construction a hole could open at the front edge, which full detail
+    at 24 makes likelier: there level 1's ring is 8 chunks rather than 16, so a node can still be
+    meshing when it becomes a stand-in for the chunks under it, the node it split from retires
+    once those chunks are ready, and the chunks were hidden for the stand-in merely existing.
+    Chunks and nodes now hide only under a node that has its mesh (`has_ready_ancestor`), as a
+    test checks. Three runs each, before and after, at 80 blocks a second: the gaps summed over
+    the flight's reports fell from 429–474 to 8 on seed 7 and from 512–520 to 5 on seed 4 (from
+    525 and 436 to 5 and 4 on 4 cores; at 200 blocks a second from 815 and 348 to 11 and 24),
+    the start area loads as fast (the same node counts at 4 and 6 seconds), the sim flies as
+    far (1,448–1,471 blocks against 1,457–1,459 on seed 7, 1,441–1,445 against 1,332–1,447 on
+    seed 4) for the same CPU (72.5–74.5 s against 72.5–72.7, 85.0–85.3 against 81.9–84.6), and
+    peaks 75–100 MB higher (1.44 GB against 1.37 on seed 7, 1.84 against 1.74 on seed 4), the
+    groups' meshes kept through their fade: the sim keeps every mesh in the main world, where the
+    game hands groups' meshes to the GPU and drops them. `RC_EXPLAIN` has `lod_sim` show what
+    draws over the first few holes, gaps and doubles, and the chunks and nodes there.
 - ☑ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`, the
   wind half: the rain half comes with U-80); far leaf shadows blurred so foliage stops
   flickering (`f785896`); level-2 trees drawn as leaf voxels (`9a94413`, §5.7); the ground
@@ -2923,11 +2948,17 @@ they're found.
   far off too (§4.2, M2.8).
 - ☐ Resend `EditReach` as the drawn distance grows when flying high; a batch-edit path for big
   pastes (§4.4, M2.8).
-- ☐ A few full-detail holes come and go at the edge in fast flight with full detail at 24 (U-82).
-- ☐ `lod_sim` counts hundreds of chunks drawn whole twice in fast flight, alongside its stale
+- ☑ A few full-detail holes come and go at the edge in fast flight with full detail at 24 (U-82):
+  groups leaving the loaded area were despawned while the node replacing them was still
+  dithering in, and chunks hid under a stand-in still being meshed; both closed (U-82).
+- ☑ `lod_sim` counts hundreds of chunks drawn whole twice in fast flight, alongside its stale
   full-detail groups, before and after the staggered cross-fade alike: find whether it's real
   double-drawing (a full-detail group and a LOD node both whole over the same ground) or the
-  metric counting too loosely (U-83/84).
+  metric counting too loosely (U-83/84). The metric: it took a group or node with only water,
+  open sea, as drawn whole, though its water fades with it. Reading the water's window instead,
+  it counts none in flight, before the fix above or after. The stale full-detail groups and the
+  shown but unselected nodes it counts in flight are groups fading out and stand-ins, all gone
+  within the fade's 1.5 seconds of stopping.
 - ☐ The map: show edits; a minimap; a joiner's bed set after joining (§5.7, M2.9); a map preview
   in the worlds list (M-U1).
 

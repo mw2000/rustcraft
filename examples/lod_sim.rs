@@ -3,13 +3,16 @@
 // start area load, flies the player along +x, then stops. Every 2 seconds it reports, by
 // distance in chunks, surface chunks with nothing visible drawing them, those drawn with some
 // of the fades' dither drawn by nothing, those drawn whole twice over, and full-detail
-// chunks still drawn outside the full-detail area, and logs frames slower than 100ms. Run with:
+// chunks still drawn outside the full-detail area (fading out counts as drawn), and logs frames
+// slower than 100ms. Run with:
 //   cargo run --release --example lod_sim -- [speed in blocks/s, default 80] [seconds moving, default 10] [up]
-// `up` flies straight up instead, checking every frame for holes under the camera.
+// `up` flies straight up instead, checking every frame for holes under the camera. With
+// `RC_EXPLAIN` set, each report also shows what draws over the first few holes, gaps and chunks
+// drawn twice, and the chunks and nodes there.
 use std::time::{Duration, Instant};
 
 use bevy::math::I64Vec3;
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::chunks::chunk_loader::{
@@ -51,7 +54,8 @@ fn setup(
     let camera = commands
         .spawn((
             SimCamera,
-            Camera::default(),
+            // the terrain draws only round a 3D camera hung from the player
+            Camera3d::default(),
             GlobalTransform::from_translation(spawn),
         ))
         .id();
@@ -101,21 +105,43 @@ fn setup(
     );
 }
 
+// What draws over a column: the level (0 for full detail), the group's or node's key, its dither
+// window and whether it has opaque faces.
+type DrawnBy = Vec<(u8, LodKey, Vec4, bool)>;
+
 struct Report {
     holes: [usize; 4],
     // drawn, but with some level of the fade's dither drawn by nothing covering it
     gaps: [usize; 4],
     // drawn whole by two levels at once, neither fading, so they fight
     doubles: [usize; 4],
+    double_examples: [Vec<(ChunkCoordinate, DrawnBy)>; 4],
+    gap_examples: [Vec<(ChunkCoordinate, DrawnBy)>; 4],
     stale: usize,
     lingering: usize,
     lods: usize,
+    // the first few holes nearer than 1.5 times full detail, to explain
+    near_holes: Vec<ChunkCoordinate>,
 }
 
-// The dither window an entity's opaque mesh draws, see `fade.rs`: whole if it has none.
-fn window(materials: &Assets<ChunkMaterial>, m: Option<&MeshMaterial3d<ChunkMaterial>>) -> Vec4 {
-    m.and_then(|m| materials.get(&m.0))
-        .map_or(FULLY_VISIBLE, |m| m.fade)
+// The dither window an entity draws, see `fade.rs`: its opaque mesh's, or for one with only
+// water, its water's, which fades with it; whole if it has neither. And whether it's opaque.
+fn window(world: &mut World, entity: Entity) -> (Vec4, bool) {
+    let chunk = world
+        .get::<MeshMaterial3d<ChunkMaterial>>(entity)
+        .and_then(|m| world.resource::<Assets<ChunkMaterial>>().get(&m.0))
+        .map(|m| m.fade);
+    if let Some(fade) = chunk {
+        return (fade, true);
+    }
+    let water = world
+        .get::<Children>(entity)
+        .into_iter()
+        .flat_map(|children| children.iter())
+        .find_map(|child| world.get::<MeshMaterial3d<WaterMaterial>>(child))
+        .and_then(|m| world.resource::<Assets<WaterMaterial>>().get(&m.0))
+        .map(|m| m.fade);
+    (water.unwrap_or(FULLY_VISIBLE), false)
 }
 
 // Whether the windows drawn between them leave some level of the 8x8 dither undrawn.
@@ -128,35 +154,33 @@ fn dither_gap(windows: &[Vec4]) -> bool {
 
 fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
     let world = app.world_mut();
-    // the visible nodes' and groups' materials, then their dither windows
-    let nodes: Vec<(LodKey, Option<MeshMaterial3d<ChunkMaterial>>)> = world
-        .query::<(
-            &LodNode,
-            &Visibility,
-            Option<&MeshMaterial3d<ChunkMaterial>>,
-        )>()
+    // the visible nodes' and groups' dither windows, and which have opaque faces
+    let nodes: Vec<(LodKey, Entity)> = world
+        .query::<(Entity, &LodNode, &Visibility)>()
         .iter(world)
-        .filter(|(_, v, _)| **v != Visibility::Hidden)
-        .map(|(n, _, m)| (n.key(), m.cloned()))
+        .filter(|(_, _, v)| **v != Visibility::Hidden)
+        .map(|(e, n, _)| (n.key(), e))
         .collect();
-    let groups: Vec<(LodKey, Option<MeshMaterial3d<ChunkMaterial>>)> = world
-        .query::<(
-            &ChunkGroup,
-            &Visibility,
-            Option<&MeshMaterial3d<ChunkMaterial>>,
-        )>()
+    let groups: Vec<(LodKey, Entity)> = world
+        .query::<(Entity, &ChunkGroup, &Visibility)>()
         .iter(world)
-        .filter(|(_, v, _)| **v != Visibility::Hidden)
-        .map(|(g, _, m)| (g.key, m.cloned()))
+        .filter(|(_, _, v)| **v != Visibility::Hidden)
+        .map(|(e, g, _)| (g.key, e))
         .collect();
-    let materials = world.resource::<Assets<ChunkMaterial>>();
-    let windows_of = |drawn: Vec<(LodKey, Option<MeshMaterial3d<ChunkMaterial>>)>| {
-        drawn
-            .into_iter()
-            .map(|(key, m)| (key, window(materials, m.as_ref())))
-            .collect::<HashMap<LodKey, Vec4>>()
+    let mut windows_of = |drawn: Vec<(LodKey, Entity)>| {
+        let mut windows = HashMap::new();
+        let mut opaque = HashSet::new();
+        for (key, entity) in drawn {
+            let (w, o) = window(world, entity);
+            windows.insert(key, w);
+            if o {
+                opaque.insert(key);
+            }
+        }
+        (windows, opaque)
     };
-    let (lod_windows, group_windows) = (windows_of(nodes), windows_of(groups));
+    let (lod_windows, lod_opaque) = windows_of(nodes);
+    let (group_windows, group_opaque) = windows_of(groups);
     let lod_vis: HashMap<LodKey, bool> = world
         .query::<(&LodNode, &Visibility)>()
         .iter(world)
@@ -177,7 +201,10 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
     let mut holes = [0; 4];
     let mut gaps = [0; 4];
     let mut doubles = [0; 4];
+    let mut gap_examples: [Vec<(ChunkCoordinate, DrawnBy)>; 4] = Default::default();
+    let mut double_examples: [Vec<(ChunkCoordinate, DrawnBy)>; 4] = Default::default();
     let mut stale = 0;
+    let mut near_holes = Vec::new();
     let reach = far as i64;
     for dx in -reach..=reach {
         for dz in -reach..=reach {
@@ -212,28 +239,40 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
             };
             if !drawn {
                 holes[band] += 1;
+                if band <= 1 && near_holes.len() < 3 {
+                    near_holes.push(c);
+                }
             }
-            // what each level draws over the column, the full-detail group first
-            let mut windows: Vec<Vec4> = group_windows
-                .get(&LodKey::containing(c, 1))
-                .copied()
-                .into_iter()
-                .collect();
+            // what each level draws over the column, the full-detail group first, and whether
+            // it has an opaque mesh: one with only water has no window of its own to fade by
+            let mut drawn_by: DrawnBy = Vec::new();
+            let group = LodKey::containing(c, 1);
+            if let Some(&w) = group_windows.get(&group) {
+                drawn_by.push((0, group, w, group_opaque.contains(&group)));
+            }
             for l in 1..=layout.max_level {
                 let key = LodKey::containing(c, l);
                 let ground = coarse_ground(&noise, cx, cz, l).map(|g| LodKey::containing(g, l));
-                if let Some(&w) = lod_windows
+                let found = lod_windows
                     .get(&key)
-                    .or_else(|| ground.and_then(|g| lod_windows.get(&g)))
-                {
-                    windows.push(w);
+                    .map(|w| (key, *w))
+                    .or_else(|| ground.and_then(|g| lod_windows.get(&g).map(|w| (g, *w))));
+                if let Some((key, w)) = found {
+                    drawn_by.push((l, key, w, lod_opaque.contains(&key)));
                 }
             }
+            let windows: Vec<Vec4> = drawn_by.iter().map(|d| d.2).collect();
             if drawn && dither_gap(&windows) {
                 gaps[band] += 1;
+                if gap_examples[band].len() < 2 {
+                    gap_examples[band].push((c, drawn_by.clone()));
+                }
             }
             if windows.iter().filter(|&&w| w == FULLY_VISIBLE).count() > 1 {
                 doubles[band] += 1;
+                if double_examples[band].len() < 2 {
+                    double_examples[band].push((c, drawn_by.clone()));
+                }
             }
             if chunk_vis(&c).unwrap_or(false) && !layout.full_detail(c, anchor) {
                 stale += 1;
@@ -290,9 +329,12 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
         holes,
         gaps,
         doubles,
+        double_examples,
+        gap_examples,
         stale,
         lingering,
         lods: lod_vis.len(),
+        near_holes,
     }
 }
 
@@ -418,6 +460,34 @@ fn explain(app: &mut App, c: ChunkCoordinate) {
     }
 }
 
+// The LOD nodes over a chunk at every level, and how each is chosen and drawn.
+fn explain_nodes(app: &mut App, c: ChunkCoordinate) {
+    let world = app.world_mut();
+    let vis: HashMap<LodKey, (Visibility, bool)> = world
+        .query::<(
+            &LodNode,
+            &Visibility,
+            Has<rustcraft::chunks::lod::GenerateLodMesh>,
+        )>()
+        .iter(world)
+        .map(|(n, v, p)| (n.key(), (*v, p)))
+        .collect();
+    let lods = world.resource::<LodLoader>();
+    for level in 1..=lods.layout().max_level {
+        let key = LodKey::containing(c, level);
+        println!(
+            "    L{level} {:?} dist {:.1} selected {} stand-in {} kind {} retiring {} entity {:?}",
+            key.coord,
+            lods.anchor_chunk().map_or(-1.0, |a| key.distance(a)),
+            lods.is_selected(key),
+            lods.is_stand_in(key),
+            lods.node_kind(key),
+            lods.is_retiring(key),
+            vis.get(&key)
+        );
+    }
+}
+
 fn camera_pos(app: &mut App) -> Vec3 {
     let world = app.world_mut();
     world
@@ -527,6 +597,30 @@ fn main() {
                 Some(f) if t - f < move_secs => "moving",
                 _ => "stopped",
             };
+            if std::env::var_os("RC_EXPLAIN").is_some() {
+                println!(
+                    "  camera chunk {:?}, chunk loader anchor {:?}",
+                    ChunkCoordinate::containing(pos.floor().as_i64vec3()).0,
+                    app.world().resource::<ChunkLoader>().anchor().0
+                );
+                for (band, examples) in r.double_examples.iter().enumerate() {
+                    for (c, drawn_by) in examples {
+                        println!("  whole twice in band {band} at {:?}: {drawn_by:?}", c.0);
+                        explain_nodes(&mut app, *c);
+                    }
+                }
+                for (band, examples) in r.gap_examples.iter().enumerate() {
+                    for (c, drawn_by) in examples {
+                        println!("  dither gap in band {band} at {:?}: {drawn_by:?}", c.0);
+                        explain(&mut app, *c);
+                        explain_nodes(&mut app, *c);
+                    }
+                }
+                for &c in &r.near_holes {
+                    explain(&mut app, c);
+                    explain_nodes(&mut app, c);
+                }
+            }
             println!(
                 "t={t:5.1} {phase:8} x={:7.0} holes [full detail, 1.5x, 4x, beyond]: {:?}  dither gaps: {:?}  whole twice: {:?}  stale full-detail: {}  shown but unselected lod nodes: {}  lod nodes: {}",
                 pos.x, r.holes, r.gaps, r.doubles, r.stale, r.lingering, r.lods

@@ -578,9 +578,19 @@ fn test_selected_node_hidden_while_coarser_node_remains() {
 
     let none = |_| false;
     let parent_only = move |k| k == parent;
-    let ready = HashMap::new();
+    let mut ready = HashMap::new();
     assert!(with_state(anchor, &selected, &none, &ready, true, |s| s
         .node_visible(node)));
+    // a parent still being meshed draws nothing yet, so it hides nothing
+    assert!(with_state(
+        anchor,
+        &selected,
+        &parent_only,
+        &ready,
+        true,
+        |s| s.node_visible(node)
+    ));
+    ready.insert(parent, true);
     assert!(!with_state(
         anchor,
         &selected,
@@ -598,6 +608,48 @@ fn test_selected_node_hidden_while_coarser_node_remains() {
         true,
         |s| s.node_visible(parent)
     ));
+}
+
+#[test]
+fn test_full_detail_shows_until_its_stand_in_has_a_mesh() {
+    // Flying fast with full detail at 24, a level-1 node at the edge of full detail becomes a
+    // stand-in before its mesh lands, and the node it was splitting from retires once the
+    // chunks under it are ready. Hiding those chunks while the stand-in only existed left a
+    // hole until its mesh landed.
+    let layout = further_full_detail();
+    let anchor = chunk(0, 4, 0);
+    let (selected, stand_ins) = select_lods_and_stand_ins(anchor, layout, BAND);
+    let c = chunk(22, 4, 0);
+    assert!(layout.full_detail(c, anchor));
+    let stand_in = LodKey::containing(c, 1);
+    assert!(stand_ins.contains(&stand_in));
+    let parent = stand_in.parent();
+    assert!(!selected.contains(&parent));
+
+    let exists = move |k| k == stand_in;
+    let chunks = |_| ChunkState::Drawn;
+    let mut ready = HashMap::new();
+    let state = |ready: &HashMap<LodKey, bool>, check: &dyn Fn(&LodState) -> bool| {
+        let node_ready = |key| ready.get(&key).copied().unwrap_or(false);
+        check(&LodState {
+            anchor,
+            layout,
+            band: BAND,
+            selected: &selected,
+            node_exists: &exists,
+            node_ready: &node_ready,
+            chunk_state: &chunks,
+        })
+    };
+    // the parent splitting into it may go, its chunks being ready...
+    assert!(state(&ready, &|s| s.can_retire(parent)));
+    // ...so with the stand-in still meshing, its chunks are what draw there
+    assert!(state(&ready, &|s| s.chunk_visible(c)));
+    // and once it has its mesh it shows in their place, until it's retired in turn
+    ready.insert(stand_in, true);
+    assert!(!state(&ready, &|s| s.chunk_visible(c)));
+    assert!(state(&ready, &|s| s.node_visible(stand_in)));
+    assert!(state(&ready, &|s| s.can_retire(stand_in)));
 }
 
 #[test]

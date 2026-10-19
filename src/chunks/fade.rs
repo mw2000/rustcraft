@@ -173,16 +173,27 @@ pub fn set_shown(
     }
 }
 
-pub fn fade_out_and_despawn(commands: &mut Commands, entity: Entity, visible: bool, now: f32) {
-    if visible {
-        commands.entity(entity).insert(Fade {
-            start: now,
-            out: true,
-            despawn: true,
-        });
-    } else {
+/// Fades `entity` out and despawns it, or despawns it at once if it isn't `visible`. One already
+/// fading out, as what replaces it fades in, carries on where it is rather than starting again,
+/// so it's gone when that fade ends, never sooner: despawning it outright would leave whatever's
+/// coming in over nothing, half its dither drawn.
+pub fn fade_out_and_despawn(
+    commands: &mut Commands,
+    entity: Entity,
+    visible: bool,
+    fading: Option<&Fade>,
+    now: f32,
+) {
+    if !visible {
         commands.entity(entity).despawn();
+        return;
     }
+    let start = fading.filter(|f| f.out).map_or(now, |f| f.start);
+    commands.entity(entity).insert(Fade {
+        start,
+        out: true,
+        despawn: true,
+    });
 }
 
 pub fn apply_fades(
@@ -254,7 +265,10 @@ mod tests {
         },
     };
 
-    use super::{fade_in_window, fade_out_window, fade_step, set_shown, Fade, FADE_STEPS};
+    use super::{
+        fade_in_window, fade_out_and_despawn, fade_out_window, fade_step, set_shown, Fade,
+        FADE_STEPS,
+    };
 
     // Every dither threshold the shader can produce, (level + 0.5) / 64.
     fn thresholds() -> impl Iterator<Item = f32> {
@@ -305,6 +319,44 @@ mod tests {
         assert_eq!(Some(1), fade_step(0.5, true));
         assert_eq!(Some(0), fade_step(0.49, true));
         assert_eq!(None, fade_step(1.0, true));
+    }
+
+    #[test]
+    fn test_despawning_one_fading_out_lets_its_fade_finish() {
+        // a group whose chunks unload while the node replacing it fades in over it, as they do
+        // behind the camera in fast flight: despawned outright, the node was left half drawn
+        let mut world = World::new();
+        let fading = Fade {
+            start: 1.0,
+            out: true,
+            despawn: false,
+        };
+        let entity = world.spawn(Visibility::Inherited).id();
+        let mut queue = CommandQueue::default();
+        fade_out_and_despawn(
+            &mut Commands::new(&mut queue, &world),
+            entity,
+            true,
+            Some(&fading),
+            1.4,
+        );
+        queue.apply(&mut world);
+        let fade = world.get::<Fade>(entity).expect("still fading");
+        assert!(fade.out && fade.despawn);
+        assert_eq!(1.0, fade.start);
+
+        // one already hidden goes at once
+        let hidden = world.spawn(Visibility::Hidden).id();
+        let mut queue = CommandQueue::default();
+        fade_out_and_despawn(
+            &mut Commands::new(&mut queue, &world),
+            hidden,
+            false,
+            None,
+            1.4,
+        );
+        queue.apply(&mut world);
+        assert!(world.get_entity(hidden).is_err());
     }
 
     mod swaps {
@@ -516,7 +568,13 @@ mod tests {
             );
             let now = swap.now();
             let mut queue = CommandQueue::default();
-            fade_out_and_despawn(&mut Commands::new(&mut queue, &swap.world), old, true, now);
+            fade_out_and_despawn(
+                &mut Commands::new(&mut queue, &swap.world),
+                old,
+                true,
+                None,
+                now,
+            );
             queue.apply(&mut swap.world);
             swap.set_shown(new, true);
             swap.check(old, new);

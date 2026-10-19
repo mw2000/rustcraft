@@ -148,7 +148,7 @@ pub fn retire_lods(
     time: Res<Time>,
     chunks: ChunkStates,
     pending_lods: Query<(), With<GenerateLodMesh>>,
-    visibility: Query<&Visibility>,
+    visibility: Query<(&Visibility, Option<&Fade>)>,
 ) {
     let Some(anchor) = lods.anchor else {
         return;
@@ -178,10 +178,10 @@ pub fn retire_lods(
         .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
     for key in retired {
         if let Some(Some(entity)) = lods.remove_node(key) {
-            let visible = visibility
+            let (visible, fading) = visibility
                 .get(entity)
-                .is_ok_and(|v| *v != Visibility::Hidden);
-            fade_out_and_despawn(&mut commands, entity, visible, time.elapsed_secs());
+                .map_or((false, None), |(v, fade)| (*v != Visibility::Hidden, fade));
+            fade_out_and_despawn(&mut commands, entity, visible, fading, time.elapsed_secs());
         }
         lods.dirty_areas.push(key);
     }
