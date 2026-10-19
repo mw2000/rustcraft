@@ -2576,7 +2576,7 @@ Done when: **the world feels inhabited, and night is dangerous.**
   (§5.8).
 - ☑ **M3.3 Hostile mobs and combat.** Four monsters of our own, spawners in dungeons, swords,
   armour and blows (§5.3, §5.5, §5.8).
-- ☐ **M3.4 Villages and villagers.**
+- ◐ **M3.4 Villages and villagers.**
 - ☐ **M3.5 Weather.** Through upstream's weather, see U-80 below.
 
 ### Upstream ports
@@ -2600,7 +2600,7 @@ both sides built the same thing they're merged into one system keeping the best 
   1.2): generating 2.25 times the full-detail chunks, as upstream found.
   - ☐ Follow-up: with full detail at 24, lod_sim shows a few full-detail holes coming and going
     at the edge while flying fast, which 16 didn't; find and close them.
-- ☐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
+- ◐ **U-83/84 Fixes**: wind audio no longer retaining samples (Aymen Qader, `7c970d4`); far leaf
   shadows blurred so foliage stops flickering (`f785896`); level-2 trees drawn as leaf voxels
   (`9a94413`); the ground cross-fading between LOD levels (`84b6290`) (Rory Nickolls).
 - ☐ **U-84 Integer clock** (Rory Nickolls, `08015ef`): `TimeOfDay` as a `u64` of ticks, 20 a
@@ -2720,7 +2720,7 @@ they're found.
   scripts (INV-8), credited in `assets/CREDITS.md`. A volume setting; the dedicated server stays
   silent and audio-free. Built: synthesised, with upstream's recorded ambience and wind merged
   in (#77), §5.10.
-- ☐ **M-A4 Player view and skins.**
+- ◐ **M-A4 Player view and skins.**
   - **First person:** the player's own arm and held item drawn in view (a separate view-model
     pass so they never clip into walls), with swing for breaking, placing, attacking and eating,
     a bob while walking, and a lowered-and-raised swap when changing slots; blocks held as small
