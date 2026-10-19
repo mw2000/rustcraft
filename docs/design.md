@@ -2613,6 +2613,93 @@ both sides built the same thing they're merged into one system keeping the best 
   roofs, an operator `/weather`, sleeping through storms, a daylight factor for the monsters'
   darkness rule, and a particle setting. Completes M3.5.
 
+### Playtest
+
+- ☐ **M-P1 Playtest and tuning.** Everything above was checked by tests and by a software renderer
+  at 1–14 fps; no one has yet played at full speed on real hardware or listened to the sound. A
+  person plays for a session or two on a machine with a GPU; their notes become a tuning pass:
+  combat and monster numbers (§5.8, worked out on paper), hunger and healing rates (§5.5), break
+  times and tool tiers (§5.1, §5.3), structure and landmark rarity (§5.6, §5.7), the night's
+  darkness and torch brightness (§5.5), the firefly glow (§5.8), sound levels and the mix
+  (§5.10), frame rate with full detail at 24 (U-82), and how the menus and controls feel (M-U1).
+
+### Follow-ups and known gaps
+
+Everything noted in review or by a milestone as not done, in one place, grouped by area. Each
+points at the section that explains it. Tick them off here as they're done; add new ones as
+they're found.
+
+**World and generation**
+- ☐ A plain snow block (or a snow layer) for roofs and drifts: snow's dirt-and-snow sides show
+  from below on structures (§5.6, M2.4b).
+- ☐ Jungle temples and forest ruins hide in their canopies from afar; clear or lower the trees
+  round them, or raise a crest (§5.6, M2.4b).
+- ☐ Savanna's gold reads too strong, and acacia leaves come out olive from the grass tint (§5.7,
+  M2.6).
+- ☐ Swamp, plains and badlands biomes; vines on jungle giants (§5.7).
+- ☐ Big cave mouths drawn at mid-range LODs (§5.4).
+- ☐ Structures: blending the ground at their edges; several types competing for a spot;
+  mineshafts reaching up to cave mouths; `loot.<table>` markers naming a table per chest; more
+  dungeon kinds (§5.6).
+- ☐ Landmarks: a fallen tower and other built landmarks; magma streams that vanish beyond a few
+  hundred blocks; a textured, moving magma surface; sharper great peaks from afar (§5.7, M2.7).
+
+**Building and blocks**
+- ☐ Wall torches; stairs' corners joining; double slabs; door hinges from neighbours; chests with
+  a facing; a lit furnace look (§4.1, §5.2, M2.4a).
+- ☐ Copy and paste a box, and undo, for building in creative (§5.6, M2.2).
+- ☐ Farmland drying out and trampling; more crops (carrots, potatoes) and saplings (§5.5a).
+
+**Far away and the LODs**
+- ☐ Builds drawn as boxes in coarse LODs, so thin towers and houses stay visible past ~1 km; edits
+  clearing what coarse nodes draw as boxes, so a demolished structure or felled forest vanishes
+  far off too (§4.2, M2.8).
+- ☐ Resend `EditReach` as the drawn distance grows when flying high; a batch-edit path for big
+  pastes (§4.4, M2.8).
+- ☐ A few full-detail holes come and go at the edge in fast flight with full detail at 24 (U-82).
+- ☐ The map: show edits; a minimap; a joiner's bed set after joining (§5.7, M2.9); a map preview
+  in the worlds list (M-U1).
+
+**Creatures and combat**
+- ☐ Monsters swimming after players; `/summon lurker` hanging from a ceiling; slingers reaching
+  into a walled base with no roof (§5.8, M3.3).
+- ☐ Creatures pushing each other and players apart; pathfinding through shaped blocks (stairs,
+  slabs, fences) rather than whole cells (§5.8, M3.1, M2.4a).
+- ☐ Eggs, dyed wool, babies following their mothers, grazing that eats grass (§5.8, M3.2).
+- ☐ Critters (butterflies, birds, firefly bodies) on the models' lighting, and the starlings'
+  flocking on a spatial grid instead of every pair (§5.8, U-79).
+- ☐ Villagers breeding, once villages land (M3.4).
+
+**Survival**
+- ☐ A two-block bed you lie in, with a Leave Bed button; lava damage; leaves dropping apples as
+  they decay (§5.5).
+- ☐ Dead players' edit and craft requests refused on the server, not only stopped by the client
+  (§5.5, M1.8).
+- ☐ Dropped items saved with the world (§4.3, §5.2).
+
+**Sound**
+- ☐ Furnaces crackling while lit; other players' breaking, eating and hurt sounds sent to others;
+  creatures' death sounds; sound muffled through rock (§5.10).
+- ☐ Starling chatter and geese honking (§5.8, U-79).
+
+**Multiplayer and servers**
+- ☐ Authentication: netcode runs unsecure and names aren't authenticated, so operators are only as
+  safe as names (§4.4, M0.6a, M0.6d, M0.6e).
+- ☐ The protocol mismatch notice on a reliable channel; clients announcing they're leaving
+  instead of timing out; a server status query for ping and players in the server list (§4.4,
+  M-U1).
+- ☐ Applying many edits to an already loaded chunk is slow (§4.4, M0.6c).
+- ☐ The dedicated server: saving on SIGTERM when started with SIGINT ignored; the console's
+  `help` listing keys it can't press (§4.4, M-R1).
+
+**Menus and settings**
+- ☐ Clouds off still leaves their shadows on the land; scrolling a focused list row into view
+  (M-U1).
+
+**Tooling and CI**
+- ☐ Bump `actions/checkout`, `upload-artifact` and friends off the deprecated Node 20 (§5.9).
+- ☐ A spectator game mode (§4.5).
+
 ### Throughout
 
 - ☑ **M-R1 Release builds** for Windows, macOS and Linux, and a dedicated server (§5.9, §4.4).
@@ -2842,3 +2929,37 @@ For agents and contributors:
   drawn near only, §5.7, and full detail out to 24 chunks, M-U1.
 - **Style:** match the surrounding code. Comments are plain prose explaining why, in British
   spelling ("colour", "metre"), and doc comments say what a thing is or does.
+- **Screenshots:** anything visual is checked in the real game with the `screenshot` skill, which
+  runs it with no GPU; tests can't show how something looks.
+
+### How the build-out is run (for picking it up anywhere)
+
+The project is being built out milestone by milestone by Claude Code agents, reviewed one by
+one. Anyone, or any Claude Code session on another machine, can carry on from this file alone:
+
+- **Branches:** `combined-prs` on the fork (mw2000/rustcraft) is where everything lands, one
+  reviewed commit per feature, pushed as each lands. `main` is the fork's copy of upstream's
+  main at the fork point. Work happens on a branch per milestone, rebased onto `combined-prs`
+  and fast-forwarded in; nothing is merged with merge commits.
+- **Picking the next work:** the roadmap's ☐ and ◐ items above, in phase order, then the
+  upstream ports in their listed order, then "Follow-ups and known gaps". ◐ means a branch is in
+  flight; if its branch isn't on the fork, start that item again.
+- **Each piece of work:** one agent per milestone in its own git worktree, briefed with the
+  milestone, the sections it cites and the invariants; it commits, and a reviewer reads the diff
+  and its screenshots, sends fixes back, then rebases, runs fmt, clippy (with and without
+  default features) and the full test suite, merges and pushes. Commits end with a
+  `Co-Authored-By` line for Claude.
+- **Upstream:** re-fetch rornic/rustcraft after each port lands and add its new PRs to "Upstream
+  ports" (it notes the commit last checked). Port, don't merge: re-implement on this code, merge
+  duplicates into one system keeping the best of each, keep the original author with
+  `--author`. Plants stay real blocks that break and drop things, whatever upstream's flora does.
+  Upstream's CONTRIBUTING asks for discussion before PRs, so the fork's work isn't sent back.
+- **Assets:** INV-8 and D-10. Other packs are inspiration only; every asset is drawn or
+  synthesised by our scripts (the `block-textures` and `sounds` skills) or is CC0/CC-BY with
+  credit in `assets/CREDITS.md`.
+- **Building on NixOS:** `nix-shell --run 'cargo build --release'` (`shell.nix` at the root has
+  the libraries); use `--release` for tests and clippy too, so one build of the dependencies
+  serves all. Elsewhere, the system packages are those in `.github/workflows/ci.yml`. A cold
+  build of Bevy takes about three minutes on 16 cores.
+- **Running binaries straight from `target/`** needs `BEVY_ASSET_ROOT` set to the repo
+  (`cargo run` sets it for you).
