@@ -1,12 +1,14 @@
 //! Ambience: the wind, and loops of the sea, birds, crickets, a desert's air, leaves rustling, a
 //! cave's drips and being under water, each as loud as where the player is calls for, crossfading
-//! as they move; owls hooting now and then in the woods at night; and, after a long quiet, a piece
-//! of music.
+//! as they move; owls hooting now and then in the woods at night; rain, and thunder after
+//! lightning; and, after a long quiet, a piece of music.
 //!
 //! The wind, the recorded loops and the owl, and how the birds, crickets and the desert come and
 //! go and the leaves stir with the wind, are ported from upstream rustcraft's ambience (#77), by
-//! Aymen Qader, into this mixer, which picks what's heard from where the player is.
+//! Aymen Qader, into this mixer, which picks what's heard from where the player is; the rain and
+//! thunder, and birds and crickets falling quiet in the rain, from its weather (#80), by him too.
 
+mod rain;
 mod wind;
 
 use crate::client::player::WorldCamera;
@@ -25,8 +27,11 @@ use crate::chunks::generate::noise::TerrainSample;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::client::player::LocalPlayer;
 use crate::clock::TimeOfDay;
+use crate::weather::look::{Thunderclap, THUNDER_SPEED};
+use crate::weather::Weather;
 use crate::world::World;
-use wind::{wind_strength, Gust, Wind, WindDials, WIND_PLAYBACK};
+use rain::{RainSound, Thunder, RAIN_PLAYBACK};
+use wind::{wind_strength, Dial, Gust, Wind, WindDials, WIND_PLAYBACK};
 
 // How often where the player is is looked at again, which costs some noise samples, and how
 // long the loops take to fade to what it calls for.
@@ -60,6 +65,14 @@ const UNDERWATER_WIND: f32 = 0.02;
 const WIND_FOLLOW_SECONDS: f32 = 0.6;
 // How weak the wind is before it's paused.
 const STILL: f32 = 1e-3;
+// How strong the wind blows on the ground in the heaviest rain: strong enough to keep blowing
+// between spells, see `wind::STEADY`. From upstream's weather (#80).
+const STORM_WIND: f32 = 0.6;
+// Rain's volume at its heaviest, and thunder's, as upstream played them.
+const RAIN_VOLUME: f32 = 1.0;
+const THUNDER_VOLUME: f32 = 1.0;
+// How loud thunder is heard in a cave, through the rock, and under water.
+const MUFFLED_THUNDER: f32 = 0.35;
 // How long between owls' hoots in the woods at night, in seconds, at the least and most, and
 // how far off one hoots, in blocks.
 const HOOT_SECONDS: (f32, f32) = (12.0, 40.0);
@@ -75,12 +88,19 @@ pub(super) struct AmbiencePlugin;
 impl Plugin for AmbiencePlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<Wind>()
+            .add_audio_source::<RainSound>()
+            .add_audio_source::<Thunder>()
+            .add_message::<Thunderclap>()
             .init_resource::<Mix>()
             .init_resource::<WindDials>()
+            .init_resource::<RainDial>()
             .insert_resource(LookAgain(Timer::new(LOOK_INTERVAL, TimerMode::Repeating)))
             .insert_resource(Music::new())
             .add_systems(Startup, start_loops)
-            .add_systems(Update, (look_around, (fade_loops, blow_wind, hoot)).chain())
+            .add_systems(
+                Update,
+                (look_around, (fade_loops, blow_wind, hoot, rain, thunder)).chain(),
+            )
             .add_systems(Update, play_music);
     }
 }
@@ -194,15 +214,20 @@ struct Surroundings {
     humidity: f32,
     /// The time of day, in days.
     time: f32,
+    /// How hard it's raining, 0 to 1.
+    rain: f32,
 }
 
 /// What should be heard: how loud each loop should be, 0 to 1, in the order of `Loop::ALL`,
-/// the wind's strength, and how likely owls are to hoot.
+/// the wind's strength, how likely owls are to hoot, how hard the rain's heard, and how loud
+/// thunder is.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
 struct Mix {
     loops: [f32; 7],
     wind: f32,
     owls: f32,
+    rain: f32,
+    thunder: f32,
 }
 
 impl Mix {
@@ -221,18 +246,24 @@ fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
 /// speed; the sea near it, unless it's frozen; birds by day where it's mild, more among trees,
 /// crickets by night, both thinning up the mountains and off the ground, and owls at night in
 /// the woods; a desert's air where it's hot and dry; and leaves under the trees' crowns, for the
-/// wind to stir. Biomes come in by their climate and trees, so a new one sounds right without
-/// being named here.
+/// wind to stir; and rain, which blows the wind up and quiets the birds and crickets.
+/// Biomes come in by their climate and trees, so a new one sounds right without being named
+/// here. Thunder's heard everywhere, muffled in caves and under water.
 fn mix(s: &Surroundings) -> Mix {
-    let mut mix = Mix::default();
+    let mut mix = Mix {
+        thunder: 1.0,
+        ..Mix::default()
+    };
     let mut set = |which: Loop, volume: f32| mix.loops[which as usize] = volume.clamp(0.0, 1.0);
     if s.underwater {
         set(Loop::Underwater, 1.0);
         mix.wind = UNDERWATER_WIND;
+        mix.thunder = MUFFLED_THUNDER;
         return mix;
     }
     if s.in_cave {
         set(Loop::Cave, 1.0);
+        mix.thunder = MUFFLED_THUNDER;
         return mix;
     }
     let day = smoothstep(0.21, 0.29, s.time.rem_euclid(1.0))
@@ -247,10 +278,13 @@ fn mix(s: &Surroundings) -> Mix {
     let lowland = 1.0 - smoothstep(60.0, 160.0, s.height);
     let near = |from, to| 1.0 - smoothstep(from, to, s.altitude);
     let wooded = smoothstep(0.02, 0.2, s.trees);
-    let wildlife = mild * lowland * (1.0 - arid) * near(15.0, 90.0);
+    // birds and crickets fall silent in the rain
+    let wildlife = mild * lowland * (1.0 - arid) * near(15.0, 90.0) * (1.0 - s.rain);
     mix.wind = wind_strength(s.altitude, s.speed)
         .max(0.75 * smoothstep(90.0, 250.0, s.height))
-        .max(0.6 * cold);
+        .max(0.6 * cold)
+        .max(STORM_WIND * s.rain);
+    mix.rain = s.rain;
     set(
         Loop::Sea,
         s.sea * (1.0 - smoothstep(15.0, 60.0, s.height)) * (1.0 - cold),
@@ -264,8 +298,8 @@ fn mix(s: &Surroundings) -> Mix {
 }
 
 impl Surroundings {
-    /// What's round eyes at `eyes` in `world` at `time`, moving at `speed`.
-    fn at(world: &World, eyes: Vec3, time: &TimeOfDay, speed: f32) -> Self {
+    /// What's round eyes at `eyes` in `world` at `time`, moving at `speed`, in `weather`.
+    fn at(world: &World, eyes: Vec3, time: &TimeOfDay, speed: f32, weather: &Weather) -> Self {
         let noise = world.region_store.noise();
         let (x, z) = (eyes.x as f64, eyes.z as f64);
         let here = noise.sample(x, z);
@@ -305,6 +339,7 @@ impl Surroundings {
             temperature: climate.temperature,
             humidity: climate.humidity,
             time: time.days(),
+            rain: weather.rain(*time),
         }
     }
 }
@@ -316,11 +351,21 @@ struct LookAgain(Timer);
 #[derive(Component)]
 struct WindPlayer;
 
+/// How hard the rain's heard, which its sound follows on the audio thread, see `rain::RainSound`.
+#[derive(Resource, Default)]
+struct RainDial(Dial);
+
+/// The rain's player, see `rain`.
+#[derive(Component)]
+struct RainPlayer;
+
 fn start_loops(
     mut commands: Commands,
     assets: Res<AssetServer>,
     mut winds: ResMut<Assets<Wind>>,
     dials: Res<WindDials>,
+    mut rains: ResMut<Assets<RainSound>>,
+    rain_dial: Res<RainDial>,
 ) {
     for which in Loop::ALL {
         commands.spawn((
@@ -334,6 +379,10 @@ fn start_loops(
         dials: dials.clone(),
     });
     commands.spawn((WindPlayer, AudioPlayer(wind), WIND_PLAYBACK));
+    let rain = rains.add(RainSound {
+        level: rain_dial.0.clone(),
+    });
+    commands.spawn((RainPlayer, AudioPlayer(rain), RAIN_PLAYBACK));
     commands.insert_resource(Owl(assets.load("sounds/owl.ogg")));
 }
 
@@ -343,6 +392,7 @@ fn look_around(
     mut again: ResMut<LookAgain>,
     world: Option<Res<World>>,
     clock: Res<TimeOfDay>,
+    weather: Res<Weather>,
     eyes: Query<&GlobalTransform, (WorldCamera, With<ChildOf>)>,
     player: Query<(), With<LocalPlayer>>,
     mut wanted: ResMut<Mix>,
@@ -366,7 +416,7 @@ fn look_around(
             speed
         }
     });
-    *wanted = mix(&Surroundings::at(&world, eyes, &clock, speed));
+    *wanted = mix(&Surroundings::at(&world, eyes, &clock, speed, &weather));
 }
 
 // Eases each loop towards what's wanted, as it comes and goes, pausing those faded out, so they
@@ -435,6 +485,65 @@ fn blow_wind(
     if sink.is_paused() {
         sink.play();
     }
+}
+
+// Sets the rain's sound to how hard it's raining, which it glides after, and pauses it once
+// it's dry.
+fn rain(
+    wanted: Res<Mix>,
+    volumes: Res<Volumes>,
+    dial: Res<RainDial>,
+    mut player: Query<&mut AudioSink, With<RainPlayer>>,
+) {
+    dial.0.set(wanted.rain);
+    let Ok(mut sink) = player.single_mut() else {
+        return;
+    };
+    let volume = RAIN_VOLUME * volumes.ambience();
+    if wanted.rain < STILL || volume == 0.0 {
+        if !sink.is_paused() {
+            sink.pause();
+        }
+        return;
+    }
+    sink.set_volume(Volume::Linear(volume));
+    if sink.is_paused() {
+        sink.play();
+    }
+}
+
+// Plays each lightning strike's thunder once the sound's had time to come that far, at the
+// speed of sound, keeping real time as the strikes do.
+fn thunder(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    wanted: Res<Mix>,
+    volumes: Res<Volumes>,
+    mut claps: MessageReader<Thunderclap>,
+    mut thunders: ResMut<Assets<Thunder>>,
+    mut coming: Local<Vec<(f32, f32)>>,
+) {
+    for clap in claps.read() {
+        coming.push((clap.distance / THUNDER_SPEED, clap.distance));
+    }
+    let dt = time.delta_secs();
+    let volume = THUNDER_VOLUME * wanted.thunder * volumes.ambience();
+    coming.retain_mut(|(left, distance)| {
+        *left -= dt;
+        if *left > 0.0 {
+            return true;
+        }
+        if volume > 0.0 {
+            commands.spawn((
+                AudioPlayer(thunders.add(Thunder {
+                    distance: *distance,
+                    seed: rand::random(),
+                })),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)),
+            ));
+        }
+        false
+    });
 }
 
 #[derive(Resource)]
@@ -566,6 +675,7 @@ mod tests {
             temperature: 0.5,
             humidity: 0.5,
             time: NOON,
+            rain: 0.0,
         }
     }
 
@@ -667,6 +777,32 @@ mod tests {
         // a frozen sea doesn't break on the shore
         assert_eq!(Vec::<Loop>::new(), heard(glacier));
         assert!(glacier.wind > 0.5);
+    }
+
+    #[test]
+    fn test_rain_is_heard_blows_the_wind_up_and_quiets_birds_and_crickets() {
+        let raining = |surroundings: Surroundings| {
+            mix(&Surroundings {
+                rain: 0.9,
+                ..surroundings
+            })
+        };
+        let wet = raining(wood());
+        assert_eq!(0.9, wet.rain);
+        assert!(wet.wind >= STORM_WIND * 0.9 && wet.wind > mix(&wood()).wind);
+        assert!(wet.of(Loop::Birds) < mix(&wood()).of(Loop::Birds) * 0.2);
+        let night = Surroundings {
+            time: MIDNIGHT,
+            ..meadow()
+        };
+        assert!(raining(night).of(Loop::Crickets) < mix(&night).of(Loop::Crickets) * 0.2);
+        // in a cave it's not heard, but thunder is, muffled
+        let cave = raining(Surroundings {
+            in_cave: true,
+            ..wood()
+        });
+        assert_eq!((0.0, MUFFLED_THUNDER), (cave.rain, cave.thunder));
+        assert_eq!(1.0, wet.thunder);
     }
 
     #[test]

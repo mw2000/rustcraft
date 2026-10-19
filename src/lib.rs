@@ -58,4 +58,5 @@ pub mod survival;
 #[cfg(feature = "client")]
 pub mod tonemap;
 pub mod trading;
+pub mod weather;
 pub mod world;

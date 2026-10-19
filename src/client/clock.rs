@@ -2,7 +2,8 @@ use bevy::prelude::*;
 
 use crate::clock::{SubTick, TimeOfDay};
 use crate::controls::{Action, Controls};
-use crate::protocol::{TimeSync, WindClock};
+use crate::protocol::{TimeSync, WeatherSync, WindClock};
+use crate::weather::Weather;
 
 /// Asks the server to wind the clock back or forward while `[` or `]` is held, and to stop
 /// when it's let go.
@@ -35,6 +36,15 @@ pub fn follow_clock(
         *rate = sync.rate;
     }
     clock.run(&mut sub, time.delta_secs_f64() * f64::from(*rate));
+}
+
+/// Keeps a client's weather to the server's: each spell as the server says it's started, whose
+/// rain the client works out from its clock as the server does. Not for the authority, whose
+/// weather this is.
+pub fn follow_weather(mut syncs: MessageReader<WeatherSync>, mut weather: ResMut<Weather>) {
+    if let Some(WeatherSync(sync)) = syncs.read().last() {
+        *weather = *sync;
+    }
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ mod players;
 mod structures;
 mod survival;
 mod sync;
+mod weather;
 
 pub use chunks::{keep_chunks_near_players, ServerChunks};
 pub use clock::run_clock;
@@ -53,6 +54,7 @@ use crate::player::name::PlayerName;
 use crate::player::Player;
 use crate::protocol::{ProtocolPlugin, POSE_INTERVAL};
 use crate::save::{PlayerState, SavePlugin, WorldSave};
+use crate::weather::Weather;
 use crate::world::{order_leaving, LeaveWorld, LeaveWorldSystems, World};
 
 /// The server's systems. Needs `RepliconPlugins` and `ProtocolPlugin`.
@@ -67,6 +69,7 @@ impl Plugin for ServerPlugin {
             .init_resource::<TimeOfDay>()
             .init_resource::<SubTick>()
             .init_resource::<clock::ClockRate>()
+            .init_resource::<Weather>()
             .init_resource::<ServerChunks>()
             .init_resource::<Containers>()
             .init_resource::<Crops>()
@@ -93,7 +96,7 @@ impl Plugin for ServerPlugin {
             .add_systems(
                 Update,
                 (
-                    run_clock,
+                    (run_clock, weather::run_weather).chain(),
                     containers::run_furnaces,
                     (drops::fall, drops::merge, drops::pick_up).chain(),
                     (
@@ -240,6 +243,14 @@ impl Plugin for ServerPlugin {
             )
             .add_systems(
                 PostUpdate,
+                // once this frame's requests have changed it, so a client hears of it at once
+                weather::sync_weather
+                    .after(ClientSystems::Send)
+                    .before(ServerSystems::Send)
+                    .run_if(is_authority),
+            )
+            .add_systems(
+                PostUpdate,
                 (players::send_host_pose, creatures::send_poses)
                     .before(ServerSystems::Send)
                     .run_if(is_authority)
@@ -344,8 +355,12 @@ pub fn open_world(
             name.clone(),
         );
     }
-    let clock = open.time_of_day.map(TimeOfDay::from_days);
-    commands.insert_resource(clock.unwrap_or(TimeOfDay(saved.time)));
+    let clock = open
+        .time_of_day
+        .map(TimeOfDay::from_days)
+        .unwrap_or(TimeOfDay(saved.time));
+    commands.insert_resource(clock);
+    commands.insert_resource(Weather::new(saved.seed, clock));
     commands.insert_resource(SubTick::default());
     commands.insert_resource(players::WorldChecksum::of(saved.seed));
     commands.insert_resource(world);
@@ -392,6 +407,7 @@ fn close_world(
     commands.insert_resource(TimeOfDay::default());
     commands.insert_resource(SubTick::default());
     commands.insert_resource(clock::ClockRate::default());
+    commands.insert_resource(Weather::default());
     commands.insert_resource(ServerChunks::default());
     commands.insert_resource(Containers::default());
     commands.insert_resource(Crops::default());

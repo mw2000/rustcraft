@@ -1,6 +1,7 @@
 use crate::client::player::WorldCamera;
 use bevy::{
     camera::Projection,
+    color::Alpha,
     ecs::system::{Query, Res, ResMut},
     math::FloatExt,
     pbr::{DistanceFog, FogFalloff},
@@ -12,6 +13,8 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::{WATER_LEVEL, WORLD_HEIGHT};
 use crate::chunks::lod::LodLoader;
 use crate::curvature::WORLD_CURVE;
+use crate::sky::FOG_MAX_OPACITY;
+use crate::weather::look::Gloom;
 
 /// The farthest terrain is drawn, in chunks, however high up.
 pub const MAX_RENDER_DISTANCE: f32 = 2048.0;
@@ -23,6 +26,9 @@ const RESELECT_CHANGE: f32 = 0.1;
 // Roughly how long fog takes to follow a new render distance, so it eases out as the
 // further terrain loads in rather than jumping ahead of it.
 const FOG_FOLLOW_SECONDS: f32 = 2.0;
+// In the heaviest storm: how much nearer the fog's half-way point and its end come, as shares
+// of where they'd be, and how opaque it gets at its end, closing the far land into the grey.
+const STORM_FOG: (f32, f32, f32) = (0.6, 0.45, 0.95);
 
 /// How far terrain is drawn, in chunks, from `height` blocks up with `set_distance` set: the
 /// set distance from the ground, growing to twice it at the top of the world, but never past
@@ -42,6 +48,7 @@ pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
 /// `fog.wesl`.
 pub fn update_horizon(
     time: Res<Time>,
+    gloom: Option<Res<Gloom>>,
     mut lods: ResMut<LodLoader>,
     mut camera: Query<(&GlobalTransform, &mut DistanceFog, &mut Projection), WorldCamera>,
 ) {
@@ -62,6 +69,14 @@ pub fn update_horizon(
     if let Projection::Perspective(perspective) = &mut *projection {
         perspective.far = end + WORLD_HEIGHT as f32;
     }
+    // a storm closes the fog in and thickens it, see `STORM_FOG`
+    let gloom = gloom.map_or(0.0, |gloom| gloom.0);
+    let (half, end) = (
+        half * (1.0 - STORM_FOG.0 * gloom),
+        end * (1.0 - STORM_FOG.1 * gloom),
+    );
+    fog.color
+        .set_alpha(FOG_MAX_OPACITY + (STORM_FOG.2 - FOG_MAX_OPACITY) * gloom);
     // underwater, `update_underwater_effects` overrides the fog after this
     if let FogFalloff::Linear {
         start,

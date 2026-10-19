@@ -76,7 +76,7 @@ impl Decodable for Wind {
     }
 }
 
-const SAMPLE_RATE: u32 = 44_100;
+pub(super) const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 // How often the decoder rereads the strength and moves its gusts on, in frames.
 const CONTROL_FRAMES: u32 = 64;

@@ -23,6 +23,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use crate::chunks::material::{push_shader_defs, water_level};
 use crate::clock::{SubTick, TimeOfDay, DAY_SECONDS, TICKS_PER_SECOND};
 use crate::curvature::Curvature;
+use crate::weather::look::Gloom;
 
 /// Height of the clouds' undersides: above most land, so only the tallest peaks reach them.
 pub const CLOUD_BASE: f32 = 720.0;
@@ -84,6 +85,17 @@ pub struct CloudMaterial {
     curvature: Handle<ShaderBuffer>,
 }
 
+impl CloudMaterial {
+    /// Darkens the clouds to `shade` of their colour, as storm clouds, see `weather::look`.
+    pub fn set_shade(&mut self, shade: f32) {
+        self.color = LinearRgba::rgb(
+            CLOUD_COLOR.red * shade,
+            CLOUD_COLOR.green * shade,
+            CLOUD_COLOR.blue * shade,
+        );
+    }
+}
+
 impl Material for CloudMaterial {
     // clouds are far above anything they could shade, see `CLOUD_BASE`
     fn enable_prepass() -> bool {
@@ -126,7 +138,8 @@ pub struct CloudLayer {
     /// The pattern, one texel a cell, more the thicker the cloud there, 0 where clear.
     pub pattern: Handle<Image>,
     /// The middle of the layer's height, the pattern's width in blocks, and how far the wind
-    /// has drifted the clouds, a `Vec4` in a buffer that `drift_clouds` keeps up to date.
+    /// has drifted the clouds, a `Vec4` in a buffer that `drift_clouds` keeps up to date, then
+    /// another of how overcast a storm has made the sky, see `weather::look::Gloom`.
     pub layer: Handle<ShaderBuffer>,
 }
 
@@ -497,7 +510,7 @@ pub fn spawn_clouds(
     commands.insert_resource(CloudLayer {
         pattern: images.add(pattern_image(&columns)),
         layer: buffers.add(ShaderBuffer::new(
-            layer_data(Vec2::ZERO).to_vec(),
+            layer_data(Vec2::ZERO, 0.0).to_vec(),
             RenderAssetUsages::default(),
         )),
     });
@@ -528,9 +541,9 @@ pub fn spawn_clouds(
 }
 
 // What the shaders read of the cloud layer, see `CloudLayer::layer`.
-fn layer_data(drift: Vec2) -> [f32; 4] {
+fn layer_data(drift: Vec2, overcast: f32) -> [f32; 8] {
     let middle = CLOUD_BASE + MAX_LAYERS as f32 * LAYER / 2.0;
-    [middle, SPAN, drift.x, drift.y]
+    [middle, SPAN, drift.x, drift.y, overcast, 0.0, 0.0, 0.0]
 }
 
 /// How far the wind has carried the clouds at `time`, `sub` of the way on to its next tick,
@@ -561,9 +574,10 @@ fn tile_lod(camera: Vec2, origin: Vec2) -> usize {
 fn drift_clouds(
     // the time, between ticks as it's drawn
     (time, sub): (Res<TimeOfDay>, Res<SubTick>),
-    layer: Res<CloudLayer>,
+    // and how overcast a storm's made it
+    (layer, gloom): (Res<CloudLayer>, Option<Res<Gloom>>),
     mut buffers: ResMut<Assets<ShaderBuffer>>,
-    mut shown: Local<Vec2>,
+    mut shown: Local<(Vec2, f32)>,
     lods: Res<CloudMeshes>,
     camera: Query<&GlobalTransform, WorldCamera>,
     mut tiles: Query<(&CloudTile, &mut Transform, &mut Mesh3d)>,
@@ -573,12 +587,13 @@ fn drift_clouds(
     };
     let camera = camera.translation().xz();
     let drift = wind_drift(&time, &sub);
+    let overcast = gloom.map_or(0.0, |gloom| gloom.0);
     // the shaders draw the clouds' shadows with the same drift, so they keep together
-    if drift != *shown {
-        *shown = drift;
+    if (drift, overcast) != *shown {
+        *shown = (drift, overcast);
         if let Some(mut buffer) = buffers.get_mut(&layer.layer) {
             buffer.clear();
-            buffer.extend_from_slice(&layer_data(drift));
+            buffer.extend_from_slice(&layer_data(drift, overcast));
         }
     }
     for (tile, mut transform, mut mesh) in &mut tiles {

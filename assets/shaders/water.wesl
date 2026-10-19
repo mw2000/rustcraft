@@ -331,14 +331,14 @@ fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     let up = normalize(vec3<f32>(direction.x, max(direction.y, 0.02), direction.z));
     let night = reflected_celestial(up);
     let sky = sky_colour(up) * (1.0 - night.a) + night.rgb;
-    let layer = cloud_layer.x;
-    if direction.y <= 0.0 || origin.y >= layer || cloud_layer.y <= 0.0 {
+    let layer = cloud_layer().x;
+    if direction.y <= 0.0 || origin.y >= layer || cloud_layer().y <= 0.0 {
         return sky;
     }
     let hit = origin.xz + direction.xz * ((layer - origin.y) / direction.y);
     // the drift follows the shared time of day, see `clouds::wind_drift`
-    let drift = cloud_layer.zw;
-    let thickness = textureSampleLevel(cloud_pattern, cloud_sampler, (hit - drift) / cloud_layer.y, 0.0).r;
+    let drift = cloud_layer().zw;
+    let thickness = textureSampleLevel(cloud_pattern, cloud_sampler, (hit - drift) / cloud_layer().y, 0.0).r;
     let away = distance(hit, view_bindings::view.world_position.xz);
     let end = max(view_bindings::fog.be.y, 1.0);
     let cover = smoothstep(0.1, 0.5, thickness) * (1.0 - smoothstep(0.4 * end, end, away));

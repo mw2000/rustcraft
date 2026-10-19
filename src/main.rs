@@ -54,6 +54,7 @@ use rustcraft::sky::{
 };
 use rustcraft::sky_dome::{NightSkyPlugin, SunGlarePlugin};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
+use rustcraft::weather::look::WeatherLookPlugin;
 use rustcraft::world::World;
 
 #[allow(clippy::too_many_arguments)]
@@ -203,6 +204,7 @@ fn main() {
         MaterialPlugin::<MurkMaterial>::default(),
         TerrainPlugin,
         CloudPlugin,
+        WeatherLookPlugin,
         CurvaturePlugin,
         SunGlarePlugin,
         NightSkyPlugin,

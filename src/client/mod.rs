@@ -40,6 +40,7 @@ impl Plugin for ClientPlugin {
         app.add_message::<join::LeftServer>()
             .init_resource::<TimeOfDay>()
             .init_resource::<SubTick>()
+            .init_resource::<crate::weather::Weather>()
             .init_resource::<join::GenerationChecksum>()
             .init_resource::<edits::Predictions>()
             .init_resource::<edits::WaitingEdits>()
@@ -109,6 +110,7 @@ impl Plugin for ClientPlugin {
                 Update,
                 (
                     clock::follow_clock.run_if(not(is_authority)),
+                    clock::follow_weather.run_if(not(is_authority)),
                     join::send_pose.run_if(in_state(ClientState::Connected)),
                     player::wear_own_skin,
                     player::hold_own_items,
@@ -152,6 +154,7 @@ fn clear_world(
     commands.remove_resource::<join::Checking>();
     commands.insert_resource(TimeOfDay::default());
     commands.insert_resource(SubTick::default());
+    commands.insert_resource(crate::weather::Weather::default());
     commands.insert_resource(edits::Predictions::default());
     commands.insert_resource(edits::WaitingEdits::default());
     commands.insert_resource(join::Teleports::default());

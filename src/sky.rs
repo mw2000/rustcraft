@@ -51,12 +51,22 @@ const MOON_BOOST: f32 = 400.0;
 /// How bright moonlight is in the world shaders at full moon, as `SUN_BRIGHTNESS` is for sunlight.
 const MOON_BRIGHTNESS: f32 = 0.1;
 
+/// The sun's illuminance in clear air, which a storm dims, see `weather::look`.
+pub fn sun_illuminance() -> f32 {
+    SUN_BRIGHTNESS * SKY_GAIN / camera_exposure().exposure()
+}
+
+/// The moon's illuminance in clear air, see `sun_illuminance`.
+pub fn moon_illuminance() -> f32 {
+    MOON_BRIGHTNESS * SKY_GAIN / MOON_BOOST / camera_exposure().exposure()
+}
+
 /// The sun, with shadows out to `shadow_distance` blocks in `cascades` slices.
 pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
     (
         DirectionalLight {
             color: SUN_COLOR,
-            illuminance: SUN_BRIGHTNESS * SKY_GAIN / camera_exposure().exposure(),
+            illuminance: sun_illuminance(),
             shadow_maps_enabled: true,
             ..Default::default()
         },
@@ -92,7 +102,7 @@ pub fn moon() -> impl Bundle {
     (
         DirectionalLight {
             color: MOON_COLOR,
-            illuminance: MOON_BRIGHTNESS * SKY_GAIN / MOON_BOOST / camera_exposure().exposure(),
+            illuminance: moon_illuminance(),
             shadow_maps_enabled: false,
             ..Default::default()
         },
